@@ -1,5 +1,5 @@
 import Database from '@tauri-apps/plugin-sql';
-import { isTauri } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core';
 import JSZip from 'jszip';
 import {
 	createEmptySnapshot,
@@ -30,6 +30,49 @@ let database: Promise<Database> | undefined;
 export async function getDatabase(): Promise<Database> {
 	if (!database) database = Database.load('sqlite:atlas.db');
 	return database;
+}
+
+let initialized: Promise<Database> | undefined;
+
+/**
+ * Abre o banco e garante o schema uma única vez por sessão.
+ * Antes, `initializeDatabase` rodava a cada load/save (dezenas de
+ * comandos IPC por gravação, caro no iOS).
+ */
+export function getReadyDatabase(): Promise<Database> {
+	if (!initialized) {
+		initialized = getDatabase().then(async (db) => {
+			await initializeDatabase(db);
+			return db;
+		});
+		initialized.catch(() => {
+			initialized = undefined;
+		});
+	}
+	return initialized;
+}
+
+/**
+ * Fila global de escrita.
+ *
+ * O plugin SQL usa um pool do sqlx, então `BEGIN IMMEDIATE`/`COMMIT`
+ * enviados como comandos separados não garantem a mesma conexão quando há
+ * gravações concorrentes (o app dispara vários `saveSnapshot` sem `await`).
+ * Serializar mantém cada transação num único fluxo e evita
+ * `database is locked` ou perda de gravação.
+ *
+ * Não chamar `runSerialized` dentro de uma tarefa já serializada: aninhar
+ * enfileira a tarefa atrás de si mesma e trava. Use as variantes internas.
+ */
+let writeQueue: Promise<unknown> = Promise.resolve();
+
+export function runSerialized<T>(task: () => Promise<T>): Promise<T> {
+	const result = writeQueue.then(task, task);
+	writeQueue = result.then(
+		() => undefined,
+		() => undefined
+	);
+	return result;
 }
 
 async function initializeDatabase(db: Database): Promise<void> {
@@ -187,8 +230,8 @@ function migrateLifeForceBaseline(snapshot: AtlasSnapshot): void {
 
 export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	if (!isTauri()) return readPreview();
-	const db = await getDatabase();
-	await initializeDatabase(db);
+	const db = await getReadyDatabase();
+	await writeQueue;
 	const [categories, transactions, habits, habitLogs, timeBlocks, settings] = await Promise.all([
 		db.select<Array<{ payload: string }>>('SELECT payload FROM categories'),
 		db.select<Array<{ payload: string }>>('SELECT payload FROM transactions ORDER BY occurred_on DESC'),
@@ -221,79 +264,68 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	return snapshot;
 }
 
-export async function saveSnapshot(snapshot: AtlasSnapshot): Promise<void> {
+interface BatchStatement {
+	sql: string;
+	params: string[];
+}
+
+export function saveSnapshot(snapshot: AtlasSnapshot): Promise<void> {
 	if (!isTauri()) {
 		localStorage.setItem(PREVIEW_KEY, JSON.stringify(snapshot));
-		return;
+		return Promise.resolve();
 	}
-	const db = await getDatabase();
-	await initializeDatabase(db);
-	await db.execute('BEGIN IMMEDIATE');
-	try {
-		await db.execute('DELETE FROM categories');
-		await db.execute('DELETE FROM transactions');
-		await db.execute('DELETE FROM habits');
-		await db.execute('DELETE FROM habit_logs');
-		await db.execute('DELETE FROM time_blocks');
-		await db.execute('DELETE FROM app_settings');
+	return runSerialized(async () => {
+		// Garante `load` + schema (e o pool) antes de escrever.
+		await getReadyDatabase();
+		const statements: BatchStatement[] = [
+			{ sql: 'DELETE FROM categories', params: [] },
+			{ sql: 'DELETE FROM transactions', params: [] },
+			{ sql: 'DELETE FROM habits', params: [] },
+			{ sql: 'DELETE FROM habit_logs', params: [] },
+			{ sql: 'DELETE FROM time_blocks', params: [] },
+			{ sql: 'DELETE FROM app_settings', params: [] }
+		];
 		for (const category of snapshot.categories) {
-			await db.execute('INSERT INTO categories (id, module, payload) VALUES ($1, $2, $3)', [
-				category.id,
-				category.module,
-				JSON.stringify(category)
-			]);
+			statements.push({
+				sql: 'INSERT INTO categories (id, module, payload) VALUES ($1, $2, $3)',
+				params: [category.id, category.module, JSON.stringify(category)]
+			});
 		}
 		for (const item of snapshot.transactions) {
-			await db.execute('INSERT INTO transactions (id, occurred_on, payload) VALUES ($1, $2, $3)', [
-				item.id,
-				item.date,
-				JSON.stringify(item)
-			]);
+			statements.push({
+				sql: 'INSERT INTO transactions (id, occurred_on, payload) VALUES ($1, $2, $3)',
+				params: [item.id, item.date, JSON.stringify(item)]
+			});
 		}
 		for (const item of snapshot.habits) {
-			await db.execute('INSERT INTO habits (id, payload) VALUES ($1, $2)', [item.id, JSON.stringify(item)]);
+			statements.push({
+				sql: 'INSERT INTO habits (id, payload) VALUES ($1, $2)',
+				params: [item.id, JSON.stringify(item)]
+			});
 		}
 		for (const item of snapshot.habitLogs) {
-			await db.execute('INSERT INTO habit_logs (id, habit_id, occurred_on, payload) VALUES ($1, $2, $3, $4)', [
-				item.id,
-				item.habitId,
-				item.date,
-				JSON.stringify(item)
-			]);
+			statements.push({
+				sql: 'INSERT INTO habit_logs (id, habit_id, occurred_on, payload) VALUES ($1, $2, $3, $4)',
+				params: [item.id, item.habitId, item.date, JSON.stringify(item)]
+			});
 		}
 		for (const item of snapshot.timeBlocks) {
-			await db.execute('INSERT INTO time_blocks (id, starts_at, payload) VALUES ($1, $2, $3)', [
-				item.id,
-				item.startAt,
-				JSON.stringify(item)
-			]);
+			statements.push({
+				sql: 'INSERT INTO time_blocks (id, starts_at, payload) VALUES ($1, $2, $3)',
+				params: [item.id, item.startAt, JSON.stringify(item)]
+			});
 		}
-		await db.execute('INSERT INTO app_settings (key, value) VALUES ($1, $2)', [
-			'lifeForce',
-			JSON.stringify(snapshot.lifeForce)
-		]);
-		await db.execute('INSERT INTO app_settings (key, value) VALUES ($1, $2)', [
-			'preferences',
-			JSON.stringify(snapshot.preferences)
-		]);
-		await db.execute('INSERT INTO app_settings (key, value) VALUES ($1, $2)', [
-			'experience',
-			JSON.stringify(snapshot.experience)
-		]);
-		await db.execute('INSERT INTO app_settings (key, value) VALUES ($1, $2)', [
-			'finance',
-			JSON.stringify(snapshot.finance)
-		]);
-		await db.execute('INSERT INTO app_settings (key, value) VALUES ($1, $2)', [
-			'graph',
-			JSON.stringify(snapshot.graph)
-		]);
-		await db.execute('INSERT INTO app_settings (key, value) VALUES ($1, $2)', ['seeded', JSON.stringify(true)]);
-		await db.execute('COMMIT');
-	} catch (error) {
-		await db.execute('ROLLBACK');
-		throw error;
-	}
+		statements.push(
+			{ sql: 'INSERT INTO app_settings (key, value) VALUES ($1, $2)', params: ['lifeForce', JSON.stringify(snapshot.lifeForce)] },
+			{ sql: 'INSERT INTO app_settings (key, value) VALUES ($1, $2)', params: ['preferences', JSON.stringify(snapshot.preferences)] },
+			{ sql: 'INSERT INTO app_settings (key, value) VALUES ($1, $2)', params: ['experience', JSON.stringify(snapshot.experience)] },
+			{ sql: 'INSERT INTO app_settings (key, value) VALUES ($1, $2)', params: ['finance', JSON.stringify(snapshot.finance)] },
+			{ sql: 'INSERT INTO app_settings (key, value) VALUES ($1, $2)', params: ['graph', JSON.stringify(snapshot.graph)] },
+			{ sql: 'INSERT INTO app_settings (key, value) VALUES ($1, $2)', params: ['seeded', JSON.stringify(true)] }
+		);
+		// Uma transação numa única conexão (ver `db_batch` no lib.rs).
+		await invoke('db_batch', { db: 'sqlite:atlas.db', statements });
+	});
 }
 
 function toBase64(bytes: Uint8Array): string {

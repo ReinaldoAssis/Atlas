@@ -15,15 +15,22 @@ name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.7.2" }
+tauri-build = { version = "2.7.2", features = [] }
 
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.12.3" }
+# Pin exato: `num_threads 0.1.7` (via time ← cookie ← tauri) chama
+# `libc::mach_task_self()`, que no libc 0.2.190 virou `#[cfg(target_os = "macos")]`
+# e deixa de existir no iOS. Remover quando num_threads for corrigido.
+libc = "=0.2.189"
+tauri = { version = "2.12.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+# Usado pelo comando `db_batch` (transação numa única conexão). Precisa bater
+# com a versão de sqlx do tauri-plugin-sql.
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
 tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"

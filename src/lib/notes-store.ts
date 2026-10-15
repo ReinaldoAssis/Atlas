@@ -7,7 +7,7 @@
  */
 import { isTauri } from '@tauri-apps/api/core';
 import { BaseDirectory, mkdir, readDir, readFile, remove, writeFile } from '@tauri-apps/plugin-fs';
-import { getDatabase } from './storage';
+import { getDatabase, runSerialized } from './storage';
 import {
 	normalizeFolder,
 	normalizeNote,
@@ -105,25 +105,31 @@ export async function loadNotes(): Promise<NotesState> {
 }
 
 /** Substitui todo o acervo de notas/pastas (import de backup). */
-export async function replaceNotesState(state: NotesState): Promise<void> {
-	if (!isTauri()) {
-		writePreview(state);
-		return;
-	}
-	const fts = await ensureSchema();
-	const db = await getDatabase();
-	await db.execute('DELETE FROM notes');
-	await db.execute('DELETE FROM folders');
-	if (fts) await db.execute('DELETE FROM notes_fts');
-	for (const folder of state.folders) await upsertFolder(folder);
-	for (const note of state.notes) await upsertNote(note);
+export function replaceNotesState(state: NotesState): Promise<void> {
+	return runSerialized(async () => {
+		if (!isTauri()) {
+			writePreview(state);
+			return;
+		}
+		const fts = await ensureSchema();
+		const db = await getDatabase();
+		await db.execute('DELETE FROM notes');
+		await db.execute('DELETE FROM folders');
+		if (fts) await db.execute('DELETE FROM notes_fts');
+		for (const folder of state.folders) await upsertFolderRaw(folder);
+		for (const note of state.notes) await upsertNoteRaw(note);
+	});
 }
 
 /* ------------------------------------------------------------------ */
 /* Escrita                                                             */
 /* ------------------------------------------------------------------ */
 
-export async function upsertNote(note: Note): Promise<void> {
+export function upsertNote(note: Note): Promise<void> {
+	return runSerialized(() => upsertNoteRaw(note));
+}
+
+async function upsertNoteRaw(note: Note): Promise<void> {
 	if (!isTauri()) {
 		const state = readPreview();
 		const index = state.notes.findIndex((item) => item.id === note.id);
@@ -156,7 +162,11 @@ export async function upsertNote(note: Note): Promise<void> {
 	}
 }
 
-export async function deleteNote(noteId: string): Promise<void> {
+export function deleteNote(noteId: string): Promise<void> {
+	return runSerialized(() => deleteNoteRaw(noteId));
+}
+
+async function deleteNoteRaw(noteId: string): Promise<void> {
 	if (!isTauri()) {
 		const state = readPreview();
 		state.notes = state.notes.filter((note) => note.id !== noteId);
@@ -170,7 +180,11 @@ export async function deleteNote(noteId: string): Promise<void> {
 	await deleteNoteAttachments(noteId);
 }
 
-export async function upsertFolder(folder: NoteFolder): Promise<void> {
+export function upsertFolder(folder: NoteFolder): Promise<void> {
+	return runSerialized(() => upsertFolderRaw(folder));
+}
+
+async function upsertFolderRaw(folder: NoteFolder): Promise<void> {
 	if (!isTauri()) {
 		const state = readPreview();
 		const index = state.folders.findIndex((item) => item.id === folder.id);
@@ -193,24 +207,26 @@ export async function upsertFolder(folder: NoteFolder): Promise<void> {
 	);
 }
 
-export async function deleteFolders(folderIds: string[]): Promise<void> {
-	if (!folderIds.length) return;
-	if (!isTauri()) {
-		const state = readPreview();
-		state.folders = state.folders.filter((folder) => !folderIds.includes(folder.id));
-		state.notes = state.notes.filter((note) => !note.folderId || !folderIds.includes(note.folderId));
-		writePreview(state);
-		return;
-	}
-	await ensureSchema();
-	const db = await getDatabase();
-	for (const folderId of folderIds) {
-		await db.execute('DELETE FROM folders WHERE id = $1', [folderId]);
-	}
-	// Remove em cascata as notas das pastas excluídas (e seus anexos).
-	const state = await loadNotes();
-	const doomed = state.notes.filter((note) => note.folderId && folderIds.includes(note.folderId));
-	for (const note of doomed) await deleteNote(note.id);
+export function deleteFolders(folderIds: string[]): Promise<void> {
+	if (!folderIds.length) return Promise.resolve();
+	return runSerialized(async () => {
+		if (!isTauri()) {
+			const state = readPreview();
+			state.folders = state.folders.filter((folder) => !folderIds.includes(folder.id));
+			state.notes = state.notes.filter((note) => !note.folderId || !folderIds.includes(note.folderId));
+			writePreview(state);
+			return;
+		}
+		await ensureSchema();
+		const db = await getDatabase();
+		for (const folderId of folderIds) {
+			await db.execute('DELETE FROM folders WHERE id = $1', [folderId]);
+		}
+		// Remove em cascata as notas das pastas excluídas (e seus anexos).
+		const state = await loadNotes();
+		const doomed = state.notes.filter((note) => note.folderId && folderIds.includes(note.folderId));
+		for (const note of doomed) await deleteNoteRaw(note.id);
+	});
 }
 
 /* ------------------------------------------------------------------ */
