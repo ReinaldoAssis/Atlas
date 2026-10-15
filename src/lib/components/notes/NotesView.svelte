@@ -50,7 +50,6 @@
 		createToken = 0,
 		onchange,
 		oncreate,
-		ontogglesound,
 		ontoast
 	}: {
 		sound?: boolean;
@@ -59,7 +58,6 @@
 		createToken?: number;
 		onchange: (state: NotesState) => void;
 		oncreate: (note: Note) => void;
-		ontogglesound: () => void;
 		ontoast: (message: string, options?: { warning?: boolean; undo?: () => void }) => void;
 	} = $props();
 
@@ -648,9 +646,6 @@
 				<Trash2 size={17} />
 				{#if trashedNotes.length}<span class="nt-badge">{trashedNotes.length}</span>{/if}
 			</button>
-			<button class="nt-ic" aria-label={sound ? 'Desativar som' : 'Ativar som'} onclick={ontogglesound}>
-				{sound ? '♪' : '×'}
-			</button>
 		</div>
 	</div>
 
@@ -697,9 +692,7 @@
 			<button onclick={() => openFolder(null)}>Notas</button>
 			{#each path as folder (folder.id)}
 				<span>›</span>
-				<button style={`--cc:${folder.color}`} onclick={() => openFolder(folder.id)}>
-					<FolderIcon color={folder.color} mini />{folder.name}
-				</button>
+				<button style={`--cc:${folder.color}`} onclick={() => openFolder(folder.id)}>{folder.name}</button>
 			{/each}
 		{/if}
 	</div>

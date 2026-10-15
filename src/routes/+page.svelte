@@ -419,6 +419,21 @@
 		handleTimeScroll();
 	});
 
+	/**
+	 * iOS (WKWebView) trata o arrasto como scroll nativo e cancela o gesto.
+	 * Enquanto um bloco está sendo pintado (após o toque longo), bloqueamos o
+	 * `touchmove` para o navegador não roubar o arrasto para o scroll da grade.
+	 */
+	$effect(() => {
+		const element = timeScroll;
+		if (!element) return;
+		const guard = (event: TouchEvent) => {
+			if (timePainting) event.preventDefault();
+		};
+		element.addEventListener('touchmove', guard, { passive: false });
+		return () => element.removeEventListener('touchmove', guard);
+	});
+
 	$effect(() => {
 		const ratio = Math.max(0, Math.min(100, lifeForcePercent)) / 100;
 		const saturation = (12 + 68 * ratio).toFixed(1);
@@ -822,13 +837,6 @@
 		const habit = habitSheet;
 		habitSheet = null;
 		await saveHabitLog(habit, habitSheetValue, !existing);
-	}
-
-	async function togglePrototypeSound() {
-		if (!snapshot) return;
-		const enabled = !snapshot.preferences.soundEnabled;
-		await updatePreferences({ soundEnabled: enabled });
-		playFeedback('tap', enabled);
 	}
 
 	function advanceLifeForce(data: AtlasSnapshot) {
@@ -1816,10 +1824,6 @@
 					<section class="dash-prototype" aria-label="Visão geral">
 						<div class="dash-top">
 							<div><h1>Hoje</h1><small>{humanDate(today, { weekday: 'long', day: 'numeric', month: 'long' })}</small></div>
-							<div class="dash-top-actions">
-								<span class="dash-streak" aria-label={`Sequência de ${habitDayStreak} dias`}><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 2c.8 3.6 5.5 5.6 5.5 11a5.5 5.5 0 0 1-11 0c0-2.6 1.6-3.8 2.6-5.6.9 1.7 2.1 1.9 2.1.3 0-1.8.1-3.6.8-5.7z"/></svg><span>{habitDayStreak}</span></span>
-								<button class="dash-ic" aria-label={snapshot.preferences.soundEnabled ? 'Desativar som' : 'Ativar som'} onclick={togglePrototypeSound}>{snapshot.preferences.soundEnabled ? '♪' : '×'}</button>
-							</div>
 						</div>
 						<div class="dash-period">
 							<div class="dash-slide" role="tablist" aria-label="Período do dashboard" style={`--i:${period === 'week' ? 0 : period === 'month' ? 1 : 2}`}>
@@ -1909,10 +1913,6 @@
 					<section class="fin-prototype" aria-label="Finanças">
 						<div class="fin-top">
 							<h1>{financeMonthLabel}</h1>
-							<div class="fin-top-actions">
-								<span class="fin-streak"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 2c.8 3.6 5.5 5.6 5.5 11a5.5 5.5 0 0 1-11 0c0-2.6 1.6-3.8 2.6-5.6.9 1.7 2.1 1.9 2.1.3 0-1.8.1-3.6.8-5.7z"/></svg>{snapshot.finance.streak}</span>
-								<button class="fin-ic" aria-label={snapshot.preferences.soundEnabled ? 'Desativar som' : 'Ativar som'} onclick={togglePrototypeSound}>{snapshot.preferences.soundEnabled ? '♪' : '×'}</button>
-							</div>
 						</div>
 						<div class="fin-grid">
 							<div class="fin-card fin-w2 fin-hero">
@@ -1974,9 +1974,7 @@
 					{#if snapshot}
 						<section class="habit-prototype" aria-label="Hábitos">
 							<div class="habit-prototype-top">
-								<div class="habit-prototype-streak"><svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true"><path fill="currentColor" d="M12 2c.8 3.6 5.5 5.6 5.5 11a5.5 5.5 0 0 1-11 0c0-2.6 1.6-3.8 2.6-5.6.9 1.7 2.1 1.9 2.1.3 0-1.8.1-3.6.8-5.7z"/></svg><b>{habitDayStreak}</b></div>
 								<div class="habit-prototype-level"><small>Nível {levelProgress.level}</small><div class="habit-prototype-xpbar"><i style={`width:${levelProgress.currentXp / levelProgress.nextLevelXp * 100}%`}></i></div></div>
-								<button class="habit-prototype-sound" aria-label={snapshot.preferences.soundEnabled ? 'Desativar som' : 'Ativar som'} onclick={togglePrototypeSound}>{snapshot.preferences.soundEnabled ? '♪' : '×'}</button>
 							</div>
 
 							<div class="habit-prototype-grid">
@@ -2034,7 +2032,6 @@
 							<div><h1>Tempo</h1><small class="tp-info">{timeTotalsLabel}</small></div>
 							<div class="tp-top-actions">
 								<button class="tp-ic" aria-label="Resumo" onclick={openTimeSummary}>Σ</button>
-								<button class="tp-ic" aria-label={snapshot.preferences.soundEnabled ? 'Desativar som' : 'Ativar som'} onclick={togglePrototypeSound}>{snapshot.preferences.soundEnabled ? '♪' : '×'}</button>
 							</div>
 						</div>
 						<div class="tp-wkb">
@@ -2074,7 +2071,6 @@
 							typingSound={snapshot.preferences.typingSoundEnabled}
 							haptics={snapshot.preferences.hapticsEnabled}
 							createToken={notesCreateToken}
-							ontogglesound={togglePrototypeSound}
 							onchange={(state) => (notesState = state)}
 							oncreate={onNoteCreated}
 							ontoast={toastMessage}
