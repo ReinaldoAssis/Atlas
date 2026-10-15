@@ -1,7 +1,9 @@
+import { createGraphFromDemo, type GraphState } from './graph';
+
 export type ModuleId = 'finance' | 'habits' | 'time';
 export type TransactionType = 'income' | 'expense';
 export type HabitMetric = 'boolean' | 'duration' | 'count' | 'weekly';
-export type NavigationKey = 'dashboard' | ModuleId;
+export type NavigationKey = 'dashboard' | ModuleId | 'graph';
 
 export interface Category {
 	id: string;
@@ -98,6 +100,7 @@ export interface AtlasSnapshot {
 	experience: ExperienceState;
 	finance: FinanceState;
 	preferences: AppPreferences;
+	graph: GraphState;
 }
 
 const today = () => localDate();
@@ -194,7 +197,8 @@ export function createEmptySnapshot(): AtlasSnapshot {
 			soundEnabled: true,
 		hapticsEnabled: true,
 			backupEncryption: 'ask'
-		}
+		},
+		graph: createGraphFromDemo()
 	};
 }
 
