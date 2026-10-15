@@ -2,11 +2,11 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Atlas",
   "version": "0.1.0",
-  "identifier": "com.atlas.personal",
+  "identifier": "com.randroi75.atlas",
   "build": {
     "frontendDist": "../build",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "npm run dev -- --host 0.0.0.0 --port 1420",
+    "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },
   "app": {
@@ -37,6 +37,10 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    },
+    "iOS": {
+      "minimumSystemVersion": "15.4",
+      "developmentTeam": "QNHMJF4W4N"
     }
   }
 }

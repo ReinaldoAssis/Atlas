@@ -2,7 +2,18 @@ import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
+// Em device físico o Tauri expõe o dev server no endereço da rede local
+// (TAURI_DEV_HOST) — o iPhone precisa alcançar esse host, não `localhost`.
+const host = process.env.TAURI_DEV_HOST;
+
 export default defineConfig({
+	clearScreen: false,
+	server: {
+		host: host || false,
+		port: 1420,
+		strictPort: true,
+		hmr: host ? { protocol: 'ws', host, port: 1421 } : undefined
+	},
 	define: {
 		// Atlas é SPA estática: o highlighter do Carta roda só no cliente.
 		__ENABLE_CARTA_SSR_HIGHLIGHTER__: false
