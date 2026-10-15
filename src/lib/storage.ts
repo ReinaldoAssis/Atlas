@@ -17,6 +17,8 @@ import {
 	demoTimeBlocks,
 	type FinanceState
 } from './atlas';
+import { normalizeGraph, type GraphState } from './graph';
+import { reconcileGraph } from './graph-sources';
 
 const PREVIEW_KEY = 'atlas-preview-state-v1';
 const LIFEFORCE_MIGRATION_KEY = 'atlas-preview-lifeforce-v3';
@@ -164,8 +166,10 @@ function readPreview(): AtlasSnapshot {
 			preferences: { ...defaults.preferences, ...stored.preferences },
 			experience: { ...defaults.experience, ...stored.experience },
 			lifeForce: { ...defaults.lifeForce, ...stored.lifeForce },
-			finance: { ...defaults.finance, ...stored.finance }
+			finance: { ...defaults.finance, ...stored.finance },
+			graph: normalizeGraph(stored.graph ?? defaults.graph)
 		} as AtlasSnapshot;
+		snapshot.graph = reconcileGraph(snapshot.graph, snapshot);
 		migrateLifeForceBaseline(snapshot);
 		return snapshot;
 	} catch {
@@ -196,6 +200,7 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	const experience = { ...defaults.experience, ...(settingsMap.experience ?? {}) } as ExperienceState;
 	const finance = { ...defaults.finance, ...(settingsMap.finance ?? {}) } as FinanceState;
 	const preferences = { ...defaults.preferences, ...(settingsMap.preferences ?? {}) };
+	const graph = settingsMap.graph ? normalizeGraph(settingsMap.graph as GraphState) : defaults.graph;
 	const snapshot = {
 		categories: categories.map((row) => normalizeCategory(JSON.parse(row.payload) as Category)),
 		transactions: transactions.map((row) => JSON.parse(row.payload) as Transaction),
@@ -205,8 +210,10 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 		lifeForce,
 		experience,
 		finance,
-		preferences
+		preferences,
+		graph
 	};
+	snapshot.graph = reconcileGraph(snapshot.graph, snapshot);
 	migrateLifeForceBaseline(snapshot);
 	return snapshot;
 }
@@ -273,6 +280,10 @@ export async function saveSnapshot(snapshot: AtlasSnapshot): Promise<void> {
 		await db.execute('INSERT INTO app_settings (key, value) VALUES ($1, $2)', [
 			'finance',
 			JSON.stringify(snapshot.finance)
+		]);
+		await db.execute('INSERT INTO app_settings (key, value) VALUES ($1, $2)', [
+			'graph',
+			JSON.stringify(snapshot.graph)
 		]);
 		await db.execute('INSERT INTO app_settings (key, value) VALUES ($1, $2)', ['seeded', JSON.stringify(true)]);
 		await db.execute('COMMIT');
@@ -352,13 +363,16 @@ export async function importBackup(file: File, password?: string): Promise<Atlas
 		throw new Error('O backup está incompleto ou foi alterado.');
 	}
 	const defaults = createEmptySnapshot();
-	return {
+	const merged = {
 		...defaults,
 		...snapshot,
 		categories: (snapshot.categories ?? defaults.categories).map(normalizeCategory),
 		preferences: { ...defaults.preferences, ...snapshot.preferences },
 		experience: { ...defaults.experience, ...snapshot.experience },
 		lifeForce: { ...defaults.lifeForce, ...snapshot.lifeForce },
-		finance: { ...defaults.finance, ...snapshot.finance }
-	};
+		finance: { ...defaults.finance, ...snapshot.finance },
+		graph: normalizeGraph(snapshot.graph ?? defaults.graph)
+	} as AtlasSnapshot;
+	merged.graph = reconcileGraph(merged.graph, merged);
+	return merged;
 }
