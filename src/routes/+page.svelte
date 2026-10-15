@@ -4,7 +4,7 @@
 	import {
 		ArrowDownLeft, ArrowDownRight, ArrowRight, ArrowUpRight, Bell, CalendarDays,
 		Check, ChevronLeft, ChevronRight, CircleDollarSign, Clock3, Flame,
-		LayoutDashboard, Menu, MoreHorizontal, Plus, Settings2, Target, TrendingDown, Vibrate, Volume2,
+		LayoutDashboard, Menu, MoreHorizontal, Plus, Route, Settings2, Target, TrendingDown, Vibrate, Volume2,
 		TrendingUp, Wallet, X, type LucideIcon
 	} from '@lucide/svelte';
 	import {
@@ -14,6 +14,9 @@
 		type NavigationKey, type TimeBlock, type Transaction
 	} from '#lib/atlas';
 	import { exportBackup, importBackup, loadSnapshot, saveSnapshot } from '#lib/storage';
+	import { type GraphState } from '#lib/graph';
+	import { reconcileGraph } from '#lib/graph-sources';
+	import GraphView from '#lib/components/graph/GraphView.svelte';
 	import {
 		burstAt, centerOf, confetti, emitParticles, floatValue, playFeedback, playTone, popElement,
 		prefersReducedMotion, pulseHaptic, vibrate
@@ -27,7 +30,8 @@
 		{ id: 'dashboard', label: 'Visão geral', icon: LayoutDashboard },
 		{ id: 'finance', label: 'Finanças', icon: Wallet },
 		{ id: 'habits', label: 'Hábitos', icon: Target },
-		{ id: 'time', label: 'Tempo', icon: CalendarDays }
+		{ id: 'time', label: 'Tempo', icon: CalendarDays },
+		{ id: 'graph', label: 'Vida', icon: Route }
 	];
 
 	let snapshot = $state<AtlasSnapshot | null>(null);
@@ -216,7 +220,7 @@
 		const onPointerUp = (event: PointerEvent) => void finishTimePaint(event);
 		const onClickFeedback = (event: MouseEvent) => {
 			const button = (event.target as HTMLElement | null)?.closest('button');
-			if (!button || button.matches('.tp-c, .tp-cat, .habit-log-button, .habit-complete-button')) return;
+			if (!button || button.closest('.graph-view') || button.closest('.gv-sheet') || button.matches('.tp-c, .tp-cat, .habit-log-button, .habit-complete-button')) return;
 			playFeedback('tap', snapshot?.preferences.soundEnabled);
 			pulseHaptic(snapshot?.preferences.hapticsEnabled, 6);
 		};
@@ -685,6 +689,11 @@
 	}
 
 	async function commit(next: AtlasSnapshot, meaningful = false, created: boolean | number = false) {
+		const beforeSources = new Map((snapshot?.graph.edges ?? []).map((edge) => [edge.id, edge.source]));
+		next.graph = reconcileGraph(next.graph, next);
+		const orphaned = next.graph.edges.some(
+			(edge) => edge.source === 'manual' && beforeSources.get(edge.id) !== undefined && beforeSources.get(edge.id) !== 'manual'
+		);
 		if (meaningful && !isCurrentPause(next)) {
 			advanceLifeForce(next);
 			const points = typeof created === 'number' ? created : created ? 1 : 0;
@@ -695,6 +704,7 @@
 		try {
 			await saveSnapshot(next);
 			snapshot = next;
+			if (orphaned) toastMessage('Fonte removida no módulo: a transição virou manual.');
 		} catch (error) {
 			console.error(error);
 			toastMessage('Não foi possível salvar no dispositivo. Tente novamente.');
@@ -704,6 +714,17 @@
 
 	function isCurrentPause(data: AtlasSnapshot): boolean {
 		return Boolean(data.lifeForce.pausedFrom && data.lifeForce.pausedUntil && localDate() >= data.lifeForce.pausedFrom && localDate() < data.lifeForce.pausedUntil);
+	}
+
+	async function commitGraph(next: GraphState) {
+		if (!snapshot) return;
+		const copy = cloneSnapshot();
+		copy.graph = next;
+		await commit(copy);
+	}
+
+	function graphToast(message: string, undo?: () => void) {
+		toastMessage(message, undo ? { undo } : {});
 	}
 
 	let toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1749,6 +1770,8 @@
 							</div>
 						</div>
 					</section>
+				{:else if activeTab === 'graph'}
+					<GraphView snapshot={snapshot} oncommit={commitGraph} ontoast={graphToast} />
 				{/if}
 			</main>
 		</div>
