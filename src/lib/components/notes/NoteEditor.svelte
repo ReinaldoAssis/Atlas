@@ -271,9 +271,18 @@
 		void refreshAttachments();
 		paneEl?.addEventListener('click', onPreviewClick);
 		void renderPreview();
+		// iOS suspende timers ao ir para segundo plano: grava o rascunho
+		// pendente antes que o debounce de 800ms se perca.
+		const onVisibility = () => {
+			if (document.visibilityState === 'hidden') flush();
+		};
+		document.addEventListener('visibilitychange', onVisibility);
+		window.addEventListener('pagehide', flush);
 		if (initialMode === 'write') setTimeout(() => editorEl?.focus(), 350);
 		return () => {
 			paneEl?.removeEventListener('click', onPreviewClick);
+			document.removeEventListener('visibilitychange', onVisibility);
+			window.removeEventListener('pagehide', flush);
 			for (const url of objectUrls) URL.revokeObjectURL(url);
 			objectUrls.length = 0;
 		};

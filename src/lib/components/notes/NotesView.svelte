@@ -1,3 +1,8 @@
+<script module lang="ts">
+	/** Último token de criação tratado, compartilhado entre montagens. */
+	let handledCreateToken = 0;
+</script>
+
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 	import { RotateCcw, Trash2 } from '@lucide/svelte';
@@ -42,6 +47,7 @@
 		sound = true,
 		typingSound = true,
 		haptics = true,
+		createToken = 0,
 		onchange,
 		oncreate,
 		ontogglesound,
@@ -50,11 +56,20 @@
 		sound?: boolean;
 		typingSound?: boolean;
 		haptics?: boolean;
+		createToken?: number;
 		onchange: (state: NotesState) => void;
 		oncreate: (note: Note) => void;
 		ontogglesound: () => void;
 		ontoast: (message: string, options?: { warning?: boolean; undo?: () => void }) => void;
 	} = $props();
+
+	// "Nova nota" disparado pelo shell (menu rápido).
+	$effect(() => {
+		if (createToken !== handledCreateToken) {
+			handledCreateToken = createToken;
+			void newNote();
+		}
+	});
 
 	let notes = $state<Note[]>([]);
 	let folders = $state<NoteFolder[]>([]);

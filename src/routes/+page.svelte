@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { isTauri } from '@tauri-apps/api/core';
 	import {
-		ArrowDownRight, ArrowUpRight, Bell, CalendarDays, Check, ChevronRight, CircleDollarSign,
+		ArrowDownRight, ArrowUpRight, Bell, CalendarDays, Check, ChevronLeft, CircleDollarSign,
 		Flame, Keyboard, LayoutDashboard, Menu, NotebookPen, Plus, Route, Settings2, Target, Vibrate, Volume2,
 		Wallet, X, type LucideIcon
 	} from '@lucide/svelte';
@@ -12,8 +12,7 @@
 		experienceProgress, type AppPreferences, type AtlasSnapshot, type Category, type Habit, type HabitLog,
 		type NavigationKey, type TimeBlock, type Transaction
 	} from '#lib/atlas';
-	import { exportBackupV2, importBackupV2, loadSnapshot, saveSnapshot } from '#lib/storage';
-	import { collectAttachments, replaceNotesState, restoreAttachments } from '#lib/notes-store';
+	import { loadSnapshot, saveSnapshot } from '#lib/storage';
 	import type { Note, NotesState } from '#lib/notes';
 	import { edgeRatio, isMilestone, nodeReached, type GraphState } from '#lib/graph';
 	import { reconcileGraph } from '#lib/graph-sources';
@@ -37,6 +36,12 @@
 		{ id: 'graph', label: 'Vida', icon: Route }
 	];
 
+	const TAB_ORDER: NavigationKey[] = ['dashboard', 'finance', 'habits', 'time', 'notes', 'graph'];
+	/** Abas fixas da barra inferior mobile. */
+	const PRIMARY_TABS: NavigationKey[] = ['dashboard', 'habits', 'time'];
+	/** Abas que ficam no menu "Mais". */
+	const MORE_TABS: NavigationKey[] = ['finance', 'notes', 'graph'];
+
 	let snapshot = $state<AtlasSnapshot | null>(null);
 	let ready = $state(false);
 	let loadError = $state('');
@@ -52,10 +57,27 @@
 	let toast = $state('');
 	let toastWarning = $state(false);
 	let toastUndo = $state<(() => void) | null>(null);
-	let isMobileNavOpen = $state(false);
+	let sidebarCollapsed = $state(false);
+	let quickMenuOpen = $state(false);
+	let moreMenuOpen = $state(false);
+	let navDirection = $state(1);
+	let notesCreateToken = $state(0);
 	let editingTransactionId = $state('');
 	let formError = $state('');
 	let wasPaused = $state(false);
+	type DialogRequest = {
+		kind: 'confirm' | 'prompt';
+		title: string;
+		message?: string;
+		label?: string;
+		placeholder?: string;
+		confirmLabel: string;
+		danger?: boolean;
+		resolve: (value: string | null) => void;
+	};
+	let dialog = $state<DialogRequest | null>(null);
+	let dialogValue = $state('');
+	let dialogInput = $state<HTMLInputElement | null>(null);
 	let lifeForcePercent = $derived(snapshot?.lifeForce.value ?? 50);
 	let today = $derived(localDate(currentTime));
 	let currentCategory = $derived((id: string) => snapshot?.categories.find((category) => category.id === id));
@@ -142,6 +164,10 @@
 	let prototypeTodayGoal = $derived(Math.min(3, prototypeTodayHabits.length));
 	let habitDayStreak = $derived.by(() => getHabitDayStreak(snapshot));
 	let levelProgress = $derived(experienceProgress(snapshot?.experience.totalXp ?? 0));
+	let levelPercent = $derived(levelProgress.nextLevelXp ? Math.min(1, levelProgress.currentXp / levelProgress.nextLevelXp) : 0);
+	let activeNavItem = $derived(navItems.find((item) => item.id === activeTab) ?? navItems[0]);
+	let sidebarIndex = $derived(Math.max(0, navItems.findIndex((item) => item.id === activeTab)));
+	let bottomIndex = $derived(activeTab === 'dashboard' ? 0 : activeTab === 'habits' ? 1 : activeTab === 'time' ? 3 : 4);
 	let financeCategories = $derived(snapshot?.categories.filter((item) => item.module === 'finance') ?? []);
 	let financeMonthTransactions = $derived(monthTransactionsOf(snapshot));
 	let financeIncome = $derived(financeMonthTransactions.filter((item) => item.type === 'income').reduce((sum, item) => sum + item.amountMinor, 0));
@@ -334,6 +360,17 @@
 			}
 		};
 		void initialize();
+		try {
+			sidebarCollapsed = localStorage.getItem('atlas-sidebar-collapsed') === '1';
+		} catch {
+			/* localStorage indisponível */
+		}
+		const onKeydown = (event: KeyboardEvent) => {
+			const tag = (document.activeElement as HTMLElement | null)?.tagName ?? '';
+			if (event.key === '[' && !/INPUT|TEXTAREA|SELECT/.test(tag)) toggleSidebar();
+			if (event.key === 'Escape') closeShellMenus();
+		};
+		window.addEventListener('keydown', onKeydown);
 		window.addEventListener('pointermove', onPointerMove);
 		window.addEventListener('pointerup', onPointerUp);
 		window.addEventListener('pointercancel', onPointerUp);
@@ -363,6 +400,7 @@
 			window.removeEventListener('click', onClickFeedback);
 			window.removeEventListener('click', onDashOutside);
 			window.removeEventListener('resize', onResize);
+			window.removeEventListener('keydown', onKeydown);
 		};
 	});
 
@@ -394,6 +432,16 @@
 		root.setProperty('--fp-acc', accent);
 		root.setProperty('--hp-accent', accent);
 		root.setProperty('--hp-accent-dim', soft);
+		root.setProperty('--acc', accent);
+		root.setProperty('--accd', soft);
+	});
+
+	$effect(() => {
+		const request = dialog;
+		const element = dialogInput;
+		if (request?.kind !== 'prompt' || !element) return;
+		const timer = setTimeout(() => element.focus(), 60);
+		return () => clearTimeout(timer);
 	});
 
 	async function initialize() {
@@ -407,7 +455,8 @@
 			await syncIOSReminders(loaded);
 		} catch (error) {
 			console.error(error);
-			loadError = 'Não foi possível abrir os dados locais.';
+			const detail = error instanceof Error ? error.message : String(error);
+			loadError = `Não foi possível abrir os dados locais. (${detail})`;
 			ready = true;
 		}
 	}
@@ -1371,9 +1420,71 @@
 		else playFeedback(key === 'typingSoundEnabled' ? 'paint' : 'success', enabled);
 	}
 
+	/**
+	 * Diálogos próprios do Atlas.
+	 *
+	 * `window.confirm`/`window.prompt` não são confiáveis no WKWebView (iOS):
+	 * o delegate nativo não implementa os painéis JS, então `confirm` sempre
+	 * retorna falso e `prompt` sempre retorna nulo. Estes helpers dão o mesmo
+	 * contrato via UI própria.
+	 */
+	function askConfirm(options: { title: string; message: string; confirmLabel?: string; danger?: boolean }): Promise<boolean> {
+		return new Promise((resolve) => {
+			dialog = {
+				kind: 'confirm',
+				title: options.title,
+				message: options.message,
+				confirmLabel: options.confirmLabel ?? 'Confirmar',
+				danger: options.danger,
+				resolve: (value) => resolve(value !== null)
+			};
+		});
+	}
+
+	function askText(options: { title: string; label: string; value?: string; placeholder?: string; confirmLabel?: string }): Promise<string | null> {
+		return new Promise((resolve) => {
+			dialogValue = options.value ?? '';
+			dialog = {
+				kind: 'prompt',
+				title: options.title,
+				label: options.label,
+				placeholder: options.placeholder,
+				confirmLabel: options.confirmLabel ?? 'Salvar',
+				resolve
+			};
+		});
+	}
+
+	function closeDialog(result: string | null) {
+		const current = dialog;
+		if (!current) return;
+		dialog = null;
+		current.resolve(result);
+	}
+
+	function submitDialog(event: Event) {
+		event.preventDefault();
+		if (!dialog) return;
+		closeDialog(dialog.kind === 'prompt' ? dialogValue : 'ok');
+	}
+
+	function backupComingSoon() {
+		toastMessage('Backup local chega em breve.');
+	}
+
 	async function changeCurrency(event: Event) {
-		const value = (event.currentTarget as HTMLSelectElement).value;
-		if (!window.confirm('Alterar a moeda base muda apenas a forma de exibição. O Atlas não converte os valores já registrados. Deseja continuar?')) return;
+		const select = event.currentTarget as HTMLSelectElement;
+		const value = select.value;
+		if (!snapshot || value === snapshot.preferences.currency) return;
+		const confirmed = await askConfirm({
+			title: 'Trocar moeda base',
+			message: 'Alterar a moeda base muda apenas a forma de exibição. O Atlas não converte os valores já registrados.',
+			confirmLabel: 'Trocar'
+		});
+		if (!confirmed) {
+			select.value = snapshot.preferences.currency;
+			return;
+		}
 		await updatePreferences({ currency: value });
 	}
 
@@ -1388,11 +1499,17 @@
 	}
 
 	async function renameCategory(category: Category) {
-		const name = window.prompt('Nome da categoria', category.name)?.trim();
-		if (!name || !snapshot) return;
+		const name = await askText({
+			title: 'Renomear categoria',
+			label: 'Nome da categoria',
+			value: category.name,
+			confirmLabel: 'Salvar'
+		});
+		const trimmed = name?.trim();
+		if (!trimmed || !snapshot) return;
 		const next = cloneSnapshot();
 		const found = next.categories.find((item) => item.id === category.id);
-		if (found) found.name = name;
+		if (found) found.name = trimmed;
 		await commit(next);
 	}
 
@@ -1552,77 +1669,83 @@
 
 	function changePeriod(value: Period) { period = value; }
 
-	async function saveBackup() {
-		if (!snapshot) return;
-		try {
-			const encrypted = window.confirm('Proteger este backup com uma senha?\n\nOK: criptografar · Cancelar: exportar sem senha');
-			let password: string | undefined;
-			if (encrypted) {
-				password = window.prompt('Crie uma senha para o backup. Ela não poderá ser recuperada pelo Atlas.') ?? undefined;
-				if (!password || password.length < 8) {
-					toastMessage('Use uma senha com pelo menos 8 caracteres.');
-					return;
-				}
-				const confirmation = window.prompt('Digite a senha novamente para confirmar.') ?? '';
-				if (confirmation !== password) {
-					toastMessage('As senhas não coincidem.');
-					return;
-				}
-			}
-			const attachments = await collectAttachments();
-			const blob = await exportBackupV2(
-				{ snapshot, notes: notesState.notes, folders: notesState.folders },
-				attachments,
-				password
-			);
-			const url = URL.createObjectURL(blob);
-			const anchor = document.createElement('a');
-			anchor.href = url;
-			anchor.download = `atlas-backup-${localDate()}${encrypted ? '.encrypted' : ''}.${encrypted ? 'json' : 'zip'}`;
-			anchor.click();
-			URL.revokeObjectURL(url);
-			toastMessage('Backup exportado.');
-		} catch (error) {
-			console.error(error);
-			toastMessage('Não foi possível exportar o backup.');
-		}
-	}
+	/* Backup local: desativado por ora.
+	   A exportação antiga usava blob + `<a download>`, que o WKWebView (iOS)
+	   não baixa, e `window.confirm/prompt`, que o delegate nativo não exibe.
+	   Será reimplementado com `plugin-dialog` + `plugin-fs`. */
 
-	async function restoreBackup(event: Event) {
-		const input = event.currentTarget as HTMLInputElement;
-		const file = input.files?.[0];
-		if (!file) return;
-		try {
-			const head = new Uint8Array(await file.slice(0, 2).arrayBuffer());
-			const isZip = head[0] === 0x50 && head[1] === 0x4b;
-			let password: string | undefined;
-			if (!isZip) {
-				const header = JSON.parse(await file.text()) as { format?: string };
-				if (header.format === 'atlas-backup-encrypted-v1' || header.format === 'atlas-backup-encrypted-v2') {
-					password = window.prompt('Digite a senha do backup criptografado.') ?? undefined;
-					if (!password) return;
-				}
-			}
-			const imported = await importBackupV2(file, password);
-			const confirmed = window.confirm('Importar este backup substituirá todos os dados locais deste dispositivo. Deseja continuar?');
-			if (!confirmed) return;
-			await saveSnapshot(imported.data.snapshot);
-			await replaceNotesState({ notes: imported.data.notes, folders: imported.data.folders });
-			if (imported.attachments.length) await restoreAttachments(imported.attachments);
-			snapshot = imported.data.snapshot;
-			notesState = { notes: imported.data.notes, folders: imported.data.folders };
-			notesVersion += 1;
-			toastMessage('Backup importado.');
-		} catch (error) {
-			toastMessage(error instanceof Error ? error.message : 'Não foi possível importar o backup.');
-		} finally {
-			input.value = '';
-		}
-	}
 
 	function setActiveTab(key: NavigationKey) {
 		activeTab = key;
-		isMobileNavOpen = false;
+		closeShellMenus();
+	}
+
+	/* ---------- Shell (app shell) ---------- */
+	function snapSound(): boolean {
+		return snapshot?.preferences.soundEnabled ?? false;
+	}
+
+	function snapHaptics(): boolean {
+		return snapshot?.preferences.hapticsEnabled ?? false;
+	}
+
+	function closeShellMenus() {
+		quickMenuOpen = false;
+		moreMenuOpen = false;
+	}
+
+	function toggleSidebar() {
+		sidebarCollapsed = !sidebarCollapsed;
+		try {
+			localStorage.setItem('atlas-sidebar-collapsed', sidebarCollapsed ? '1' : '0');
+		} catch {
+			/* localStorage indisponível */
+		}
+		playTone(sidebarCollapsed ? 420 : 560, 0.08, 'sine', 0.05, snapSound());
+		pulseHaptic(snapHaptics(), 5);
+	}
+
+	function goTab(key: NavigationKey) {
+		closeShellMenus();
+		if (key === activeTab) {
+			pulseHaptic(snapHaptics(), 3);
+			return;
+		}
+		navDirection = TAB_ORDER.indexOf(key) >= TAB_ORDER.indexOf(activeTab) ? 1 : -1;
+		playTone(480, 0.05, 'sine', 0.05, snapSound());
+		pulseHaptic(snapHaptics(), 6);
+		setActiveTab(key);
+		window.scrollTo({ top: 0 });
+	}
+
+	function toggleQuickMenu() {
+		const next = !quickMenuOpen;
+		closeShellMenus();
+		quickMenuOpen = next;
+		if (next) {
+			playTone(380, 0.18, 'triangle', 0.05, snapSound());
+			pulseHaptic(snapHaptics(), 10);
+		}
+	}
+
+	function toggleMoreMenu() {
+		const next = !moreMenuOpen;
+		closeShellMenus();
+		moreMenuOpen = next;
+		playTone(next ? 520 : 380, 0.08, 'sine', 0.05, snapSound());
+		pulseHaptic(snapHaptics(), 6);
+	}
+
+	function quickAction(kind: 'habit' | 'entry' | 'note') {
+		closeShellMenus();
+		playTone(660, 0.12, 'triangle', 0.06, snapSound());
+		pulseHaptic(snapHaptics(), [10, 30, 10]);
+		if (kind === 'habit') openDashHabitPick();
+		else if (kind === 'entry') openDashEntry();
+		else {
+			notesCreateToken += 1;
+			goTab('notes');
+		}
 	}
 
 	function recentLabel(date: string) {
@@ -1640,44 +1763,55 @@
 {:else if loadError}
 	<div class="loading-screen"><div class="loading-mark">A</div><strong>Atlas não conseguiu abrir</strong><span>{loadError}</span><button class="button-secondary" onclick={() => { ready = false; loadError = ''; void initialize(); }}>Tentar novamente</button></div>
 {:else if snapshot}
-	<div class="app-shell">
-		<aside class:open={isMobileNavOpen} class="sidebar">
-			<div class="brand-lockup">
-				<div class="brand-mark">A<span></span></div>
-				<div><strong>atlas</strong><small>seu espaço de vida</small></div>
+	<div class:col={sidebarCollapsed} class="app-shell">
+		<aside id="sb" aria-label="Navegação principal">
+			<div class="sb-head">
+				<div class="sb-logo">A</div>
+				<b class="lab">Atlas</b>
+				<button class="sb-col" aria-label={sidebarCollapsed ? 'Expandir menu' : 'Recolher menu'} onclick={toggleSidebar}><ChevronLeft size={18} /></button>
 			</div>
-			<div class="sidebar-label">ESPAÇO PESSOAL</div>
-			<nav class="main-nav" aria-label="Navegação principal">
+			<div class="pf">
+				<div class="ring">
+					<svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="18" fill="none" stroke="#272b27" stroke-width="4" /><circle class="v" cx="22" cy="22" r="18" fill="none" stroke="var(--acc)" stroke-width="4" stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset={113 * (1 - levelPercent)} /></svg>
+					<b>{levelProgress.level}</b>
+				</div>
+				<div class="lab">
+					<b>Nível {levelProgress.level}</b>
+					<div class="xb"><i style={`width:${levelPercent * 100}%`}></i></div>
+					<div class="r2"><small>{levelProgress.currentXp}/{levelProgress.nextLevelXp} XP</small><span class="fire"><Flame size={14} fill="currentColor" /><span>{habitDayStreak}</span></span></div>
+				</div>
+			</div>
+			<button class="sb-new" aria-expanded={quickMenuOpen} onclick={toggleQuickMenu}><Plus size={20} strokeWidth={2.6} /><span class="lab">Novo</span></button>
+			{#if quickMenuOpen}
+				<div class="qm-desk">
+					<button onclick={() => quickAction('habit')}><Target size={18} />Hábito</button>
+					<button onclick={() => quickAction('entry')}><Wallet size={18} />Lançamento</button>
+					<button onclick={() => quickAction('note')}><NotebookPen size={18} />Nota</button>
+				</div>
+			{/if}
+			<nav class="nv" aria-label="Seções">
+				<i class="sind" style={`transform:translateY(${sidebarIndex * 46}px)`}></i>
 				{#each navItems as item}
-					<button class:active={activeTab === item.id} class="nav-item" onclick={() => setActiveTab(item.id)}>
-						<item.icon size={19} strokeWidth={1.8} />
-						<span>{item.label}</span>
-						{#if item.id === 'habits' && snapshot.habits.filter((habit) => habit.active).length}<small>{snapshot.habits.filter((habit) => habit.active).length}</small>{/if}
-						{#if item.id === 'notes' && notesState.notes.length}<small>{notesState.notes.length}</small>{/if}
+					<button class:on={activeTab === item.id} class="si" data-tip={item.label} onclick={() => goTab(item.id)}>
+						<item.icon size={22} strokeWidth={2} /><span class="lab">{item.label}</span>
 					</button>
 				{/each}
 			</nav>
-			<div class="sidebar-spacer"></div>
-			<div class="sidebar-life">
-				<div class="life-caption"><span>Life Force</span><span>{lifeForcePercent}%</span></div>
-				<div class="life-track"><div class="life-fill" style={`width:${lifeForcePercent}%`}></div></div>
-				<div class="life-note">Sua presença no Atlas</div>
-			</div>
-			<button class="nav-item settings-link" onclick={openSettings}><Settings2 size={18} /><span>Preferências</span></button>
-			<div class="sidebar-foot"><span class="local-dot"></span>Dados guardados neste dispositivo</div>
+			<div class="grow"></div>
+			<nav class="nv" aria-label="Atalhos">
+				<button class="si" data-tip="Pausar Atlas" onclick={() => { closeShellMenus(); modal = 'pause'; }}><Flame size={22} strokeWidth={2} /><span class="lab">Pausa</span></button>
+				<button class="si" data-tip="Configurações" onclick={() => { closeShellMenus(); openSettings(); }}><Settings2 size={22} strokeWidth={2} /><span class="lab">Configurações</span></button>
+			</nav>
 		</aside>
 
-		<div class="main-column">
-			<header class="topbar">
-				<button class="icon-button mobile-menu" aria-label="Abrir menu" onclick={() => (isMobileNavOpen = !isMobileNavOpen)}><Menu size={20} /></button>
-				<div class="breadcrumb"><span>Atlas</span><ChevronRight size={14} /><strong>{navItems.find((item) => item.id === activeTab)?.label}</strong></div>
-				<div class="topbar-actions">
-					<button class="life-chip" aria-label="Life Force" onclick={() => (modal = 'pause')}><Flame size={16} fill={lifeForcePercent > 0 ? 'currentColor' : 'none'} /><span>{lifeForcePercent}%</span></button>
-					<button class="icon-button" aria-label="Preferências" onclick={openSettings}><Settings2 size={18} /></button>
-				</div>
-			</header>
+		<header class="tb">
+			<h1>{#each navItems as item}{#if item.id === activeTab}<item.icon size={22} />{/if}{/each}{activeNavItem.label}</h1>
+			<span class="fire" aria-label={`Sequência de ${habitDayStreak} dias`}><Flame size={20} fill="currentColor" /><span>{habitDayStreak}</span></span>
+			<div class="lv" aria-label={`Nível ${levelProgress.level}`}><b>{levelProgress.level}</b><div class="xb"><i style={`width:${levelPercent * 100}%`}></i></div></div>
+		</header>
 
-			<main class="workspace">
+		<main class="workspace">
+			<div id="pg" class={navDirection >= 0 ? 'inr' : 'inl'}>
 				{#if activeTab === 'dashboard'}
 					<section class="dash-prototype" aria-label="Visão geral">
 						<div class="dash-top">
@@ -1771,11 +1905,6 @@
 							</article>
 						</div>
 					</section>
-					<div class="dash-menu" class:on={dashMenu}>
-						<button onclick={openDashHabitPick}>Hábito</button>
-						<button onclick={openDashEntry}>Lançamento</button>
-					</div>
-					<button class="dash-fab" class:on={dashMenu} aria-label="Adicionar" aria-expanded={dashMenu} onclick={() => { dashMenu = !dashMenu; playTone(dashMenu ? 480 : 380, 0.08, 'sine', 0.05, snapshot?.preferences.soundEnabled ?? true); }}>+</button>
 				{:else if activeTab === 'finance'}
 					<section class="fin-prototype" aria-label="Finanças">
 						<div class="fin-top">
@@ -1944,6 +2073,7 @@
 							sound={snapshot.preferences.soundEnabled}
 							typingSound={snapshot.preferences.typingSoundEnabled}
 							haptics={snapshot.preferences.hapticsEnabled}
+							createToken={notesCreateToken}
 							ontogglesound={togglePrototypeSound}
 							onchange={(state) => (notesState = state)}
 							oncreate={onNoteCreated}
@@ -1953,8 +2083,41 @@
 				{:else if activeTab === 'graph'}
 					<GraphView snapshot={snapshot} oncommit={commitGraph} ontoast={graphToast} />
 				{/if}
-			</main>
+			</div>
+		</main>
+
+		<nav id="bn" aria-label="Navegação rápida">
+			<div class="bg"></div>
+			<i class="ind" style={`left:calc((${bottomIndex} + 0.5) * 20% - 13px)`}></i>
+			<button class:on={activeTab === 'dashboard'} aria-label="Visão geral" onclick={() => goTab('dashboard')}><LayoutDashboard size={23} /><span>Visão</span></button>
+			<button class:on={activeTab === 'habits'} aria-label="Hábitos" onclick={() => goTab('habits')}><Target size={23} /><span>Hábitos</span></button>
+			<span class="sp"></span>
+			<button class:on={activeTab === 'time'} aria-label="Tempo" onclick={() => goTab('time')}><CalendarDays size={23} /><span>Tempo</span></button>
+			<button class:on={MORE_TABS.includes(activeTab)} aria-label="Mais" aria-expanded={moreMenuOpen} onclick={toggleMoreMenu}><Menu size={23} /><span>Mais</span></button>
+			<button id="plus" class:on={quickMenuOpen} aria-label="Adicionar" aria-expanded={quickMenuOpen} onclick={toggleQuickMenu}>
+				<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="pl" d="M12 5v14M5 12h14" /><circle class="rg" cx="12" cy="12" r="7" /></svg>
+			</button>
+		</nav>
+
+		<div id="qm" class:on={quickMenuOpen}>
+			<button class="qi" onclick={() => quickAction('habit')}><span class="qc"><Target size={24} /></span><span>Hábito</span></button>
+			<button class="qi" onclick={() => quickAction('entry')}><span class="qc"><Wallet size={24} /></span><span>Lançamento</span></button>
+			<button class="qi" onclick={() => quickAction('note')}><span class="qc"><NotebookPen size={24} /></span><span>Nota</span></button>
 		</div>
+
+		<div id="mm" class:on={moreMenuOpen}>
+			{#each MORE_TABS as key, index}
+				{@const tab = navItems.find((item) => item.id === key)}
+				{#if tab}
+					{@const TabIcon = tab.icon}
+					<button class="mi" style={`--i:${index}`} onclick={() => goTab(tab.id)}><TabIcon size={22} />{tab.label}</button>
+				{/if}
+			{/each}
+			<button class="mi hr" style="--i:3" onclick={() => { closeShellMenus(); modal = 'pause'; }}><Flame size={22} />Pausa</button>
+			<button class="mi" style="--i:4" onclick={() => { closeShellMenus(); openSettings(); }}><Settings2 size={22} />Configurações</button>
+		</div>
+
+		<div id="ov" class:on={quickMenuOpen || moreMenuOpen} role="presentation" onclick={closeShellMenus}></div>
 	</div>
 
 	{#if habitSheet}
@@ -2079,8 +2242,26 @@
 					{:else if modal === 'pause'}
 						<form onsubmit={startPause} class="modal-form"><div class="pause-explainer"><Flame size={20} /><p>Na pausa, Life Force, streaks e lembretes ficam suspensos. Seus dados continuam guardados.</p></div><label>Data de retorno<input type="date" bind:value={pauseForm.until} min={dateOffset(today, 1)} required /></label><div class="modal-actions"><button type="button" class="button-secondary" onclick={() => (modal = null)}>Agora não</button><button class="button-primary">Ativar pausa</button></div></form>
 					{:else if modal === 'settings'}
-						<div class="settings-content"><section class="settings-section"><div class="settings-title"><div><strong>Preferências</strong><span>Este dispositivo</span></div></div><label class="settings-row"><span><Bell size={17} /><span><strong>Lembretes locais</strong><small>Hábito e blocos de tempo</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.notificationsEnabled} onchange={toggleNotifications} /></label><label class="settings-row"><span><Volume2 size={17} /><span><strong>Sons da interface</strong><small>Toques discretos em ações e registros</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.soundEnabled} onchange={(event) => setFeedbackPreference('soundEnabled', event)} /></label><label class="settings-row"><span><Keyboard size={17} /><span><strong>Som de digitação</strong><small>Teclas ao escrever notas e pesquisar</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.typingSoundEnabled} onchange={(event) => setFeedbackPreference('typingSoundEnabled', event)} /></label><label class="settings-row"><span><Vibrate size={17} /><span><strong>Feedback tátil</strong><small>Vibração curta em dispositivos compatíveis</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.hapticsEnabled} onchange={(event) => setFeedbackPreference('hapticsEnabled', event)} /></label><label class="settings-row"><span><CircleDollarSign size={17} /><span><strong>Moeda base</strong><small>Resumos financeiros</small></span></span><select class="compact-select" value={snapshot.preferences.currency} onchange={changeCurrency}><option value="BRL">BRL · Real</option><option value="USD">USD · Dólar</option><option value="EUR">EUR · Euro</option></select></label></section><section class="settings-section"><div class="settings-title"><div><strong>Backup local</strong><span>Escolha o formato ao exportar</span></div></div><div class="backup-actions"><button class="button-secondary" onclick={saveBackup}><ArrowDownRight size={16} /> Exportar dados</button><label class="button-secondary import-label"><ArrowUpRight size={16} /> Importar arquivo<input type="file" accept="application/json,.json,.zip,application/zip" onchange={restoreBackup} /></label></div><p class="settings-footnote">A importação substitui os dados deste dispositivo. Guarde o arquivo em um local seguro.</p></section><section class="settings-section"><div class="settings-title"><div><strong>Categorias</strong><span>Finanças e tempo</span></div></div><form class="inline-category-form" onsubmit={addCategory}><select bind:value={categoryForm.module}><option value="finance">Finanças</option><option value="time">Tempo</option></select><input bind:value={categoryForm.name} placeholder="Nova categoria" required /><input aria-label="Cor da categoria" type="color" bind:value={categoryForm.color} /><button class="icon-button add-category" aria-label="Adicionar categoria"><Plus size={16} /></button></form><div class="category-edit-list">{#each snapshot.categories as category}<button onclick={() => renameCategory(category)}><i style={`background:${category.color}`}></i>{category.name}<span>{category.module === 'finance' ? 'Finanças' : 'Tempo'}</span></button>{/each}</div></section><button class="pause-link" onclick={() => (modal = 'pause')}><Flame size={16} /> Pausar Atlas até uma data</button></div>
+						<div class="settings-content"><section class="settings-section"><div class="settings-title"><div><strong>Preferências</strong><span>Este dispositivo</span></div></div><label class="settings-row"><span><Bell size={17} /><span><strong>Lembretes locais</strong><small>Hábito e blocos de tempo</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.notificationsEnabled} onchange={toggleNotifications} /></label><label class="settings-row"><span><Volume2 size={17} /><span><strong>Sons da interface</strong><small>Toques discretos em ações e registros</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.soundEnabled} onchange={(event) => setFeedbackPreference('soundEnabled', event)} /></label><label class="settings-row"><span><Keyboard size={17} /><span><strong>Som de digitação</strong><small>Teclas ao escrever notas e pesquisar</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.typingSoundEnabled} onchange={(event) => setFeedbackPreference('typingSoundEnabled', event)} /></label><label class="settings-row"><span><Vibrate size={17} /><span><strong>Feedback tátil</strong><small>Vibração curta em dispositivos compatíveis</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.hapticsEnabled} onchange={(event) => setFeedbackPreference('hapticsEnabled', event)} /></label><label class="settings-row"><span><CircleDollarSign size={17} /><span><strong>Moeda base</strong><small>Resumos financeiros</small></span></span><select class="compact-select" value={snapshot.preferences.currency} onchange={changeCurrency}><option value="BRL">BRL · Real</option><option value="USD">USD · Dólar</option><option value="EUR">EUR · Euro</option></select></label></section><section class="settings-section"><div class="settings-title"><div><strong>Backup local</strong><span>Escolha o formato ao exportar</span></div></div><div class="backup-actions"><button type="button" class="button-secondary is-soon" aria-disabled="true" onclick={backupComingSoon}><ArrowDownRight size={16} /> Exportar dados<span class="soon-tag">Em breve</span></button><button type="button" class="button-secondary is-soon" aria-disabled="true" onclick={backupComingSoon}><ArrowUpRight size={16} /> Importar arquivo<span class="soon-tag">Em breve</span></button></div><p class="settings-footnote">Backup local chega em breve. Os dados já ficam salvos neste dispositivo.</p></section><section class="settings-section"><div class="settings-title"><div><strong>Categorias</strong><span>Finanças e tempo</span></div></div><form class="inline-category-form" onsubmit={addCategory}><select bind:value={categoryForm.module}><option value="finance">Finanças</option><option value="time">Tempo</option></select><input bind:value={categoryForm.name} placeholder="Nova categoria" required /><input aria-label="Cor da categoria" type="color" bind:value={categoryForm.color} /><button class="icon-button add-category" aria-label="Adicionar categoria"><Plus size={16} /></button></form><div class="category-edit-list">{#each snapshot.categories as category}<button onclick={() => renameCategory(category)}><i style={`background:${category.color}`}></i>{category.name}<span>{category.module === 'finance' ? 'Finanças' : 'Tempo'}</span></button>{/each}</div></section><button class="pause-link" onclick={() => (modal = 'pause')}><Flame size={16} /> Pausar Atlas até uma data</button></div>
 					{/if}
+			</div>
+		</div>
+	{/if}
+	{#if dialog}
+		<div class="modal-backdrop" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) closeDialog(null); }}>
+			<div class="modal-card dialog-card" role="dialog" aria-modal="true" aria-label={dialog.title}>
+				<div class="modal-heading"><div><span class="eyebrow">ATLAS · SEU ESPAÇO</span><h2>{dialog.title}</h2></div><button class="icon-button" aria-label="Fechar" onclick={() => closeDialog(null)}><X size={19} /></button></div>
+				<form class="modal-form" onsubmit={submitDialog}>
+					{#if dialog.kind === 'prompt'}
+						<label>{dialog.label}<input bind:this={dialogInput} bind:value={dialogValue} placeholder={dialog.placeholder ?? ''} /></label>
+					{:else}
+						<p class="dialog-message">{dialog.message}</p>
+					{/if}
+					<div class="modal-actions">
+						<button type="button" class="button-secondary" onclick={() => closeDialog(null)}>Cancelar</button>
+						<button class="button-primary" class:danger={dialog.danger}>{dialog.confirmLabel}</button>
+					</div>
+				</form>
 			</div>
 		</div>
 	{/if}

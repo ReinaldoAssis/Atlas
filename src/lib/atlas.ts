@@ -224,7 +224,10 @@ export function experienceProgress(totalXp: number): { level: number; currentXp:
 }
 
 export function id(): string {
-	return crypto.randomUUID();
+	const cryptoApi = globalThis.crypto;
+	if (cryptoApi && typeof cryptoApi.randomUUID === 'function') return cryptoApi.randomUUID();
+	// Contexto inseguro (ex.: dev server em http://LAN) não expõe randomUUID.
+	return `a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export function localDate(value = new Date()): string {
