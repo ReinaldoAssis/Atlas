@@ -59,9 +59,14 @@ Atlas é uma aplicação pessoal local-first que reúne registros de finanças, 
 - iOS: lembretes locais agendados pelo sistema, opt-in.
 - macOS e Windows: lembretes do sistema enquanto Atlas estiver aberto; notificações agendadas com o app fechado ficam fora do MVP.
 
+## Pós-MVP
+
+- Grafo da vida — implementado (aba "Vida": nós, arestas e fontes de módulo).
+- Notas Markdown — planejado; ver `context/handoff-notas.md`.
+- Assistente/loop com IA.
+
 ## Fora do MVP
 
-- Notas Markdown, grafo de planejamento e assistente/loop com IA.
 - Importação CSV e integrações externas.
 - Conta, serviço central, sincronização entre dispositivos e P2P.
 - Android, multi-moeda, orçamento financeiro, contas e transferências.
