@@ -2,10 +2,9 @@
 	import { onMount } from 'svelte';
 	import { isTauri } from '@tauri-apps/api/core';
 	import {
-		ArrowDownLeft, ArrowDownRight, ArrowRight, ArrowUpRight, Bell, CalendarDays,
-		Check, ChevronLeft, ChevronRight, CircleDollarSign, Clock3, Flame,
-		LayoutDashboard, Menu, MoreHorizontal, Plus, Route, Settings2, Target, TrendingDown, Vibrate, Volume2,
-		TrendingUp, Wallet, X, type LucideIcon
+		ArrowDownRight, ArrowUpRight, Bell, CalendarDays, Check, ChevronRight, CircleDollarSign,
+		Flame, LayoutDashboard, Menu, Plus, Route, Settings2, Target, Vibrate, Volume2,
+		Wallet, X, type LucideIcon
 	} from '@lucide/svelte';
 	import {
 		currentStreak, dateOffset, didMeetTarget, formatMinutes, id, localDate, money, weekStartDate, WEEK_MAX,
@@ -14,11 +13,11 @@
 		type NavigationKey, type TimeBlock, type Transaction
 	} from '#lib/atlas';
 	import { exportBackup, importBackup, loadSnapshot, saveSnapshot } from '#lib/storage';
-	import { type GraphState } from '#lib/graph';
+	import { edgeRatio, isMilestone, nodeReached, type GraphState } from '#lib/graph';
 	import { reconcileGraph } from '#lib/graph-sources';
 	import GraphView from '#lib/components/graph/GraphView.svelte';
 	import {
-		burstAt, centerOf, confetti, emitParticles, floatValue, playFeedback, playTone, popElement,
+		burstAt, centerOf, confetti, floatValue, playFeedback, playTone, popElement,
 		prefersReducedMotion, pulseHaptic, vibrate
 	} from '#lib/feedback';
 	import '../app.css';
@@ -108,37 +107,6 @@
 		return { top: slot * 28, left: 38 + timeTodayIndex * timeColumnWidth + 2, width: Math.max(20, timeColumnWidth - 4) };
 	});
 	let timeCategories = $derived(snapshot?.categories.filter((item) => item.module === 'time') ?? []);
-	let incomeTotal = $derived(rangeTransactions.filter((item) => item.type === 'income').reduce((sum, item) => sum + item.amountMinor, 0));
-	let expenseTotal = $derived(rangeTransactions.filter((item) => item.type === 'expense').reduce((sum, item) => sum + item.amountMinor, 0));
-	let completedMinutes = $derived(rangeBlocks.filter((item) => item.status === 'completed').reduce((sum, item) => sum + (item.actualMinutes ?? item.plannedMinutes), 0));
-	let plannedMinutes = $derived(rangeBlocks.filter((item) => item.status !== 'cancelled').reduce((sum, item) => sum + item.plannedMinutes, 0));
-	let habitCompletion = $derived.by(() => {
-		if (!snapshot?.habits.length) return 0;
-		const eligible = snapshot.habits.filter((habit) => habit.active && habit.scheduledDays.includes(new Date(`${today}T12:00:00`).getDay()));
-		if (!eligible.length) return 0;
-		const done = eligible.filter((habit) => {
-			const log = snapshot?.habitLogs.find((item) => item.habitId === habit.id && item.date === today);
-			return Boolean(log && didMeetTarget(habit, log.value));
-		}).length;
-		return Math.round((done / eligible.length) * 100);
-	});
-	let recentTransactions = $derived([...(rangeTransactions ?? [])].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5));
-	let todayBlocks = $derived(snapshot?.timeBlocks.filter((item) => item.startAt.slice(0, 10) === today).sort((a, b) => a.startAt.localeCompare(b.startAt)) ?? []);
-	let habitPeriodStats = $derived.by(() => {
-		if (!snapshot) return { done: 0, scheduled: 0, percent: 0 };
-		let done = 0;
-		let scheduled = 0;
-		for (let date = currentRange.start; date <= currentRange.end; date = dateOffset(date, 1)) {
-			if (isPausedOn(date, snapshot)) continue;
-			const weekday = new Date(`${date}T12:00:00`).getDay();
-			for (const habit of snapshot.habits.filter((item) => item.active && item.scheduledDays.includes(weekday))) {
-				scheduled += 1;
-				const log = snapshot.habitLogs.find((item) => item.habitId === habit.id && item.date === date);
-				if (log && didMeetTarget(habit, log.value)) done += 1;
-			}
-		}
-		return { done, scheduled, percent: scheduled ? Math.round((done / scheduled) * 100) : 0 };
-	});
 	let habitWeekDays = $derived.by(() => {
 		const data = snapshot;
 		if (!data) return [];
@@ -155,9 +123,6 @@
 			return { date, label: ['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom'][index], done, planned: planned.length, goal: Math.min(3, planned.length), paused };
 		});
 	});
-	let todayHabitCount = $derived(habitWeekDays.find((item) => item.date === today)?.planned ?? 0);
-	let todayHabitDone = $derived(habitWeekDays.find((item) => item.date === today)?.done ?? 0);
-	let todayHabitGoal = $derived(Math.min(3, todayHabitCount));
 	let prototypeTodayHabits = $derived.by(() => {
 		if (!snapshot) return [] as Habit[];
 		const weekday = new Date(`${today}T12:00:00`).getDay();
@@ -183,6 +148,133 @@
 	let financeRecent = $derived([...(snapshot?.transactions ?? [])].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6));
 	let financeMonthLabel = $derived(new Date().toLocaleDateString('pt-BR', { month: 'long' }).replace(/^./, (character) => character.toUpperCase()));
 	let financeEntryCategories = $derived(financeCategories.filter((item) => (financeEntry.type === 'income' ? item.kind === 'in' : item.kind !== 'in')));
+
+	// ===== Dashboard (Visão geral) =====
+	let dashMenu = $state(false);
+	let dashHabitPicker = $state(false);
+	let dashPeriodLabel = $derived(period === 'week' ? 'semana' : period === 'month' ? 'mês' : 'período');
+	let lifeForceLabel = $derived(lifeForcePercent >= 70 ? 'Viva' : lifeForcePercent >= 30 ? 'Estável' : 'Apagando');
+	let dashGoalPercent = $derived(prototypeTodayGoal ? Math.min(prototypeTodayDone, prototypeTodayGoal) / prototypeTodayGoal : 0);
+	let dashDays = $derived.by(() => {
+		const days: string[] = [];
+		let cursor = currentRange.start;
+		let guard = 0;
+		while (cursor <= currentRange.end && guard < 400) {
+			days.push(cursor);
+			cursor = dateOffset(cursor, 1);
+			guard += 1;
+		}
+		return days;
+	});
+	let dashBalanceSeries = $derived.by(() => {
+		const byDate = new Map<string, number>();
+		for (const transaction of snapshot?.transactions ?? []) {
+			byDate.set(transaction.date, (byDate.get(transaction.date) ?? 0) + (transaction.type === 'income' ? transaction.amountMinor : -transaction.amountMinor));
+		}
+		let running = 0;
+		return dashDays.map((date) => {
+			running += byDate.get(date) ?? 0;
+			return running;
+		});
+	});
+	let dashBalance = $derived(dashBalanceSeries.length ? dashBalanceSeries[dashBalanceSeries.length - 1] : 0);
+	let dashSpark = $derived.by(() => {
+		const values = dashBalanceSeries;
+		if (!values.length) return { line: '', area: '', left: 100, top: 50 };
+		const min = Math.min(...values, 0);
+		const max = Math.max(...values, 0);
+		const span = max - min || 1;
+		const step = values.length === 1 ? 0 : 300 / (values.length - 1);
+		const y = (value: number) => 84 - ((value - min) / span) * 70;
+		const points = values.map((value, index) => `${(index * step).toFixed(1)},${y(value).toFixed(1)}`);
+		return {
+			line: `M${points.join(' L')}`,
+			area: `M${points.join(' L')} L300,90 L0,90 Z`,
+			left: values.length === 1 ? 0 : 100,
+			top: (y(values[values.length - 1]) / 90) * 100
+		};
+	});
+	let dashExpenses = $derived.by(() => {
+		const totals = new Map<string, number>();
+		for (const transaction of rangeTransactions) {
+			if (transaction.type === 'expense') totals.set(transaction.categoryId, (totals.get(transaction.categoryId) ?? 0) + transaction.amountMinor);
+		}
+		const total = [...totals.values()].reduce((sum, value) => sum + value, 0);
+		const circumference = 2 * Math.PI * 38;
+		const label = money(Math.ceil(total / 100) * 100, currency()).replace(',00', '');
+		let offset = 0;
+		const segments = [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([categoryId, amount]) => {
+			const length = total ? (amount / total) * circumference : 0;
+			const segment = {
+				categoryId,
+				amount,
+				color: currentCategory(categoryId)?.color ?? '#8d968a',
+				dash: `${Math.max(0, length - 2).toFixed(2)} ${circumference.toFixed(2)}`,
+				offset: -offset
+			};
+			offset += length;
+			return segment;
+		});
+		return { total, label, segments };
+	});
+	let dashHabitDays = $derived.by(() => dashDays.map((date) => {
+		const data = snapshot;
+		if (!data) return { date, value: 0, paused: false, today: false };
+		const paused = isPausedOn(date, data);
+		const weekday = new Date(`${date}T12:00:00`).getDay();
+		const planned = paused ? [] : data.habits.filter((habit) => habit.active && habit.scheduledDays.includes(weekday));
+		const done = planned.filter((habit) => {
+			const log = data.habitLogs.find((item) => item.habitId === habit.id && item.date === date);
+			return Boolean(log && didMeetTarget(habit, log.value));
+		}).length;
+		return { date, value: planned.length ? done / planned.length : 0, paused, today: date === today };
+	}));
+	let dashTime = $derived.by(() => {
+		const perDay = new Map<string, Map<string, number>>();
+		const totals = new Map<string, number>();
+		for (const block of rangeBlocks) {
+			if (block.status === 'cancelled') continue;
+			const date = block.startAt.slice(0, 10);
+			const hours = block.plannedMinutes / 60;
+			const day = perDay.get(date) ?? new Map<string, number>();
+			day.set(block.categoryId, (day.get(block.categoryId) ?? 0) + hours);
+			perDay.set(date, day);
+			totals.set(block.categoryId, (totals.get(block.categoryId) ?? 0) + hours);
+		}
+		const top = [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4).map((entry) => entry[0]);
+		const hasOther = [...totals.keys()].some((key) => !top.includes(key));
+		const keys = [...top, ...(hasOther ? ['__other'] : [])];
+		const colorOf = (key: string) => (key === '__other' ? '#8d968a' : currentCategory(key)?.color ?? '#8d968a');
+		const nameOf = (key: string) => (key === '__other' ? 'Outros' : currentCategory(key)?.name ?? '—');
+		const otherHours = (day: Map<string, number>) => [...day.entries()].filter(([key]) => !top.includes(key)).reduce((sum, [, value]) => sum + value, 0);
+		let maxHours = 1;
+		for (const day of perDay.values()) {
+			const sum = keys.reduce((total, key) => total + (key === '__other' ? otherHours(day) : day.get(key) ?? 0), 0);
+			maxHours = Math.max(maxHours, sum);
+		}
+		const letters = ['S', 'T', 'Q', 'Q', 'S', 'S', 'D'];
+		const days = dashDays.map((date) => {
+			const day = perDay.get(date) ?? new Map<string, number>();
+			const segments = keys.map((key) => {
+				const hours = key === '__other' ? otherHours(day) : day.get(key) ?? 0;
+				return { color: colorOf(key), name: nameOf(key), percent: (hours / maxHours) * 100, hours };
+			}).filter((segment) => segment.hours > 0);
+			const weekday = (new Date(`${date}T12:00:00`).getDay() + 6) % 7;
+			return { date, segments, label: dashDays.length <= 10 ? letters[weekday] : date.slice(8, 10) };
+		});
+		const legend = keys.map((key) => ({ id: key, name: nameOf(key), color: colorOf(key) }));
+		return { days, legend, empty: !totals.size };
+	});
+	let dashObjectives = $derived.by(() => {
+		const graph = snapshot?.graph;
+		if (!graph) return { rows: [] as { id: string; name: string; milestone: boolean; ratio: number; color: string }[], extra: 0 };
+		const rows = graph.nodes.filter((node) => !node.origin).map((node) => {
+			const incoming = graph.edges.filter((edge) => edge.to === node.id);
+			const ratio = incoming.length ? Math.min(...incoming.map((edge) => edgeRatio(edge))) : nodeReached(node, graph.edges) ? 1 : 0;
+			return { id: node.id, name: node.name, milestone: isMilestone(node), ratio, color: graph.domains.find((item) => item.id === node.domainId)?.color ?? '#8d968a' };
+		}).sort((a, b) => Number(a.milestone) - Number(b.milestone) || b.ratio - a.ratio);
+		return { rows: rows.slice(0, 5), extra: Math.max(0, rows.length - 5) };
+	});
 
 	let transactionForm = $state({ type: 'expense' as 'income' | 'expense', amount: '', categoryId: '', date: localDate(), description: '' });
 	let habitForm = $state({ name: '', metric: 'boolean' as Habit['metric'], unit: '', target: '1', scheduledDays: [1, 2, 3, 4, 5] as number[], reminder: '' });
@@ -220,9 +312,14 @@
 		const onPointerUp = (event: PointerEvent) => void finishTimePaint(event);
 		const onClickFeedback = (event: MouseEvent) => {
 			const button = (event.target as HTMLElement | null)?.closest('button');
-			if (!button || button.closest('.graph-view') || button.closest('.gv-sheet') || button.matches('.tp-c, .tp-cat, .habit-log-button, .habit-complete-button')) return;
+			if (!button || button.closest('.graph-view') || button.closest('.gv-sheet') || button.matches('.tp-c, .tp-cat')) return;
 			playFeedback('tap', snapshot?.preferences.soundEnabled);
 			pulseHaptic(snapshot?.preferences.hapticsEnabled, 6);
+		};
+		const onDashOutside = (event: MouseEvent) => {
+			if (!dashMenu) return;
+			const target = event.target as HTMLElement | null;
+			if (!target?.closest('.dash-fab, .dash-menu')) dashMenu = false;
 		};
 		const onResize = () => {
 			if (activeTab === 'time') {
@@ -235,6 +332,7 @@
 		window.addEventListener('pointerup', onPointerUp);
 		window.addEventListener('pointercancel', onPointerUp);
 		window.addEventListener('click', onClickFeedback);
+		window.addEventListener('click', onDashOutside);
 		window.addEventListener('resize', onResize);
 		interval = setInterval(() => {
 			currentTime = new Date();
@@ -257,6 +355,7 @@
 			window.removeEventListener('pointerup', onPointerUp);
 			window.removeEventListener('pointercancel', onPointerUp);
 			window.removeEventListener('click', onClickFeedback);
+			window.removeEventListener('click', onDashOutside);
 			window.removeEventListener('resize', onResize);
 		};
 	});
@@ -274,6 +373,21 @@
 		const nowSlot = (minutes - TIME_SLOT_START_HOUR * 60) / TIME_SLOT_MINUTES;
 		timeScroll.scrollTop = Math.max(0, (nowSlot - 3) * 28);
 		handleTimeScroll();
+	});
+
+	$effect(() => {
+		const ratio = Math.max(0, Math.min(100, lifeForcePercent)) / 100;
+		const saturation = (12 + 68 * ratio).toFixed(1);
+		const lightness = (34 + 32 * ratio).toFixed(1);
+		const accent = `hsl(72 ${saturation}% ${lightness}%)`;
+		const soft = `hsl(72 ${saturation}% ${lightness}% / .14)`;
+		const root = document.documentElement.style;
+		root.setProperty('--lime', accent);
+		root.setProperty('--dash-accent', accent);
+		root.setProperty('--dash-accent-dim', soft);
+		root.setProperty('--fp-acc', accent);
+		root.setProperty('--hp-accent', accent);
+		root.setProperty('--hp-accent-dim', soft);
 	});
 
 	async function initialize() {
@@ -740,13 +854,6 @@
 		}, options.undo ? 5000 : 2800);
 	}
 
-	function openTransaction() {
-		formError = '';
-		editingTransactionId = '';
-		transactionForm = { type: 'expense', amount: '', categoryId: snapshot?.categories.find((item) => item.module === 'finance')?.id ?? '', date: localDate(), description: '' };
-		modal = 'transaction';
-	}
-
 	function editTransaction(transaction: Transaction) {
 		formError = '';
 		editingTransactionId = transaction.id;
@@ -887,8 +994,24 @@
 		if (!awardExperience && !reduced) toastMessage(value ? 'Registro feito.' : 'Registro atualizado.');
 	}
 
-	function openTime() {
-		activeTab = 'time';
+	function openDashHabitPick() {
+		dashMenu = false;
+		dashHabitPicker = true;
+		playTone(380, 0.1, 'sine', 0.05, snapshot?.preferences.soundEnabled ?? true);
+	}
+
+	function pickDashHabit(habit: Habit) {
+		dashHabitPicker = false;
+		if (habit.metric === 'boolean') {
+			logHabit(habit);
+			return;
+		}
+		openHabitSheet(habit);
+	}
+
+	function openDashEntry() {
+		dashMenu = false;
+		openFinanceEntry();
 	}
 
 	function slotToTime(slot: number): string {
@@ -1198,22 +1321,6 @@
 	function openTimeSummary() {
 		timeSummaryOpen = true;
 		playTone(380, 0.1, 'sine', 0.05, snapshot?.preferences.soundEnabled ?? true);
-	}
-
-	function openComplete(block: TimeBlock) {
-		if (!snapshot) return;
-		const next = cloneSnapshot();
-		const target = next.timeBlocks.find((item) => item.id === block.id);
-		if (!target || target.status === 'cancelled') return;
-		const created = target.status !== 'completed';
-		target.actualMinutes = created ? Math.min(30, target.plannedMinutes) : null;
-		target.status = created ? 'completed' : 'planned';
-		void commit(next, true, created);
-		if (created) {
-			playFeedback('success', snapshot.preferences.soundEnabled);
-			pulseHaptic(snapshot.preferences.hapticsEnabled, [12, 24, 18]);
-			emitParticles(document.querySelector(`[data-time-slot="${block.startAt.slice(0, 10)}-${block.startAt.slice(11, 16)}"]`));
-		}
 	}
 
 	async function cancelBlock(blockId: string) {
@@ -1540,74 +1647,103 @@
 
 			<main class="workspace">
 				{#if activeTab === 'dashboard'}
-					<div class="page-heading dashboard-heading">
-		<div><div class="eyebrow">{humanDate(today, { weekday: 'long' }).toUpperCase()} · {humanDate(today, { day: '2-digit', month: 'long', year: 'numeric' }).toUpperCase()}</div><h1>Seu ritmo, <em>em perspectiva.</em></h1><p>Um retrato do que você está vivendo, construído por você.</p></div>
-						<div class="heading-actions"><button class="button-secondary" onclick={openSettings}><Settings2 size={16} /> Ajustes</button><button class="button-primary" onclick={openTransaction}><Plus size={17} /> Novo registro</button></div>
-					</div>
-					<div class="period-toolbar">
-						<div class="period-tabs" aria-label="Período do dashboard">
-							<button class:chosen={period === 'week'} onclick={() => changePeriod('week')}>Esta semana</button>
-							<button class:chosen={period === 'month'} onclick={() => changePeriod('month')}>Este mês</button>
-							<button class:chosen={period === 'custom'} onclick={() => changePeriod('custom')}>Personalizado</button>
+					<section class="dash-prototype" aria-label="Visão geral">
+						<div class="dash-top">
+							<div><h1>Hoje</h1><small>{humanDate(today, { weekday: 'long', day: 'numeric', month: 'long' })}</small></div>
+							<div class="dash-top-actions">
+								<span class="dash-streak" aria-label={`Sequência de ${habitDayStreak} dias`}><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 2c.8 3.6 5.5 5.6 5.5 11a5.5 5.5 0 0 1-11 0c0-2.6 1.6-3.8 2.6-5.6.9 1.7 2.1 1.9 2.1.3 0-1.8.1-3.6.8-5.7z"/></svg><span>{habitDayStreak}</span></span>
+								<button class="dash-ic" aria-label={snapshot.preferences.soundEnabled ? 'Desativar som' : 'Ativar som'} onclick={togglePrototypeSound}>{snapshot.preferences.soundEnabled ? '♪' : '×'}</button>
+							</div>
 						</div>
-						{#if period === 'custom'}<div class="range-inputs"><input aria-label="Início do período" type="date" bind:value={customStart} /><span>até</span><input aria-label="Fim do período" type="date" bind:value={customEnd} /></div>{/if}
-						<span class="period-label">{humanDate(currentRange.start)} — {humanDate(currentRange.end)}</span>
+						<div class="dash-period">
+							<div class="dash-slide" role="tablist" aria-label="Período do dashboard" style={`--i:${period === 'week' ? 0 : period === 'month' ? 1 : 2}`}>
+								<span class="dash-slide-knob"></span>
+								<button role="tab" aria-selected={period === 'week'} class:on={period === 'week'} onclick={() => changePeriod('week')}>Esta semana</button>
+								<button role="tab" aria-selected={period === 'month'} class:on={period === 'month'} onclick={() => changePeriod('month')}>Este mês</button>
+								<button role="tab" aria-selected={period === 'custom'} class:on={period === 'custom'} onclick={() => changePeriod('custom')}>Personalizado</button>
+							</div>
+							<div class="dash-dots">
+								<button aria-label="Esta semana" class:on={period === 'week'} onclick={() => changePeriod('week')}></button>
+								<button aria-label="Este mês" class:on={period === 'month'} onclick={() => changePeriod('month')}></button>
+								<button aria-label="Personalizado" class:on={period === 'custom'} onclick={() => changePeriod('custom')}></button>
+							</div>
+							{#if period === 'custom'}<div class="dash-range"><input aria-label="Início do período" type="date" bind:value={customStart} /><span>→</span><input aria-label="Fim do período" type="date" bind:value={customEnd} /></div>{/if}
+							<span class="dash-range-label">{humanDate(currentRange.start)} — {humanDate(currentRange.end)}</span>
+						</div>
+						<div class="dash-grid">
+							<article class="dash-card dash-w2 dash-life">
+								<h3>Life Force</h3>
+								<div class="dash-life-row"><strong>{lifeForcePercent}%</strong><span>{lifeForceLabel}</span></div>
+								<div class="dash-bar"><i style={`width:${lifeForcePercent}%`}></i></div>
+							</article>
+							<div class="dash-card dash-cat" aria-hidden="true">
+								<svg class="dash-cat-svg" viewBox="0 0 120 100"><path class="bd" d="M16 42L20 6L54 26Z" /><path class="bd" d="M104 42L100 6L66 26Z" /><ellipse class="bd" cx="60" cy="60" rx="48" ry="38" /><path class="cl" d="M31 58q10 8 20 0M69 58q10 8 20 0" /><path d="M55 69h10l-5 6z" fill="#f1a5c5" /><path d="M60 75q-6 7-12 2M60 75q6 7 12 2" fill="none" stroke="#8d968a" stroke-width="2" stroke-linecap="round" /><text class="z" x="100" y="22">z</text></svg>
+								<b>Invocar</b><small>Em breve</small>
+							</div>
+							<article class="dash-card dash-goal">
+								<div class="dash-ring"><svg width="96" height="96" viewBox="0 0 96 96" aria-hidden="true"><circle cx="48" cy="48" r="39" fill="none" stroke="var(--panel-2)" stroke-width="10" /><circle cx="48" cy="48" r="39" fill="none" stroke="var(--lime)" stroke-width="10" stroke-linecap="round" stroke-dasharray="245" stroke-dashoffset={245 * (1 - dashGoalPercent)} /></svg><div class="dash-ring-center">{Math.min(prototypeTodayDone, prototypeTodayGoal)}/{prototypeTodayGoal}</div></div>
+								<small>Meta do dia</small>
+							</article>
+							<article class="dash-card dash-w2">
+								<h3>Saldo · {dashPeriodLabel}</h3>
+								<div class="dash-big">{money(dashBalance, currency())}</div>
+								<div class="dash-line">
+									<svg viewBox="0 0 300 90" aria-hidden="true"><defs><linearGradient id="dashGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--lime)" stop-opacity=".3" /><stop offset="1" stop-color="var(--lime)" stop-opacity="0" /></linearGradient></defs><path d={dashSpark.area} fill="url(#dashGrad)" /><path class="dr" d={dashSpark.line} /></svg>
+									<i class="pt" style={`left:${dashSpark.left}%;top:${dashSpark.top}%`}></i>
+								</div>
+							</article>
+							<article class="dash-card dash-w2">
+								<h3>Tempo · {dashPeriodLabel}</h3>
+								{#if dashTime.empty}
+									<p class="dash-empty">Sem tempo alocado no período.</p>
+								{:else}
+									<div class="dash-bars" style={`grid-template-columns: repeat(${dashTime.days.length}, minmax(0, 1fr))`}>
+										{#each dashTime.days as day}
+											<div class="dash-col"><div class="dash-stack">{#each day.segments as segment}<span class="dash-col-seg" style={`height:${segment.percent}%;background:${segment.color}`}><b class="dash-tip">{segment.name} · {formatMinutes(Math.round(segment.hours * 60))}</b></span>{/each}</div><small>{day.label}</small></div>
+										{/each}
+									</div>
+									<div class="dash-legend">{#each dashTime.legend as item}<span><i style={`background:${item.color}`}></i>{item.name}</span>{/each}</div>
+								{/if}
+							</article>
+							<article class="dash-card dash-w2">
+								<h3>Gastos · {dashPeriodLabel}</h3>
+								{#if dashExpenses.total}
+									<div class="dash-donut-wrap">
+										<div class="dash-donut">
+											<svg viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="38" fill="none" stroke="var(--panel-2)" stroke-width="14" />{#each dashExpenses.segments as segment}<circle cx="50" cy="50" r="38" fill="none" stroke={segment.color} stroke-width="14" stroke-dasharray={segment.dash} stroke-dashoffset={segment.offset} />{/each}</svg>
+											<div class="dash-donut-center">{dashExpenses.label}</div>
+										</div>
+										<div class="dash-legend">{#each dashExpenses.segments as segment}<span><i style={`background:${segment.color}`}></i>{categoryName(segment.categoryId)}</span>{/each}</div>
+									</div>
+								{:else}
+									<p class="dash-empty">Sem gastos no período.</p>
+								{/if}
+							</article>
+							<article class="dash-card dash-w2">
+								<h3>Hábitos · {dashPeriodLabel}</h3>
+								<div class="dash-heat">{#each dashHabitDays as day}<i class:td={day.today} class:paused={day.paused} style={`--v:${day.value.toFixed(2)}`}></i>{/each}</div>
+							</article>
+							<article class="dash-card dash-w4">
+								<h3>Objetivos</h3>
+								{#if dashObjectives.rows.length}
+									{#each dashObjectives.rows as row}
+										<button class="dash-obj" onclick={() => setActiveTab('graph')}>
+											<div class="dash-obj-head"><span><i style={`background:${row.color}`}></i>{row.name}</span><small>{row.milestone ? 'Marco' : 'Objetivo'} · {Math.round(row.ratio * 100)}%</small></div>
+											<div class="dash-track"><i style={`width:${Math.max(0, Math.min(100, row.ratio * 100))}%`}></i></div>
+										</button>
+									{/each}
+									{#if dashObjectives.extra}<button class="dash-more" onclick={() => setActiveTab('graph')}>+{dashObjectives.extra} na aba Vida</button>{/if}
+								{:else}
+									<p class="dash-empty">Sem objetivos no grafo ainda.</p>
+								{/if}
+							</article>
+						</div>
+					</section>
+					<div class="dash-menu" class:on={dashMenu}>
+						<button onclick={openDashHabitPick}>Hábito</button>
+						<button onclick={openDashEntry}>Lançamento</button>
 					</div>
-
-					<section class="overview-grid" aria-label="Resumo dos módulos">
-						<article class="overview-card finance-overview">
-							<div class="card-topline"><span class="card-icon finance-icon"><Wallet size={17} /></span><span class="overline">FINANÇAS</span><button class="card-arrow" aria-label="Abrir finanças" onclick={() => setActiveTab('finance')}><ArrowUpRight size={16} /></button></div>
-							<div class="metric-label">Saldo no período</div><div class="metric-value">{money(incomeTotal - expenseTotal, currency())}</div>
-							<div class="finance-split"><span><i class="income-dot"></i>Entradas <b>{money(incomeTotal, currency())}</b></span><span><i class="expense-dot"></i>Saídas <b>{money(expenseTotal, currency())}</b></span></div>
-							<div class="mini-bar"><span style={`width:${incomeTotal + expenseTotal ? Math.min(100, incomeTotal / (incomeTotal + expenseTotal) * 100) : 0}%`}></span></div>
-						</article>
-						<article class="overview-card habit-overview">
-							<div class="card-topline"><span class="card-icon habit-icon"><Target size={17} /></span><span class="overline">HÁBITOS DE HOJE</span><button class="card-arrow" aria-label="Abrir hábitos" onclick={() => setActiveTab('habits')}><ArrowUpRight size={16} /></button></div>
-							<div class="metric-value habit-value">{habitCompletion}<small>%</small></div><div class="metric-label">das metas de hoje alcançadas</div>
-							<div class="progress-track"><div class="progress-lime" style={`width:${habitCompletion}%`}></div></div>
-							<div class="card-footnote">{snapshot.habits.filter((habit) => habit.active && habit.scheduledDays.includes(new Date(`${today}T12:00:00`).getDay())).length} hábitos previstos para hoje</div>
-						</article>
-						<article class="overview-card time-overview">
-							<div class="card-topline"><span class="card-icon time-icon"><Clock3 size={17} /></span><span class="overline">TEMPO</span><button class="card-arrow" aria-label="Abrir agenda" onclick={() => setActiveTab('time')}><ArrowUpRight size={16} /></button></div>
-							<div class="metric-value">{formatMinutes(completedMinutes)}</div><div class="metric-label">realizados de {formatMinutes(plannedMinutes)} planejados</div>
-							<div class="progress-track"><div class="progress-blue" style={`width:${plannedMinutes ? Math.min(100, completedMinutes / plannedMinutes * 100) : 0}%`}></div></div>
-							<div class="card-footnote">{rangeBlocks.filter((item) => item.status === 'completed').length} blocos concluídos no período</div>
-						</article>
-						<article class="overview-card lifeforce-overview">
-							<div class="card-topline"><span class="card-icon life-icon"><Flame size={17} /></span><span class="overline">LIFE FORCE</span><button class="card-arrow" aria-label="Pausar Life Force" onclick={() => (modal = 'pause')}><MoreHorizontal size={18} /></button></div>
-							<div class="metric-value">{lifeForcePercent}<small>%</small></div><div class="metric-label">interação recente com Atlas</div>
-							<div class="life-track large-life"><div class="life-fill" style={`width:${lifeForcePercent}%`}></div></div>
-							<div class="card-footnote">Não mede bem-estar nem desempenho.</div>
-						</article>
-					</section>
-
-					<section class="dashboard-lower">
-						<article class="panel recent-panel">
-							<div class="panel-heading"><div><div class="overline">MOVIMENTO RECENTE</div><h2>Últimos registros</h2></div><button class="text-button" onclick={() => setActiveTab('finance')}>Ver finanças <ArrowRight size={14} /></button></div>
-							{#if recentTransactions.length}
-								<div class="activity-list">
-									{#each recentTransactions as transaction}
-										<div class="activity-row"><span class="activity-icon" class:positive={transaction.type === 'income'}>{#if transaction.type === 'income'}<ArrowDownLeft size={16} />{:else}<ArrowUpRight size={16} />{/if}</span><div class="activity-main"><strong>{transaction.description}</strong><span>{categoryName(transaction.categoryId)} · {recentLabel(transaction.date)}</span></div><b class:positive-text={transaction.type === 'income'}>{transaction.type === 'income' ? '+' : '−'}{money(transaction.amountMinor, currency())}</b></div>
-									{/each}
-								</div>
-							{:else}
-								<div class="empty-state compact-empty"><div class="empty-orbit"><CircleDollarSign size={20} /></div><strong>Seus registros começam aqui</strong><span>Adicione um movimento e veja o panorama ganhar forma.</span><button class="button-secondary" onclick={openTransaction}><Plus size={15} /> Registrar movimento</button></div>
-							{/if}
-						</article>
-						<article class="panel today-panel">
-							<div class="panel-heading"><div><div class="overline">PLANO DE HOJE</div><h2>Tempo reservado</h2></div><button class="icon-button subtle" aria-label="Adicionar bloco" onclick={openTime}><Plus size={18} /></button></div>
-							{#if todayBlocks.length}
-								<div class="today-list">
-									{#each todayBlocks.slice(0, 4) as block}
-										<div class="today-row"><div class="timeline"><span class:done={block.status === 'completed'}></span></div><div class="today-time">{new Date(block.startAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}<small>{formatMinutes(block.plannedMinutes)}</small></div><div class="today-activity"><strong>{block.title}</strong><span><i style={`background:${currentCategory(block.categoryId)?.color ?? '#9da3a3'}`}></i>{categoryName(block.categoryId)}</span></div>{#if block.status === 'completed'}<Check size={16} class="done-check" />{:else}<button class="mini-action" aria-label="Marcar bloco realizado" onclick={() => openComplete(block)}><Check size={15} /></button>{/if}</div>
-									{/each}
-								</div>
-								{#if todayBlocks.length > 4}<button class="text-button centered" onclick={() => setActiveTab('time')}>Ver agenda completa <ArrowRight size={14} /></button>{/if}
-							{:else}
-								<div class="empty-state compact-empty"><div class="empty-orbit time-empty"><CalendarDays size={19} /></div><strong>Sem blocos planejados</strong><span>Reserve um espaço para algo que importa hoje.</span><button class="button-secondary" onclick={openTime}><Plus size={15} /> Planejar tempo</button></div>
-							{/if}
-						</article>
-					</section>
+					<button class="dash-fab" class:on={dashMenu} aria-label="Adicionar" aria-expanded={dashMenu} onclick={() => { dashMenu = !dashMenu; playTone(dashMenu ? 480 : 380, 0.08, 'sine', 0.05, snapshot?.preferences.soundEnabled ?? true); }}>+</button>
 				{:else if activeTab === 'finance'}
 					<section class="fin-prototype" aria-label="Finanças">
 						<div class="fin-top">
@@ -1867,6 +2003,22 @@
 					</div>
 				{/each}
 				<button class="tp-btn" onclick={() => (timeSummaryOpen = false)}>Fechar</button>
+			</div>
+		</div>
+	{/if}
+
+	{#if dashHabitPicker}
+		<div class="habit-prototype-overlay" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) dashHabitPicker = false; }}>
+			<div class="habit-prototype-sheet" role="dialog" aria-modal="true" aria-label="Registrar hábito">
+				<div class="habit-prototype-grip"></div>
+				<p>Registrar hábito</p>
+				<div class="habit-prototype-chips">
+					{#each snapshot.habits.filter((habit) => habit.active && habit.metric !== 'weekly') as habit}
+						<button onclick={() => pickDashHabit(habit)}>{habit.name}{#if snapshot.habitLogs.some((log) => log.habitId === habit.id && log.date === today && log.completed)} ✓{/if}</button>
+					{/each}
+				</div>
+				{#if !snapshot.habits.some((habit) => habit.active && habit.metric !== 'weekly')}<p>Nenhum hábito para registrar. Crie um na aba Hábitos.</p>{/if}
+				<button class="habit-prototype-save" onclick={() => (dashHabitPicker = false)}>Fechar</button>
 			</div>
 		</div>
 	{/if}
