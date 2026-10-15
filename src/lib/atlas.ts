@@ -3,7 +3,7 @@ import { createGraphFromDemo, type GraphState } from './graph';
 export type ModuleId = 'finance' | 'habits' | 'time';
 export type TransactionType = 'income' | 'expense';
 export type HabitMetric = 'boolean' | 'duration' | 'count' | 'weekly';
-export type NavigationKey = 'dashboard' | ModuleId | 'graph';
+export type NavigationKey = 'dashboard' | ModuleId | 'graph' | 'notes';
 
 export interface Category {
 	id: string;
@@ -80,12 +80,15 @@ export interface LifeForceState {
 	pausedFrom: string | null;
 	pausePeriods: { start: string; end: string }[];
 	lastDecayDate: string;
+	/** Data (YYYY-MM-DD) da primeira nota criada no dia; usada para pontuar uma vez por dia. */
+	lastNoteDate: string;
 }
 
 export interface AppPreferences {
 	currency: string;
 	notificationsEnabled: boolean;
 	soundEnabled: boolean;
+	typingSoundEnabled: boolean;
 	hapticsEnabled: boolean;
 	backupEncryption: 'ask' | 'encrypted' | 'plain';
 }
@@ -188,13 +191,15 @@ export function createEmptySnapshot(): AtlasSnapshot {
 			pausedUntil: null,
 			pausedFrom: null,
 			pausePeriods: [],
-			lastDecayDate: today()
+			lastDecayDate: today(),
+			lastNoteDate: ''
 		},
 		finance: demoFinanceState(),
 		preferences: {
 			currency: 'BRL',
 			notificationsEnabled: false,
 			soundEnabled: true,
+			typingSoundEnabled: true,
 		hapticsEnabled: true,
 			backupEncryption: 'ask'
 		},

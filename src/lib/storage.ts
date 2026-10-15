@@ -1,5 +1,6 @@
 import Database from '@tauri-apps/plugin-sql';
 import { isTauri } from '@tauri-apps/api/core';
+import JSZip from 'jszip';
 import {
 	createEmptySnapshot,
 	type AtlasSnapshot,
@@ -19,12 +20,14 @@ import {
 } from './atlas';
 import { normalizeGraph, type GraphState } from './graph';
 import { reconcileGraph } from './graph-sources';
+import type { Note, NoteFolder } from './notes';
+import { normalizeNotesState } from './notes';
 
 const PREVIEW_KEY = 'atlas-preview-state-v1';
 const LIFEFORCE_MIGRATION_KEY = 'atlas-preview-lifeforce-v3';
 let database: Promise<Database> | undefined;
 
-async function getDatabase(): Promise<Database> {
+export async function getDatabase(): Promise<Database> {
 	if (!database) database = Database.load('sqlite:atlas.db');
 	return database;
 }
@@ -196,7 +199,7 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	]);
 	const settingsMap = Object.fromEntries(settings.map((item) => [item.key, JSON.parse(item.value)]));
 	const defaults = createEmptySnapshot();
-	const lifeForce = settingsMap.lifeForce as LifeForceState;
+	const lifeForce = { ...defaults.lifeForce, ...(settingsMap.lifeForce ?? {}) } as LifeForceState;
 	const experience = { ...defaults.experience, ...(settingsMap.experience ?? {}) } as ExperienceState;
 	const finance = { ...defaults.finance, ...(settingsMap.finance ?? {}) } as FinanceState;
 	const preferences = { ...defaults.preferences, ...(settingsMap.preferences ?? {}) };
@@ -362,6 +365,10 @@ export async function importBackup(file: File, password?: string): Promise<Atlas
 	if (!snapshot || !Array.isArray(snapshot.transactions) || !Array.isArray(snapshot.habits) || !Array.isArray(snapshot.timeBlocks)) {
 		throw new Error('O backup está incompleto ou foi alterado.');
 	}
+	return normalizeImportedSnapshot(snapshot);
+}
+
+function normalizeImportedSnapshot(snapshot: AtlasSnapshot): AtlasSnapshot {
 	const defaults = createEmptySnapshot();
 	const merged = {
 		...defaults,
@@ -376,3 +383,124 @@ export async function importBackup(file: File, password?: string): Promise<Atlas
 	merged.graph = reconcileGraph(merged.graph, merged);
 	return merged;
 }
+
+/* ------------------------------------------------------------------ */
+/* Backup v2 — .zip com snapshot + notas + pastas + anexos             */
+/* ------------------------------------------------------------------ */
+
+export interface BackupData {
+	snapshot: AtlasSnapshot;
+	notes: Note[];
+	folders: NoteFolder[];
+}
+
+export interface BackupAttachment {
+	noteId: string;
+	name: string;
+	bytes: Uint8Array;
+}
+
+export interface ImportedBackup {
+	data: BackupData;
+	attachments: BackupAttachment[];
+}
+
+async function encryptJson(payload: string, password: string) {
+	const salt = crypto.getRandomValues(new Uint8Array(16));
+	const iv = crypto.getRandomValues(new Uint8Array(12));
+	const key = await deriveBackupKey(password, salt);
+	const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(payload));
+	return {
+		salt: toBase64(salt),
+		iv: toBase64(iv),
+		ciphertext: toBase64(new Uint8Array(ciphertext))
+	};
+}
+
+async function decryptJson(container: { salt?: string; iv?: string; ciphertext?: string }, password: string): Promise<string> {
+	const key = await deriveBackupKey(password, fromBase64(container.salt ?? ''));
+	const plaintext = await crypto.subtle.decrypt(
+		{ name: 'AES-GCM', iv: fromBase64(container.iv ?? '') as BufferSource },
+		key,
+		fromBase64(container.ciphertext ?? '') as BufferSource
+	);
+	return new TextDecoder().decode(plaintext);
+}
+
+/**
+ * Exporta o backup v2.
+ * - Sem senha: .zip com `atlas-backup.json` + `attachments/**`.
+ * - Com senha: JSON único criptografado (`atlas-backup-encrypted-v2`) com
+ *   snapshot + notas + pastas.
+ */
+export async function exportBackupV2(
+	data: BackupData,
+	attachments: BackupAttachment[] = [],
+	password?: string
+): Promise<Blob> {
+	const exportedAt = new Date().toISOString();
+	const core = { snapshot: data.snapshot, notes: data.notes, folders: data.folders };
+	if (password) {
+		const encrypted = await encryptJson(JSON.stringify(core), password);
+		return new Blob(
+			[JSON.stringify({ format: 'atlas-backup-encrypted-v2', algorithm: 'PBKDF2-SHA256/AES-256-GCM', exportedAt, ...encrypted }, null, 2)],
+			{ type: 'application/json' }
+		);
+	}
+	const zip = new JSZip();
+	zip.file('atlas-backup.json', JSON.stringify({ format: 'atlas-backup-v2', exportedAt, ...core }, null, 2));
+	zip.file('README.txt', 'Backup do Atlas (atlas-backup-v2): snapshot, notas, pastas e a pasta de anexos.');
+	for (const file of attachments) zip.file(`attachments/${file.noteId}/${file.name}`, file.bytes);
+	return zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+}
+
+export async function importBackupV2(file: File, password?: string): Promise<ImportedBackup> {
+	const head = new Uint8Array(await file.slice(0, 2).arrayBuffer());
+	const isZip = head[0] === 0x50 && head[1] === 0x4b;
+	if (isZip) {
+		const zip = await JSZip.loadAsync(await file.arrayBuffer());
+		const entry = zip.file('atlas-backup.json');
+		if (!entry) throw new Error('O backup não contém atlas-backup.json.');
+		const parsed = JSON.parse(await entry.async('string')) as { format?: string } & Partial<BackupData>;
+		if (parsed.format !== 'atlas-backup-v2') throw new Error('Formato de backup não reconhecido.');
+		const attachments: BackupAttachment[] = [];
+		for (const path of Object.keys(zip.files)) {
+			const zipEntry = zip.files[path];
+			if (zipEntry.dir || !path.startsWith('attachments/')) continue;
+			const match = /^attachments\/([^/]+)\/(.+)$/.exec(path);
+			if (!match) continue;
+			attachments.push({ noteId: match[1], name: match[2], bytes: await zipEntry.async('uint8array') });
+		}
+		return { data: buildBackupData(parsed), attachments };
+	}
+
+	const parsed = JSON.parse(await file.text()) as Record<string, unknown> & { format?: string; snapshot?: AtlasSnapshot };
+	if (parsed.format === 'atlas-backup-encrypted-v2') {
+		if (!password) throw new Error('Informe a senha usada para criptografar este backup.');
+		try {
+			const core = JSON.parse(await decryptJson(parsed as { salt?: string; iv?: string; ciphertext?: string }, password)) as Partial<BackupData>;
+			return { data: buildBackupData(core), attachments: [] };
+		} catch {
+			throw new Error('Senha incorreta ou backup criptografado inválido.');
+		}
+	}
+	if (parsed.format === 'atlas-backup-v2') {
+		return { data: buildBackupData(parsed as Partial<BackupData>), attachments: [] };
+	}
+	// Compatibilidade com o formato v1 (somente snapshot).
+	const snapshot = await importBackup(file, password);
+	return { data: { snapshot, notes: [], folders: [] }, attachments: [] };
+}
+
+function buildBackupData(source: Partial<BackupData>): BackupData {
+	if (!source.snapshot || !Array.isArray(source.snapshot.transactions) || !Array.isArray(source.snapshot.habits)) {
+		throw new Error('O backup está incompleto ou foi alterado.');
+	}
+	const notesState = normalizeNotesState({ notes: source.notes, folders: source.folders });
+	return {
+		snapshot: normalizeImportedSnapshot(source.snapshot),
+		notes: notesState.notes,
+		folders: notesState.folders
+	};
+}
+
