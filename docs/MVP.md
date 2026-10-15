@@ -62,7 +62,7 @@ Atlas é uma aplicação pessoal local-first que reúne registros de finanças, 
 ## Pós-MVP
 
 - Grafo da vida — implementado (aba "Vida": nós, arestas e fontes de módulo).
-- Notas Markdown — planejado; ver `context/handoff-notas.md`.
+- Notas Markdown — implementado (aba "Notas": CRUD, pastas hierárquicas, tags, busca FTS5 com fallback, wiki-links/backlinks, lixeira com expurgo em 30 dias, anexos locais, artefatos em sandbox e backup `.zip` v2).
 - Assistente/loop com IA.
 
 ## Fora do MVP
