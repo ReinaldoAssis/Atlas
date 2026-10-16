@@ -95,7 +95,7 @@
 	let menuState = $state<{ note: Note; x: number; y: number } | null>(null);
 
 	let suppressClick = false;
-	let drag: { id: string; x: number; y: number; active: boolean; ghost?: HTMLElement } | null = null;
+	let drag: { kind: 'note' | 'folder'; id: string; x: number; y: number; active: boolean; ghost?: HTMLElement } | null = null;
 	let longPress: { note: Note; x: number; y: number; timer: ReturnType<typeof setTimeout> } | null = null;
 	let dropTarget: HTMLElement | null = null;
 
@@ -412,6 +412,33 @@
 		});
 	}
 
+	async function moveFolder(folder: NoteFolder, parentId: string | null) {
+		const from = folder.parentId ?? null;
+		if (from === parentId) return;
+		if (parentId && (parentId === folder.id || descendantFolderIds(folders, folder.id).includes(parentId))) {
+			tone(260, 0.1);
+			haptic(20);
+			notify('Uma pasta não pode ir para dentro dela mesma.');
+			return;
+		}
+		const updated: NoteFolder = { ...folder, parentId, updatedAt: new Date().toISOString() };
+		folders = folders.map((item) => (item.id === folder.id ? updated : item));
+		await upsertFolder(updated);
+		publish();
+		bump();
+		const destination = document.querySelector(`[data-folder="${parentId ?? 'root'}"]`);
+		spark(destination, 16, parentId ? folders.find((f) => f.id === parentId)?.color : undefined);
+		tone(220, 0.14, 'sine', 0.08);
+		setTimeout(() => tone(660, 0.14, 'triangle', 0.05), 80);
+		haptic([12, 30, 12]);
+		notify(`Pasta movida para ${parentId ? folders.find((f) => f.id === parentId)?.name ?? 'pasta' : 'Notas'}`, () => {
+			folders = folders.map((item) => (item.id === folder.id ? folder : item));
+			void upsertFolder(folder);
+			publish();
+			bump();
+		});
+	}
+
 	/* ---------- pastas ---------- */
 	async function focusSheetInput() {
 		await tick();
@@ -532,7 +559,7 @@
 	function rowPointerDown(event: PointerEvent, note: Note) {
 		if (event.button !== 0 || (event.target as HTMLElement | null)?.closest('.nt-pin')) return;
 		if (event.pointerType === 'mouse') {
-			drag = { id: note.id, x: event.clientX, y: event.clientY, active: false };
+			drag = { kind: 'note', id: note.id, x: event.clientX, y: event.clientY, active: false };
 			return;
 		}
 		clearLongPress();
@@ -550,6 +577,12 @@
 		};
 	}
 
+	function folderPointerDown(event: PointerEvent, folder: NoteFolder) {
+		if (event.button !== 0) return;
+		if (event.pointerType !== 'mouse') return;
+		drag = { kind: 'folder', id: folder.id, x: event.clientX, y: event.clientY, active: false };
+	}
+
 	function clearLongPress() {
 		if (longPress) {
 			clearTimeout(longPress.timer);
@@ -560,10 +593,12 @@
 	function startDrag() {
 		if (!drag || drag.active) return;
 		drag.active = true;
-		const note = notes.find((item) => item.id === drag?.id);
+		const label = drag.kind === 'note'
+			? (() => { const note = notes.find((item) => item.id === drag?.id); return note ? noteTitle(note) : ''; })()
+			: (folders.find((item) => item.id === drag?.id)?.name ?? '');
 		const ghost = document.createElement('div');
 		ghost.className = 'nt-gh';
-		ghost.textContent = note ? noteTitle(note) : '';
+		ghost.textContent = label;
 		document.body.appendChild(ghost);
 		drag.ghost = ghost;
 		haptic(16);
@@ -614,8 +649,13 @@
 		current.ghost?.remove();
 		if (event.type === 'pointerup' && target) {
 			const folderId = target.dataset.folder && target.dataset.folder !== 'root' ? target.dataset.folder : null;
-			const note = notes.find((item) => item.id === current.id);
-			if (note) void moveNote(note, folderId);
+			if (current.kind === 'note') {
+				const note = notes.find((item) => item.id === current.id);
+				if (note) void moveNote(note, folderId);
+			} else {
+				const folder = folders.find((item) => item.id === current.id);
+				if (folder) void moveFolder(folder, folderId);
+			}
 		} else {
 			tone(260, 0.1);
 		}
@@ -689,10 +729,10 @@
 			<span>›</span>
 			<span style="color:var(--acc);font-weight:600">{visibleNotes.length} {visibleNotes.length === 1 ? 'resultado' : 'resultados'}</span>
 		{:else}
-			<button onclick={() => openFolder(null)}>Notas</button>
+			<button data-folder="root" onclick={() => openFolder(null)}>Notas</button>
 			{#each path as folder (folder.id)}
 				<span>›</span>
-				<button style={`--cc:${folder.color}`} onclick={() => openFolder(folder.id)}>{folder.name}</button>
+				<button data-folder={folder.id} style={`--cc:${folder.color}`} onclick={() => openFolder(folder.id)}>{folder.name}</button>
 			{/each}
 		{/if}
 	</div>
@@ -727,7 +767,7 @@
 					<button class="nt-fo new" data-nt-new onclick={newNote}>+ Nota</button>
 					<button class="nt-fo new" onclick={openNewFolder}>+ Pasta</button>
 					{#each children as folder (folder.id)}
-						<button class="nt-fo" data-folder={folder.id} style={`--cc:${folder.color}`} onclick={() => openFolder(folder.id)}>
+						<button class="nt-fo" data-folder={folder.id} style={`--cc:${folder.color}`} onpointerdown={(event) => folderPointerDown(event, folder)} onclick={() => { if (suppressClick) return; openFolder(folder.id); }}>
 							<FolderIcon color={folder.color} />
 							<span class="nt-fo-name">{folder.name}</span>
 							<span class="nt-fo-tip" role="tooltip">{folderTotalCount(activeNotes, folders, folder.id)} notas</span>

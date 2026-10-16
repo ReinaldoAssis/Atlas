@@ -20,6 +20,7 @@
 		type NoteFolder
 	} from '#lib/notes';
 	import { playTone, prefersReducedMotion, pulseHaptic } from '#lib/feedback';
+	import { Printer } from '@lucide/svelte';
 	import FolderIcon from './FolderIcon.svelte';
 	import ArtifactFrame from './ArtifactFrame.svelte';
 
@@ -277,6 +278,44 @@
 		onwikilink(link.dataset.wl ?? '');
 	}
 
+	/**
+	 * Exportar PDF pelo diálogo de impressão do sistema.
+	 *
+	 * Rende a nota pelo pipeline do Carta, clona o preview já decorado (imagens
+	 * de anexo resolvidas em `blob:`) e imprime só esse bloco — o resto do app
+	 * some via regra `@media print` (`.nt-print`). Artefatos (iframe) ficam de fora.
+	 */
+	async function exportPdf() {
+		flush();
+		await renderPreview();
+		if (!previewEl) return;
+		const clone = previewEl.cloneNode(true) as HTMLElement;
+		clone.querySelectorAll('[data-atlas-artifact], iframe, script, style').forEach((node) => node.remove());
+		if (!clone.textContent?.trim() && !clone.querySelector('img, svg')) {
+			ontoast('Nada para exportar nesta nota.', { warning: true });
+			return;
+		}
+		const root = document.createElement('div');
+		root.className = 'nt-print markdown-body';
+		const heading = document.createElement('h1');
+		heading.className = 'nt-print-title';
+		heading.textContent = title.trim() || 'Nota';
+		const meta = document.createElement('div');
+		meta.className = 'nt-print-meta';
+		meta.textContent = `${folder?.name ?? 'Notas'} · ${new Date().toLocaleDateString('pt-BR')}`;
+		root.append(heading, meta, clone);
+		document.body.appendChild(root);
+		const cleanup = () => {
+			window.removeEventListener('afterprint', cleanup);
+			root.remove();
+		};
+		window.addEventListener('afterprint', cleanup);
+		setTimeout(cleanup, 120000);
+		tone(560, 0.08, 'triangle', 0.05);
+		pulseHaptic(haptics, 6);
+		window.print();
+	}
+
 	onMount(() => {
 		void refreshAttachments();
 		paneEl?.addEventListener('click', onPreviewClick);
@@ -316,6 +355,7 @@
 		</button>
 		<button class="nt-ic" class:on={note.pinned} aria-label={note.pinned ? 'Desafixar' : 'Fixar'} onclick={(event) => onpin(event.currentTarget)}>{note.pinned ? '★' : '☆'}</button>
 		<button class="nt-ic" aria-label="Excluir" onclick={ondeletenote}>⌫</button>
+		<button class="nt-ic nt-export" aria-label="Exportar PDF" title="Exportar PDF" onclick={exportPdf}><Printer size={17} /></button>
 		<div class="nt-seg" data-m={mode}>
 			<i></i>
 			<button class:on={mode === 'write'} onclick={() => setMode('write')}>Editar</button>

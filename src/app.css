@@ -849,6 +849,39 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .nt-gh { position: fixed; z-index: 80; pointer-events: none; background: var(--nt-s2); border: 1px solid var(--acc); border-radius: 10px; padding: 10px 14px; font-weight: 600; box-shadow: 0 12px 30px #000a; transform: translate(-50%, -120%) rotate(-3deg); max-width: 70vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nt-drop { background: var(--accd) !important; outline: 2px solid var(--acc); transform: scale(1.04); }
 
+/* Exportação em PDF (nota única): só o bloco `.nt-print` vai para o papel. */
+.nt-print { display: none; }
+
+/* O diálogo de impressão não existe no WKWebView (iOS); escondemos o botão no telefone. */
+@media (max-width: 560px) {
+	.nt-export { display: none; }
+}
+
+@media print {
+	body > *:not(.nt-print) { display: none !important; }
+	.nt-print {
+		display: block !important;
+		position: static;
+		background: #fff;
+		color: #14171a;
+		font: 15px/1.55 'DM Sans', system-ui, sans-serif;
+	}
+	.nt-print * { background: none !important; box-shadow: none !important; color: inherit !important; }
+	.nt-print .nt-print-title { margin: 0 0 2px; font-size: 26px; letter-spacing: -.02em; }
+	.nt-print .nt-print-meta { margin: 0 0 18px; padding-bottom: 10px; border-bottom: 1px solid #dcdcdc; font-size: 12px; color: #666 !important; }
+	.nt-print :where(h1) { font-size: 24px; margin: .8em 0 .3em; }
+	.nt-print :where(h2) { font-size: 19px; margin: .9em 0 .3em; }
+	.nt-print :where(pre, code) { background: #f4f4f4 !important; border: 1px solid #e2e2e2; border-radius: 6px; }
+	.nt-print :where(pre) { padding: 10px; }
+	.nt-print :where(blockquote) { margin: .6em 0; padding: 2px 12px; border-left: 3px solid #c9c9c9 !important; }
+	.nt-print :where(a) { color: #14171a !important; text-decoration: underline; }
+	.nt-print :where(img) { max-width: 100%; border-radius: 6px; }
+	.nt-print :where(table) { border-collapse: collapse; width: 100%; }
+	.nt-print :where(th, td) { border: 1px solid #d8d8d8; padding: 6px 8px; text-align: left; }
+	.nt-print .atlas-artifact { display: none; }
+	@page { margin: 14mm; }
+}
+
 /* Menu de contexto */
 .nt-menu { position: fixed; z-index: 70; min-width: 184px; padding: 6px; border: 1px solid var(--nt-ln); border-radius: 12px; background: var(--nt-s2); box-shadow: 0 14px 34px #000a; animation: nt-menu-in .14s ease-out; }
 .nt-menu button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 10px 12px; border-radius: 8px; font-weight: 600; font-size: 14px; color: var(--nt-tx); }
