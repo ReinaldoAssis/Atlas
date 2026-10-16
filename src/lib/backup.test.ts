@@ -11,6 +11,10 @@ function data(): BackupData {
 				{ id: 'b', name: 'B', active: false }
 			],
 			transactions: [{ id: 't1' }, { id: 't2' }, { id: 't3' }],
+			trackers: [
+				{ id: 'k1', name: 'Peso', active: true },
+				{ id: 'k2', name: 'Humor', active: false }
+			],
 			timeBlocks: [{ id: 'b1' }]
 		},
 		notes: [{ id: 'n1' }, { id: 'n2' }],
@@ -19,19 +23,19 @@ function data(): BackupData {
 }
 
 describe('backup', () => {
-	it('conta hábitos ativos, transações, blocos, notas, pastas e anexos', () => {
+	it('conta hábitos ativos, trackers, transações, blocos, notas, pastas e anexos', () => {
 		const summary = summarizeBackup(data(), [{ noteId: 'n1', name: 'x.pdf', bytes: new Uint8Array() }]);
-		expect(summary).toEqual({ habits: 1, transactions: 3, timeBlocks: 1, notes: 2, folders: 1, attachments: 1 });
+		expect(summary).toEqual({ habits: 1, trackers: 1, transactions: 3, timeBlocks: 1, notes: 2, folders: 1, attachments: 1 });
 	});
 
 	it('descreve o conteúdo em pt-BR com plural correto', () => {
-		expect(describeBackup({ habits: 1, transactions: 0, timeBlocks: 0, notes: 2, folders: 0, attachments: 1 })).toBe(
+		expect(describeBackup({ habits: 1, trackers: 0, transactions: 0, timeBlocks: 0, notes: 2, folders: 0, attachments: 1 })).toBe(
 			'1 hábito, 2 notas e 1 anexo'
 		);
 	});
 
 	it('resume backup vazio', () => {
-		expect(describeBackup({ habits: 0, transactions: 0, timeBlocks: 0, notes: 0, folders: 0, attachments: 0 })).toBe(
+		expect(describeBackup({ habits: 0, trackers: 0, transactions: 0, timeBlocks: 0, notes: 0, folders: 0, attachments: 0 })).toBe(
 			'nenhum registro'
 		);
 	});

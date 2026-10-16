@@ -10,6 +10,8 @@ import {
 	type FinanceState,
 	type Habit,
 	type TimeBlock,
+	type Tracker,
+	type TrackerEntry,
 	type Transaction
 } from './atlas';
 import { createGraphFromDemo } from './graph';
@@ -76,12 +78,32 @@ export function demoTimeBlocks(): TimeBlock[] {
 }
 
 /** Snapshot completo e populado, usado pelo modo de teste. */
+export function demoTrackers(): Tracker[] {
+	const created = new Date().toISOString();
+	return [
+		{ id: 'demo-tracker-peso', name: 'Peso', unit: 'kg', target: 72, targetDirection: 'down', active: true, createdAt: created },
+		{ id: 'demo-tracker-humor', name: 'Humor', unit: '', target: null, targetDirection: 'up', active: true, createdAt: created }
+	];
+}
+
+export function demoTrackerEntries(): TrackerEntry[] {
+	return [
+		{ id: 'demo-te-peso-1', trackerId: 'demo-tracker-peso', date: dateOffset(localDate(), -4), time: '07:20', value: 74.6 },
+		{ id: 'demo-te-peso-2', trackerId: 'demo-tracker-peso', date: dateOffset(localDate(), -2), time: '07:10', value: 74.1 },
+		{ id: 'demo-te-peso-3', trackerId: 'demo-tracker-peso', date: localDate(), time: '07:05', value: 73.8, note: 'Depois da corrida' },
+		{ id: 'demo-te-humor-1', trackerId: 'demo-tracker-humor', date: dateOffset(localDate(), -1), value: 4 },
+		{ id: 'demo-te-humor-2', trackerId: 'demo-tracker-humor', date: localDate(), time: '21:00', value: 5 }
+	];
+}
+
 export function demoSnapshot(): AtlasSnapshot {
 	const base = createEmptySnapshot();
 	return {
 		...base,
 		transactions: demoTransactions(),
 		habits: demoHabits(),
+		trackers: demoTrackers(),
+		trackerEntries: demoTrackerEntries(),
 		timeBlocks: demoTimeBlocks(),
 		finance: demoFinanceState(),
 		graph: createGraphFromDemo(),

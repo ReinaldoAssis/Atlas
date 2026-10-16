@@ -29,6 +29,10 @@ describe('backup v2', () => {
 
 		const imported = await importBackupV2(fileHoler(bytes, 'atlas-backup.zip'));
 		expect(imported.data.snapshot.habits.length).toBe(data.snapshot.habits.length);
+		expect(imported.data.snapshot.trackers.map((tracker) => tracker.id)).toEqual(
+			data.snapshot.trackers.map((tracker) => tracker.id)
+		);
+		expect(imported.data.snapshot.trackerEntries.length).toBe(data.snapshot.trackerEntries.length);
 		expect(imported.data.notes.map((note) => note.id)).toEqual(data.notes.map((note) => note.id));
 		expect(imported.data.folders.map((folder) => folder.id)).toEqual(
 			data.folders.map((folder) => folder.id)

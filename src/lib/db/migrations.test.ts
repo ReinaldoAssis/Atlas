@@ -66,6 +66,13 @@ describe('migrations', () => {
 		expect(db.executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS graph_edges'))).toBe(true);
 	});
 
+	it('cria as tabelas de tracker', async () => {
+		const db = fakeContext(0);
+		await runMigrations(db.ctx);
+		expect(db.executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS trackers'))).toBe(true);
+		expect(db.executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS tracker_entries'))).toBe(true);
+	});
+
 	it('migra o blob do grafo para as tabelas', async () => {
 		const graph = {
 			domains: [{ id: 'car' }],

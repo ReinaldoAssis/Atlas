@@ -148,6 +148,27 @@ export const migrations: Migration[] = [
 			}
 			await ctx.execute("DELETE FROM app_settings WHERE key = 'graph'");
 		}
+	},
+	{
+		version: 5,
+		name: 'tracker-tables',
+		// Trackers (acompanhamento sem recorrência) e seus registros. Vários
+		// registros por dia, então `tracker_entries` não tem UNIQUE por data.
+		run: async (ctx) => {
+			await ctx.execute(`CREATE TABLE IF NOT EXISTS trackers (
+				id TEXT PRIMARY KEY, payload TEXT NOT NULL,
+				updated_at INTEGER NOT NULL DEFAULT 0, deleted_at INTEGER, device_id TEXT
+			)`);
+			await ctx.execute(`CREATE TABLE IF NOT EXISTS tracker_entries (
+				id TEXT PRIMARY KEY, tracker_id TEXT NOT NULL, occurred_on TEXT NOT NULL,
+				payload TEXT NOT NULL,
+				updated_at INTEGER NOT NULL DEFAULT 0, deleted_at INTEGER, device_id TEXT
+			)`);
+			await ctx.execute('CREATE INDEX IF NOT EXISTS tracker_entries_by_tracker ON tracker_entries(tracker_id)');
+			await ctx.execute('CREATE INDEX IF NOT EXISTS tracker_entries_by_date ON tracker_entries(occurred_on)');
+			await ctx.execute('CREATE INDEX IF NOT EXISTS trackers_by_updated ON trackers(updated_at)');
+			await ctx.execute('CREATE INDEX IF NOT EXISTS tracker_entries_by_updated ON tracker_entries(updated_at)');
+		}
 	}
 ];
 
