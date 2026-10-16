@@ -289,7 +289,7 @@
 		trashedView = false;
 		publish();
 		bump();
-		spark(document.querySelector('.nt-fab'), 14);
+		spark(document.querySelector('[data-nt-new]'), 14);
 		tone(520, 0.1, 'triangle', 0.06);
 		setTimeout(() => tone(780, 0.14, 'triangle', 0.06), 70);
 		haptic([10, 30, 10]);
@@ -724,6 +724,8 @@
 		{:else}
 			{#if !searching}
 				<div class="nt-g">
+					<button class="nt-fo new" data-nt-new onclick={newNote}>+ Nota</button>
+					<button class="nt-fo new" onclick={openNewFolder}>+ Pasta</button>
 					{#each children as folder (folder.id)}
 						<button class="nt-fo" data-folder={folder.id} style={`--cc:${folder.color}`} onclick={() => openFolder(folder.id)}>
 							<FolderIcon color={folder.color} />
@@ -731,7 +733,6 @@
 							<span class="nt-fo-tip" role="tooltip">{folderTotalCount(activeNotes, folders, folder.id)} notas</span>
 						</button>
 					{/each}
-					<button class="nt-fo new" onclick={openNewFolder}>+ Pasta</button>
 				</div>
 			{/if}
 
@@ -772,10 +773,6 @@
 		{/if}
 	{/key}
 </section>
-
-{#if !trashedView}
-	<button class="nt-fab" aria-label="Nova nota" onclick={newNote}>+</button>
-{/if}
 
 {#if menuState}
 	<div class="nt-menu" role="menu" style={`left:${menuState.x}px; top:${menuState.y}px`}>

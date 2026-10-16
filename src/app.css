@@ -616,7 +616,6 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .nt-ed,
 .nt-ov,
 .nt-sh,
-.nt-fab,
 .nt-gh,
 .nt-menu {
 	--acc: var(--lime);
@@ -763,9 +762,6 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 @media (min-width: 560px) {
 	.nt-g { grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); }
 }
-
-.nt-fab { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); width: 68px; height: 68px; display: grid; place-items: center; padding: 0; border-radius: 50%; background: var(--acc); color: #141a0a; font-size: 36px; font-weight: 600; line-height: 1; z-index: 20; box-shadow: 0 8px 24px #0008; transition: transform .15s; }
-.nt-fab:active { transform: translateX(-50%) scale(.9); }
 
 /* Editor em tela cheia */
 .nt-ed { position: fixed; inset: 0; background: var(--nt-bg); z-index: 40; display: flex; flex-direction: column; transform: translateY(100%); transition: transform .38s cubic-bezier(.2,.9,.2,1); padding-top: env(safe-area-inset-top, 0px); }
@@ -1011,14 +1007,12 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 /* --- safe areas + FABs por view ---
    No mobile o botão global do shell substitui os FABs de cada módulo. */
 .app-shell .fin-fab,
-.app-shell .nt-fab,
 .app-shell .gv-fab { display: none; }
 .app-shell .fin-prototype { padding-bottom: 10px; }
 .loading-screen { min-height: 100dvh; padding: calc(24px + env(safe-area-inset-top, 0px)) 20px calc(24px + env(safe-area-inset-bottom, 0px)); }
 
 @media (min-width: 860px) {
 	.app-shell .fin-fab,
-	.app-shell .nt-fab,
 	.app-shell .gv-fab { display: grid; }
 	.app-shell .fin-prototype { padding-bottom: calc(120px + env(safe-area-inset-bottom, 0px)); }
 }

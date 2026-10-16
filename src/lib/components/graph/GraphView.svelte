@@ -278,7 +278,7 @@
 <div class="graph-view">
 	<div class="gv-head">
 		<div>
-			<h1>Vida</h1>
+			<h1>Planejamento</h1>
 			<small>{nodeCount} nós · {edgeCount} transições</small>
 		</div>
 		<div class="gv-head-actions">
