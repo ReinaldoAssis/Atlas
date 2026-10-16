@@ -51,7 +51,7 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 		{ id: 'habits', label: 'Hábitos', icon: Target },
 		{ id: 'time', label: 'Tempo', icon: CalendarDays },
 		{ id: 'notes', label: 'Notas', icon: NotebookPen },
-		{ id: 'graph', label: 'Vida', icon: Route }
+		{ id: 'graph', label: 'Planejamento', icon: Route }
 	];
 
 	const TAB_ORDER: NavigationKey[] = ['dashboard', 'finance', 'habits', 'time', 'notes', 'graph'];
@@ -2040,7 +2040,7 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 											<div class="dash-track"><i style={`width:${Math.max(0, Math.min(100, row.ratio * 100))}%`}></i></div>
 										</button>
 									{/each}
-									{#if dashObjectives.extra}<button class="dash-more" onclick={() => setActiveTab('graph')}>+{dashObjectives.extra} na aba Vida</button>{/if}
+									{#if dashObjectives.extra}<button class="dash-more" onclick={() => setActiveTab('graph')}>+{dashObjectives.extra} na aba Planejamento</button>{/if}
 								{:else}
 									<p class="dash-empty">Sem objetivos no grafo ainda.</p>
 								{/if}
@@ -2107,7 +2107,6 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 						</div>
 						<div class="fin-dev"><button onclick={clearFinanceTransactions}>Limpar lançamentos</button></div>
 					</section>
-					<button class="fin-fab" aria-label="Novo lançamento" onclick={() => openFinanceEntry()}>+</button>
 				{:else if activeTab === 'habits'}
 					{#if snapshot}
 						<section class="habit-prototype" aria-label="Hábitos">
@@ -2129,6 +2128,9 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 							</div>
 
 							<div class="habit-prototype-grid habit-prototype-habits">
+								<button class="habit-prototype-card habit-prototype-wide habit-prototype-empty" onclick={openHabit}>
+									<Target size={20} /> {snapshot.habits.filter((habit) => habit.active).length ? 'Novo hábito' : 'Criar primeiro hábito'}
+								</button>
 								{#each snapshot.habits.filter((habit) => habit.active) as habit}
 									{#if habit.metric === 'weekly'}
 										{@const count = weeklyValue(habit)}
@@ -2157,9 +2159,6 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 										{/if}
 									{/if}
 								{/each}
-								{#if !snapshot.habits.filter((habit) => habit.active).length}
-									<button class="habit-prototype-card habit-prototype-wide habit-prototype-empty" onclick={openHabit}><Target size={20} /> Criar primeiro hábito</button>
-								{/if}
 							</div>
 							{#if testModeActive}
 								<div class="habit-prototype-dev"><button onclick={resetPrototypeDay}>Reiniciar dia</button></div>
@@ -2220,6 +2219,9 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 					<GraphView snapshot={snapshot} oncommit={commitGraph} ontoast={graphToast} />
 				{/if}
 			</div>
+			{#if activeTab === 'finance'}
+				<button class="fin-fab" aria-label="Novo lançamento" onclick={() => openFinanceEntry()}>+</button>
+			{/if}
 		</main>
 
 		<nav id="bn" aria-label="Navegação rápida">
