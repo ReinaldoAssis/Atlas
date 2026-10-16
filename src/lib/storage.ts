@@ -3,28 +3,47 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import JSZip from 'jszip';
 import {
 	createEmptySnapshot,
+	defaultCategories,
+	id as newId,
 	type AtlasSnapshot,
 	type Category,
+	type ExperienceState,
+	type FinanceState,
 	type Habit,
 	type HabitLog,
-	type ExperienceState,
 	type LifeForceState,
 	type TimeBlock,
-	type Transaction,
-	defaultCategories,
-	defaultHabits,
-	demoFinanceState,
-	demoTransactions,
-	demoTimeBlocks,
-	type FinanceState
+	type Transaction
 } from './atlas';
 import { normalizeGraph, type GraphState } from './graph';
 import { reconcileGraph } from './graph-sources';
 import type { Note, NoteFolder } from './notes';
 import { normalizeNotesState } from './notes';
+import { runMigrations, type SqlContext } from './db/migrations';
+import {
+	settingStatements,
+	tombstoneIds,
+	tombstoneStatements,
+	upsertSql,
+	type BatchStatement
+} from './db/persist';
 
 const PREVIEW_KEY = 'atlas-preview-state-v1';
 const LIFEFORCE_MIGRATION_KEY = 'atlas-preview-lifeforce-v3';
+/** Lápides de deleção são purgadas após esse prazo. */
+const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const SYNC_TABLES = ['categories', 'transactions', 'habits', 'habit_logs', 'time_blocks'] as const;
+
+/**
+ * Últimos ids ativos conhecidos por tabela.
+ *
+ * Como o app mantém o snapshot inteiro em memória e chama `saveSnapshot` a
+ * cada mudança, a diferença `knownActiveIds - ids atuais` é o conjunto de
+ * linhas removidas → viram lápides (`deleted_at`) em vez de `DELETE`.
+ * Preenchido no `loadSnapshot` e atualizado a cada `saveSnapshot`.
+ */
+const knownActiveIds: Record<string, Set<string>> = {};
+
 let database: Promise<Database> | undefined;
 
 export async function getDatabase(): Promise<Database> {
@@ -77,29 +96,18 @@ export function runSerialized<T>(task: () => Promise<T>): Promise<T> {
 
 async function initializeDatabase(db: Database): Promise<void> {
 	await db.execute('PRAGMA foreign_keys = ON');
-	await db.execute(`CREATE TABLE IF NOT EXISTS categories (
-		id TEXT PRIMARY KEY, module TEXT NOT NULL, payload TEXT NOT NULL
-	)`);
-	await db.execute(`CREATE TABLE IF NOT EXISTS transactions (
-		id TEXT PRIMARY KEY, occurred_on TEXT NOT NULL, payload TEXT NOT NULL
-	)`);
-	await db.execute('CREATE INDEX IF NOT EXISTS transactions_by_date ON transactions(occurred_on)');
-	await db.execute(`CREATE TABLE IF NOT EXISTS habits (
-		id TEXT PRIMARY KEY, payload TEXT NOT NULL
-	)`);
-	await db.execute(`CREATE TABLE IF NOT EXISTS habit_logs (
-		id TEXT PRIMARY KEY, habit_id TEXT NOT NULL, occurred_on TEXT NOT NULL, payload TEXT NOT NULL,
-		UNIQUE(habit_id, occurred_on)
-	)`);
-	await db.execute('CREATE INDEX IF NOT EXISTS habit_logs_by_date ON habit_logs(occurred_on)');
-	await db.execute(`CREATE TABLE IF NOT EXISTS time_blocks (
-		id TEXT PRIMARY KEY, starts_at TEXT NOT NULL, payload TEXT NOT NULL
-	)`);
-	await db.execute('CREATE INDEX IF NOT EXISTS time_blocks_by_start ON time_blocks(starts_at)');
-	await db.execute(`CREATE TABLE IF NOT EXISTS app_settings (
-		key TEXT PRIMARY KEY, value TEXT NOT NULL
-	)`);
-	const categoryRows = await db.select<Array<{ id: string }>>('SELECT id FROM categories LIMIT 1');
+	const ctx: SqlContext = {
+		execute: async (sql, params) => {
+			await db.execute(sql, params);
+		},
+		select: (sql, params) => db.select(sql, params)
+	};
+	await runMigrations(ctx);
+	await purgeTombstones(db);
+	await ensureDeviceId(db);
+	const categoryRows = await db.select<Array<{ id: string }>>(
+		'SELECT id FROM categories WHERE deleted_at IS NULL LIMIT 1'
+	);
 	if (categoryRows.length === 0) {
 		for (const category of defaultCategories) {
 			await db.execute('INSERT INTO categories (id, module, payload) VALUES ($1, $2, $3)', [
@@ -109,63 +117,48 @@ async function initializeDatabase(db: Database): Promise<void> {
 			]);
 		}
 	}
-	const settingsRows = await db.select<Array<{ key: string }>>('SELECT key FROM app_settings WHERE key = $1', ['lifeForce']);
-	if (settingsRows.length === 0) {
-		const initial = createEmptySnapshot();
-		await db.execute('INSERT INTO app_settings (key, value) VALUES ($1, $2)', [
-			'lifeForce',
-			JSON.stringify(initial.lifeForce)
-		]);
-		await db.execute('INSERT INTO app_settings (key, value) VALUES ($1, $2)', [
-			'preferences',
-			JSON.stringify(initial.preferences)
-		]);
-		await db.execute('INSERT INTO app_settings (key, value) VALUES ($1, $2)', [
-			'finance',
-			JSON.stringify(initial.finance)
-		]);
+}
+
+/** Remove lápides antigas (o sync futuro não precisa revivê-las). */
+async function purgeTombstones(db: Database): Promise<void> {
+	const cutoff = String(Date.now() - TOMBSTONE_TTL_MS);
+	for (const table of SYNC_TABLES) {
+		await db.execute(`DELETE FROM ${table} WHERE deleted_at IS NOT NULL AND deleted_at < $1`, [cutoff]);
 	}
-	const experienceRows = await db.select<Array<{ key: string }>>('SELECT key FROM app_settings WHERE key = $1', ['experience']);
-	if (experienceRows.length === 0) {
-		await db.execute('INSERT INTO app_settings (key, value) VALUES ($1, $2)', [
-			'experience',
-			JSON.stringify(createEmptySnapshot().experience)
-		]);
+}
+
+/** Identidade estável desta instalação (base do sync futuro). */
+async function ensureDeviceId(db: Database): Promise<string> {
+	const rows = await db.select<Array<{ value: string }>>('SELECT value FROM app_settings WHERE key = $1', [
+		'device_id'
+	]);
+	if (rows.length > 0) return JSON.parse(rows[0].value) as string;
+	const value = newId();
+	await db.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES ($1, $2)', [
+		'device_id',
+		JSON.stringify(value)
+	]);
+	return value;
+}
+
+/** Monta os upserts das linhas e as lápides das que sumiram. */
+function pushRows(
+	statements: BatchStatement[],
+	nextKnown: Record<string, Set<string>>,
+	table: string,
+	columns: string[],
+	rows: string[][],
+	currentIds: string[],
+	deviceId: string,
+	at: number
+): void {
+	const sql = upsertSql(table, [...columns, 'updated_at', 'device_id']);
+	for (const row of rows) {
+		statements.push({ sql, params: [...row, String(at), deviceId] });
 	}
-	const seededRows = await db.select<Array<{ key: string }>>('SELECT key FROM app_settings WHERE key = $1', ['seeded']);
-	if (seededRows.length === 0) {
-		const habitRows = await db.select<Array<{ id: string }>>('SELECT id FROM habits LIMIT 1');
-		if (habitRows.length === 0) {
-			for (const habit of defaultHabits()) {
-				await db.execute('INSERT INTO habits (id, payload) VALUES ($1, $2)', [habit.id, JSON.stringify(habit)]);
-			}
-		}
-		const transactionRows = await db.select<Array<{ id: string }>>('SELECT id FROM transactions LIMIT 1');
-		if (transactionRows.length === 0) {
-			for (const item of demoTransactions()) {
-				await db.execute('INSERT INTO transactions (id, occurred_on, payload) VALUES ($1, $2, $3)', [
-					item.id,
-					item.date,
-					JSON.stringify(item)
-				]);
-			}
-		}
-		const timeRows = await db.select<Array<{ id: string }>>('SELECT id FROM time_blocks LIMIT 1');
-		if (timeRows.length === 0) {
-			for (const block of demoTimeBlocks()) {
-				await db.execute('INSERT INTO time_blocks (id, starts_at, payload) VALUES ($1, $2, $3)', [
-					block.id,
-					block.startAt,
-					JSON.stringify(block)
-				]);
-			}
-		}
-		await db.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES ($1, $2)', [
-			'finance',
-			JSON.stringify(demoFinanceState())
-		]);
-		await db.execute('INSERT INTO app_settings (key, value) VALUES ($1, $2)', ['seeded', JSON.stringify(true)]);
-	}
+	const previous = knownActiveIds[table] ?? new Set<string>();
+	statements.push(...tombstoneStatements(table, tombstoneIds(previous, currentIds), at, deviceId));
+	nextKnown[table] = new Set(currentIds);
 }
 
 const FALLBACK_LIMITS: Record<string, number> = {
@@ -233,11 +226,11 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	const db = await getReadyDatabase();
 	await writeQueue;
 	const [categories, transactions, habits, habitLogs, timeBlocks, settings] = await Promise.all([
-		db.select<Array<{ payload: string }>>('SELECT payload FROM categories'),
-		db.select<Array<{ payload: string }>>('SELECT payload FROM transactions ORDER BY occurred_on DESC'),
-		db.select<Array<{ payload: string }>>('SELECT payload FROM habits'),
-		db.select<Array<{ payload: string }>>('SELECT payload FROM habit_logs ORDER BY occurred_on DESC'),
-		db.select<Array<{ payload: string }>>('SELECT payload FROM time_blocks ORDER BY starts_at DESC'),
+		db.select<Array<{ payload: string }>>('SELECT payload FROM categories WHERE deleted_at IS NULL'),
+		db.select<Array<{ payload: string }>>('SELECT payload FROM transactions WHERE deleted_at IS NULL ORDER BY occurred_on DESC'),
+		db.select<Array<{ payload: string }>>('SELECT payload FROM habits WHERE deleted_at IS NULL'),
+		db.select<Array<{ payload: string }>>('SELECT payload FROM habit_logs WHERE deleted_at IS NULL ORDER BY occurred_on DESC'),
+		db.select<Array<{ payload: string }>>('SELECT payload FROM time_blocks WHERE deleted_at IS NULL ORDER BY starts_at DESC'),
 		db.select<Array<{ key: string; value: string }>>('SELECT key, value FROM app_settings')
 	]);
 	const settingsMap = Object.fromEntries(settings.map((item) => [item.key, JSON.parse(item.value)]));
@@ -261,12 +254,12 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	};
 	snapshot.graph = reconcileGraph(snapshot.graph, snapshot);
 	migrateLifeForceBaseline(snapshot);
+	knownActiveIds.categories = new Set(snapshot.categories.map((item) => item.id));
+	knownActiveIds.transactions = new Set(snapshot.transactions.map((item) => item.id));
+	knownActiveIds.habits = new Set(snapshot.habits.map((item) => item.id));
+	knownActiveIds.habit_logs = new Set(snapshot.habitLogs.map((item) => item.id));
+	knownActiveIds.time_blocks = new Set(snapshot.timeBlocks.map((item) => item.id));
 	return snapshot;
-}
-
-interface BatchStatement {
-	sql: string;
-	params: string[];
 }
 
 export function saveSnapshot(snapshot: AtlasSnapshot): Promise<void> {
@@ -276,55 +269,78 @@ export function saveSnapshot(snapshot: AtlasSnapshot): Promise<void> {
 	}
 	return runSerialized(async () => {
 		// Garante `load` + schema (e o pool) antes de escrever.
-		await getReadyDatabase();
-		const statements: BatchStatement[] = [
-			{ sql: 'DELETE FROM categories', params: [] },
-			{ sql: 'DELETE FROM transactions', params: [] },
-			{ sql: 'DELETE FROM habits', params: [] },
-			{ sql: 'DELETE FROM habit_logs', params: [] },
-			{ sql: 'DELETE FROM time_blocks', params: [] },
-			{ sql: 'DELETE FROM app_settings', params: [] }
-		];
-		for (const category of snapshot.categories) {
-			statements.push({
-				sql: 'INSERT INTO categories (id, module, payload) VALUES ($1, $2, $3)',
-				params: [category.id, category.module, JSON.stringify(category)]
-			});
-		}
-		for (const item of snapshot.transactions) {
-			statements.push({
-				sql: 'INSERT INTO transactions (id, occurred_on, payload) VALUES ($1, $2, $3)',
-				params: [item.id, item.date, JSON.stringify(item)]
-			});
-		}
-		for (const item of snapshot.habits) {
-			statements.push({
-				sql: 'INSERT INTO habits (id, payload) VALUES ($1, $2)',
-				params: [item.id, JSON.stringify(item)]
-			});
-		}
-		for (const item of snapshot.habitLogs) {
-			statements.push({
-				sql: 'INSERT INTO habit_logs (id, habit_id, occurred_on, payload) VALUES ($1, $2, $3, $4)',
-				params: [item.id, item.habitId, item.date, JSON.stringify(item)]
-			});
-		}
-		for (const item of snapshot.timeBlocks) {
-			statements.push({
-				sql: 'INSERT INTO time_blocks (id, starts_at, payload) VALUES ($1, $2, $3)',
-				params: [item.id, item.startAt, JSON.stringify(item)]
-			});
-		}
-		statements.push(
-			{ sql: 'INSERT INTO app_settings (key, value) VALUES ($1, $2)', params: ['lifeForce', JSON.stringify(snapshot.lifeForce)] },
-			{ sql: 'INSERT INTO app_settings (key, value) VALUES ($1, $2)', params: ['preferences', JSON.stringify(snapshot.preferences)] },
-			{ sql: 'INSERT INTO app_settings (key, value) VALUES ($1, $2)', params: ['experience', JSON.stringify(snapshot.experience)] },
-			{ sql: 'INSERT INTO app_settings (key, value) VALUES ($1, $2)', params: ['finance', JSON.stringify(snapshot.finance)] },
-			{ sql: 'INSERT INTO app_settings (key, value) VALUES ($1, $2)', params: ['graph', JSON.stringify(snapshot.graph)] },
-			{ sql: 'INSERT INTO app_settings (key, value) VALUES ($1, $2)', params: ['seeded', JSON.stringify(true)] }
+		const db = await getReadyDatabase();
+		const deviceId = await ensureDeviceId(db);
+		const at = Date.now();
+		const statements: BatchStatement[] = [];
+		// Só aplicamos os ids conhecidos se a gravação tiver sucesso, para que
+		// uma falha não "esqueça" lápides pendentes.
+		const nextKnown: Record<string, Set<string>> = {};
+
+		pushRows(
+			statements,
+			nextKnown,
+			'categories',
+			['id', 'module', 'payload'],
+			snapshot.categories.map((item) => [item.id, item.module, JSON.stringify(item)]),
+			snapshot.categories.map((item) => item.id),
+			deviceId,
+			at
 		);
+		pushRows(
+			statements,
+			nextKnown,
+			'transactions',
+			['id', 'occurred_on', 'payload'],
+			snapshot.transactions.map((item) => [item.id, item.date, JSON.stringify(item)]),
+			snapshot.transactions.map((item) => item.id),
+			deviceId,
+			at
+		);
+		pushRows(
+			statements,
+			nextKnown,
+			'habits',
+			['id', 'payload'],
+			snapshot.habits.map((item) => [item.id, JSON.stringify(item)]),
+			snapshot.habits.map((item) => item.id),
+			deviceId,
+			at
+		);
+		pushRows(
+			statements,
+			nextKnown,
+			'habit_logs',
+			['id', 'habit_id', 'occurred_on', 'payload'],
+			snapshot.habitLogs.map((item) => [item.id, item.habitId, item.date, JSON.stringify(item)]),
+			snapshot.habitLogs.map((item) => item.id),
+			deviceId,
+			at
+		);
+		pushRows(
+			statements,
+			nextKnown,
+			'time_blocks',
+			['id', 'starts_at', 'payload'],
+			snapshot.timeBlocks.map((item) => [item.id, item.startAt, JSON.stringify(item)]),
+			snapshot.timeBlocks.map((item) => item.id),
+			deviceId,
+			at
+		);
+
+		statements.push(
+			...settingStatements({
+				lifeForce: snapshot.lifeForce,
+				preferences: snapshot.preferences,
+				experience: snapshot.experience,
+				finance: snapshot.finance,
+				graph: snapshot.graph
+			})
+		);
+
 		// Uma transação numa única conexão (ver `db_batch` no lib.rs).
 		await invoke('db_batch', { db: 'sqlite:atlas.db', statements });
+		Object.assign(knownActiveIds, nextKnown);
 	});
 }
 

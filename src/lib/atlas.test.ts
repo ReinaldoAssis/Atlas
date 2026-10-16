@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	createEmptySnapshot,
 	currentStreak,
 	dateOffset,
 	didMeetTarget,
@@ -11,6 +12,7 @@ import {
 	type Habit,
 	type HabitLog
 } from './atlas';
+import { demoSnapshot } from './fixtures';
 
 function dailyBooleanHabit(overrides: Partial<Habit> = {}): Habit {
 	return {
@@ -131,5 +133,36 @@ describe('money', () => {
 	it('formata em BRL via Intl', () => {
 		const expected = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(1234.56);
 		expect(money(123456, 'BRL')).toBe(expected);
+	});
+});
+
+describe('createEmptySnapshot', () => {
+	it('abre vazio, mantendo só as categorias padrão', () => {
+		const snapshot = createEmptySnapshot();
+		expect(snapshot.categories.length).toBeGreaterThan(0);
+		expect(snapshot.transactions).toEqual([]);
+		expect(snapshot.habits).toEqual([]);
+		expect(snapshot.habitLogs).toEqual([]);
+		expect(snapshot.timeBlocks).toEqual([]);
+		expect(snapshot.experience.totalXp).toBe(0);
+		expect(snapshot.finance.streak).toBe(0);
+	});
+
+	it('tem grafo mínimo (só o nó de origem)', () => {
+		const snapshot = createEmptySnapshot();
+		expect(snapshot.graph.nodes).toHaveLength(1);
+		expect(snapshot.graph.nodes[0].origin).toBe(true);
+		expect(snapshot.graph.edges).toEqual([]);
+	});
+});
+
+describe('demoSnapshot (modo de teste)', () => {
+	it('vem populado em todos os módulos', () => {
+		const snapshot = demoSnapshot();
+		expect(snapshot.transactions.length).toBeGreaterThan(0);
+		expect(snapshot.habits.length).toBeGreaterThan(0);
+		expect(snapshot.timeBlocks.length).toBeGreaterThan(0);
+		expect(snapshot.experience.totalXp).toBeGreaterThan(0);
+		expect(snapshot.graph.nodes.length).toBeGreaterThan(1);
 	});
 });
