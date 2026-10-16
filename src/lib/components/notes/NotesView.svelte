@@ -1,6 +1,8 @@
 <script module lang="ts">
 	/** Último token de criação tratado, compartilhado entre montagens. */
 	let handledCreateToken = 0;
+	/** Último token de abertura (deep-link do planejador) tratado. */
+	let handledOpenToken = 0;
 </script>
 
 <script lang="ts">
@@ -31,6 +33,7 @@
 		type NoteFolder,
 		type NotesState
 	} from '#lib/notes';
+	import type { TimeBlock } from '#lib/atlas';
 	import {
 		deleteFolders,
 		deleteNote as removeNote,
@@ -48,6 +51,9 @@
 		typingSound = true,
 		haptics = true,
 		createToken = 0,
+		timeBlocks = [],
+		openNoteId = '',
+		openNoteToken = 0,
 		onchange,
 		oncreate,
 		ontoast
@@ -56,6 +62,9 @@
 		typingSound?: boolean;
 		haptics?: boolean;
 		createToken?: number;
+		timeBlocks?: TimeBlock[];
+		openNoteId?: string;
+		openNoteToken?: number;
 		onchange: (state: NotesState) => void;
 		oncreate: (note: Note) => void;
 		ontoast: (message: string, options?: { warning?: boolean; undo?: () => void }) => void;
@@ -67,6 +76,14 @@
 			handledCreateToken = createToken;
 			void newNote();
 		}
+	});
+
+	// Deep-link: abrir uma nota específica (ex.: a partir do planejador).
+	$effect(() => {
+		if (openNoteToken === handledOpenToken || !ready) return;
+		handledOpenToken = openNoteToken;
+		const note = notes.find((item) => item.id === openNoteId);
+		if (note) void openNote(note, 'preview');
 	});
 
 	let notes = $state<Note[]>([]);
@@ -828,6 +845,7 @@
 			note={editorNote}
 			notesList={activeNotes}
 			{folders}
+			{timeBlocks}
 			open={editorIn}
 			initialMode={editorMode}
 			{sound}
