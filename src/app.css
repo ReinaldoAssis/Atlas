@@ -504,6 +504,42 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .tp-sr .tp-sbar { height: 6px; background: var(--panel-2); border-radius: 4px; margin-top: 8px; overflow: hidden; }
 .tp-sr .tp-sbar i { display: block; height: 100%; background: var(--cc); border-radius: 4px; }
 .tp-empty { color: var(--muted); font-size: 13px; }
+
+/*
+ * Mobile: a grade ocupa exatamente o que sobra da viewport. O shell já
+ * reserva topo (barra do app) e base (barra de navegação) no padding do
+ * `.workspace`, então `height: 100dvh` no workspace deixa o scroller longo
+ * o bastante para o último horário sem terminar atrás da barra.
+ */
+@media (max-width: 859px) {
+	.app-shell .workspace:has(.tp-prototype) {
+		height: 100dvh;
+		display: flex;
+		flex-direction: column;
+	}
+	.app-shell #pg:has(.tp-prototype) {
+		flex: 1 1 auto;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+	}
+	.tp-prototype {
+		flex: 1 1 auto;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+	}
+	.tp-prototype > .tp-top,
+	.tp-prototype > .tp-wkb,
+	.tp-prototype > .tp-pal {
+		flex: none;
+	}
+	.tp-scroll {
+		flex: 1 1 auto;
+		min-height: 200px;
+		max-height: none;
+	}
+}
 @media (min-width: 900px) {
 	.workspace:has(.tp-prototype) { padding: 20px 24px 60px; }
 	.tp-scroll { max-height: calc(100vh - 250px); }
@@ -704,7 +740,10 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .nt-fo-tip { position: absolute; left: 14px; bottom: 10px; font-size: 12px; color: var(--nt-mu); opacity: 0; transform: translateY(5px); transition: opacity .22s ease .32s, transform .22s cubic-bezier(.3,1.4,.5,1) .32s; pointer-events: none; }
 .nt-fo:hover .nt-fo-tip, .nt-fo:focus-visible .nt-fo-tip { opacity: 1; transform: none; }
 @media (hover: none) {
-	.nt-fo-tip { opacity: 1; transform: none; transition: none; }
+	/* Sem hover não há como revelar a contagem; no toque ela só brigava com
+	   o nome da pasta. O tile fica com ícone e nome centralizados. */
+	.nt-fo { align-items: center; justify-content: center; gap: 6px; text-align: center; }
+	.nt-fo-tip { display: none; }
 }
 
 .nt-rows { background: var(--nt-s); border-radius: 10px; overflow: hidden; }

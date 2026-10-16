@@ -2056,7 +2056,9 @@ import { resetNotesCache } from '#lib/notes-store';
 									<button class="habit-prototype-card habit-prototype-wide habit-prototype-empty" onclick={openHabit}><Target size={20} /> Criar primeiro hábito</button>
 								{/if}
 							</div>
-							<div class="habit-prototype-dev"><button onclick={resetPrototypeDay}>Reiniciar dia</button></div>
+							{#if testModeActive}
+								<div class="habit-prototype-dev"><button onclick={resetPrototypeDay}>Reiniciar dia</button></div>
+							{/if}
 						</section>
 					{/if}
 				{:else if activeTab === 'time'}
