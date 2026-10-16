@@ -36,7 +36,11 @@ Escopo do produto: `docs/MVP.md`. UI: `docs/DESIGN.md`. Estado do iOS: `context/
 - i18n com **Paraglide**, **só pt-BR** por ora, migração **incremental**.
 - Kit mínimo: **Sheet + Toggle + Segmented**; **reescrever Configurações**; demais overlays ficam p/ depois.
 - Pendências do handoff no ciclo: **backup + openAttachment**, **PrivacyInfo**, **remover cabeçalho duplicado**, **verificar shell no device**.
-- **CSP** fechado neste ciclo.
+- **CSP fechada** (S8) em `src-tauri/tauri.conf.json`; validada por `npm run csp:check`:
+  - `script-src` precisa de **`'wasm-unsafe-eval'`** — o markdown (Shiki/Oniguruma) compila WASM; sem isso o Carta falha inteiro e a nota cai no aviso de erro;
+  - `style-src` precisa de **`'unsafe-inline'`** — os `style={...}` do Svelte e o `style="display: contents"` do HTML do SvelteKit;
+  - sem `asset:`/remoto: o app não carrega imagem/fonte/script de fora (fontes e KaTeX saem no bundle);
+  - vale **só no app empacotado**: em `dev` o HTML vem do Vite (`devUrl`), e o Tauri só aplica a CSP nas respostas do protocolo `tauri://localhost`.
 
 **Testes** — unit (Vitest) + Rust (`cargo test`) primeiro; componente/browser/e2e depois.
 

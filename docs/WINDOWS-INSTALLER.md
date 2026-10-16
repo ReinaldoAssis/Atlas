@@ -70,6 +70,9 @@ O CI garante que o `.exe` **compila**; o resto só se vê instalando:
 - [ ] `atlas.db` aparece em `%APPDATA%\com.randroi75.atlas` e sobrevive a
       reabrir o app e a reinstalar por cima;
 - [ ] **Exportar dados** abre o diálogo nativo e salva o `.zip` com conteúdo;
+- [ ] nota com markdown sob CSP (o WebView2 é Chromium, então `npm run csp:check`
+      já cobre; confirme na tela): negrito, `código`, bloco com cor, tabela,
+      `#tag` e a fence `artifact` renderizando e executando;
 - [ ] **Importar arquivo** lê o `.zip`, mostra o resumo e restaura;
 - [ ] abrir anexo de nota abre no app padrão do Windows;
 - [ ] notificações locais (lembretes) pedem permissão e aparecem;

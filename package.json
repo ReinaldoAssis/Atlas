@@ -20,7 +20,8 @@
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"test": "vitest run",
 		"pretest": "svelte-kit sync && paraglide-js compile --project ./project.inlang",
-		"test:watch": "vitest"
+		"test:watch": "vitest",
+		"csp:check": "node tools/csp-check.mjs"
 	},
 	"devDependencies": {
 		"@inlang/paraglide-js": "^2.29.0",

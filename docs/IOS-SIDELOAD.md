@@ -110,6 +110,10 @@ O que **não** dá para checar no Chrome headless — precisa do iPhone:
 
 - [ ] shell: safe areas (notch e barra inferior), leque do menu rápido (toque
       longo no **+**), indicador de aba deslizante, transições entre abas;
+- [ ] nota com markdown sob CSP (`npm run csp:check` valida no Chromium; o
+      WKWebView é outro motor): negrito, `código`, bloco de código com cor
+      (Shiki), `$matemática$` (KaTeX), tabela, `[[wiki-link]]`, `#tag`, imagem
+      `data:` e, por último, a fence `artifact` renderizando e executando;
 - [ ] **backup export**: Configurações → *Exportar dados* → o picker do iOS
       abre, escolha um destino (Arquivos/iCloud) e confirme que o `.zip` chega
       com conteúdo (> 1 KB, não 0 bytes). Este é o ponto mais arriscado: o
