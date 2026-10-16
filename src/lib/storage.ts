@@ -13,6 +13,8 @@ import {
 	type HabitLog,
 	type LifeForceState,
 	type TimeBlock,
+	type Tracker,
+	type TrackerEntry,
 	type Transaction
 } from './atlas';
 import { normalizeGraph } from './graph';
@@ -34,7 +36,7 @@ const PREVIEW_KEY = 'atlas-preview-state-v1';
 const LIFEFORCE_MIGRATION_KEY = 'atlas-preview-lifeforce-v3';
 /** Lápides de deleção são purgadas após esse prazo. */
 const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const SYNC_TABLES = ['categories', 'transactions', 'habits', 'habit_logs', 'time_blocks'] as const;
+const SYNC_TABLES = ['categories', 'transactions', 'habits', 'habit_logs', 'trackers', 'tracker_entries', 'time_blocks'] as const;
 /** Tabelas cujas lápides são purgadas (inclui grafo e notas/pastas). */
 const PURGE_TABLES = [...SYNC_TABLES, 'graph_domains', 'graph_nodes', 'graph_edges', 'notes', 'folders'];
 
@@ -272,11 +274,13 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	if (!isTauri()) return readPreview();
 	const db = await getReadyDatabase();
 	await writeQueue;
-	const [categories, transactions, habits, habitLogs, timeBlocks, graphDomains, graphNodes, graphEdges, settings] = await Promise.all([
+	const [categories, transactions, habits, habitLogs, trackers, trackerEntries, timeBlocks, graphDomains, graphNodes, graphEdges, settings] = await Promise.all([
 		db.select<Array<{ payload: string }>>('SELECT payload FROM categories WHERE deleted_at IS NULL'),
 		db.select<Array<{ payload: string }>>('SELECT payload FROM transactions WHERE deleted_at IS NULL ORDER BY occurred_on DESC'),
 		db.select<Array<{ payload: string }>>('SELECT payload FROM habits WHERE deleted_at IS NULL'),
 		db.select<Array<{ payload: string }>>('SELECT payload FROM habit_logs WHERE deleted_at IS NULL ORDER BY occurred_on DESC'),
+		db.select<Array<{ payload: string }>>('SELECT payload FROM trackers WHERE deleted_at IS NULL'),
+		db.select<Array<{ payload: string }>>('SELECT payload FROM tracker_entries WHERE deleted_at IS NULL ORDER BY occurred_on DESC'),
 		db.select<Array<{ payload: string }>>('SELECT payload FROM time_blocks WHERE deleted_at IS NULL ORDER BY starts_at DESC'),
 		db.select<Array<{ payload: string }>>('SELECT payload FROM graph_domains WHERE deleted_at IS NULL'),
 		db.select<Array<{ payload: string }>>('SELECT payload FROM graph_nodes WHERE deleted_at IS NULL'),
@@ -302,6 +306,8 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 		transactions: transactions.map((row) => JSON.parse(row.payload) as Transaction),
 		habits: habits.map((row) => JSON.parse(row.payload) as Habit),
 		habitLogs: habitLogs.map((row) => JSON.parse(row.payload) as HabitLog),
+		trackers: trackers.map((row) => JSON.parse(row.payload) as Tracker),
+		trackerEntries: trackerEntries.map((row) => JSON.parse(row.payload) as TrackerEntry),
 		timeBlocks: timeBlocks.map((row) => JSON.parse(row.payload) as TimeBlock),
 		lifeForce,
 		experience,
@@ -315,6 +321,8 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	knownActiveIds.transactions = new Set(snapshot.transactions.map((item) => item.id));
 	knownActiveIds.habits = new Set(snapshot.habits.map((item) => item.id));
 	knownActiveIds.habit_logs = new Set(snapshot.habitLogs.map((item) => item.id));
+	knownActiveIds.trackers = new Set(snapshot.trackers.map((item) => item.id));
+	knownActiveIds.tracker_entries = new Set(snapshot.trackerEntries.map((item) => item.id));
 	knownActiveIds.time_blocks = new Set(snapshot.timeBlocks.map((item) => item.id));
 	knownActiveIds.graph_domains = new Set(snapshot.graph.domains.map((item) => item.id));
 	knownActiveIds.graph_nodes = new Set(snapshot.graph.nodes.map((item) => item.id));
@@ -367,6 +375,26 @@ function buildSnapshotStatements(
 		['id', 'habit_id', 'occurred_on', 'payload'],
 		snapshot.habitLogs.map((item) => [item.id, item.habitId, item.date, JSON.stringify(item)]),
 		snapshot.habitLogs.map((item) => item.id),
+		deviceId,
+		at
+	);
+	pushRows(
+		statements,
+		nextKnown,
+		'trackers',
+		['id', 'payload'],
+		snapshot.trackers.map((item) => [item.id, JSON.stringify(item)]),
+		snapshot.trackers.map((item) => item.id),
+		deviceId,
+		at
+	);
+	pushRows(
+		statements,
+		nextKnown,
+		'tracker_entries',
+		['id', 'tracker_id', 'occurred_on', 'payload'],
+		snapshot.trackerEntries.map((item) => [item.id, item.trackerId, item.date, JSON.stringify(item)]),
+		snapshot.trackerEntries.map((item) => item.id),
 		deviceId,
 		at
 	);

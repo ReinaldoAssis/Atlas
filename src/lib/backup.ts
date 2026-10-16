@@ -3,6 +3,7 @@ import type { BackupAttachment, BackupData } from './storage';
 /** Resumo do que vem num backup, usado na confirmação do import. */
 export interface BackupSummary {
 	habits: number;
+	trackers: number;
 	transactions: number;
 	timeBlocks: number;
 	notes: number;
@@ -13,6 +14,7 @@ export interface BackupSummary {
 export function summarizeBackup(data: BackupData, attachments: BackupAttachment[] = []): BackupSummary {
 	return {
 		habits: data.snapshot.habits.filter((habit) => habit.active).length,
+		trackers: (data.snapshot.trackers ?? []).filter((tracker) => tracker.active).length,
 		transactions: data.snapshot.transactions.length,
 		timeBlocks: data.snapshot.timeBlocks.length,
 		notes: data.notes.length,
@@ -29,6 +31,7 @@ function count(value: number, singular: string, plural: string): string {
 export function describeBackup(summary: BackupSummary): string {
 	const parts = [
 		summary.habits ? count(summary.habits, 'hábito', 'hábitos') : '',
+		summary.trackers ? count(summary.trackers, 'tracker', 'trackers') : '',
 		summary.transactions ? count(summary.transactions, 'lançamento', 'lançamentos') : '',
 		summary.timeBlocks ? count(summary.timeBlocks, 'bloco de tempo', 'blocos de tempo') : '',
 		summary.notes ? count(summary.notes, 'nota', 'notas') : '',

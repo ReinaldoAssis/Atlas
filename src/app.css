@@ -108,6 +108,7 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .habit-prototype { width: 100%; max-width: 480px; margin: 0 auto; padding: 10px 10px 40px; color: var(--hp-text); font: 15px/1.4 'Bricolage Grotesque', system-ui, sans-serif; }
 .habit-prototype *, .habit-prototype-overlay *, .habit-prototype-celebration * { box-sizing: border-box; }
 .habit-prototype button, .habit-prototype-overlay button, .habit-prototype-celebration button { border: 0; color: inherit; font: inherit; text-align: left; touch-action: manipulation; }
+.habit-switch { display: grid; width: min(320px, 100%); margin: 0 auto; padding: 6px 4px 14px; }
 .habit-prototype-top { display: flex; align-items: center; gap: 14px; padding: 6px 4px 12px; }
 .habit-prototype-streak { display: flex; align-items: center; gap: 4px; color: var(--hp-flame); }
 .habit-prototype-streak svg { animation: habit-prototype-flame 1.6s ease-in-out infinite; transform-origin: 50% 90%; }

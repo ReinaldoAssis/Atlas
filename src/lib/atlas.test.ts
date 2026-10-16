@@ -143,6 +143,8 @@ describe('createEmptySnapshot', () => {
 		expect(snapshot.transactions).toEqual([]);
 		expect(snapshot.habits).toEqual([]);
 		expect(snapshot.habitLogs).toEqual([]);
+		expect(snapshot.trackers).toEqual([]);
+		expect(snapshot.trackerEntries).toEqual([]);
 		expect(snapshot.timeBlocks).toEqual([]);
 		expect(snapshot.experience.totalXp).toBe(0);
 		expect(snapshot.finance.streak).toBe(0);
@@ -161,6 +163,8 @@ describe('demoSnapshot (modo de teste)', () => {
 		const snapshot = demoSnapshot();
 		expect(snapshot.transactions.length).toBeGreaterThan(0);
 		expect(snapshot.habits.length).toBeGreaterThan(0);
+		expect(snapshot.trackers.length).toBeGreaterThan(0);
+		expect(snapshot.trackerEntries.length).toBeGreaterThan(0);
 		expect(snapshot.timeBlocks.length).toBeGreaterThan(0);
 		expect(snapshot.experience.totalXp).toBeGreaterThan(0);
 		expect(snapshot.graph.nodes.length).toBeGreaterThan(1);

@@ -50,6 +50,35 @@ export interface HabitLog {
 	experienceAwarded?: boolean;
 }
 
+/**
+ * Tracker — acompanhamento sem recorrência (ex.: peso corporal).
+ *
+ * Diferente de hábito: não tem dias programados, streak nem meta diária.
+ * Guarda um histórico de registros (`TrackerEntry`), vários por dia.
+ */
+export interface Tracker {
+	id: string;
+	name: string;
+	unit: string;
+	/** Valor de referência opcional (ex.: 70 para 70 kg). */
+	target: number | null;
+	/** Qual lado da meta é o "bom" (`up` = maior é melhor). */
+	targetDirection: 'up' | 'down';
+	active: boolean;
+	createdAt: string;
+}
+
+export interface TrackerEntry {
+	id: string;
+	trackerId: string;
+	/** Data local `YYYY-MM-DD`. */
+	date: string;
+	/** Hora local `HH:MM` opcional. */
+	time?: string;
+	value: number;
+	note?: string;
+}
+
 export interface ExperienceState {
 	totalXp: number;
 }
@@ -98,6 +127,8 @@ export interface AtlasSnapshot {
 	transactions: Transaction[];
 	habits: Habit[];
 	habitLogs: HabitLog[];
+	trackers: Tracker[];
+	trackerEntries: TrackerEntry[];
 	timeBlocks: TimeBlock[];
 	lifeForce: LifeForceState;
 	experience: ExperienceState;
@@ -130,6 +161,8 @@ export function createEmptySnapshot(): AtlasSnapshot {
 		transactions: [],
 		habits: [],
 		habitLogs: [],
+		trackers: [],
+		trackerEntries: [],
 		timeBlocks: [],
 		experience: { totalXp: 0 },
 		lifeForce: {
