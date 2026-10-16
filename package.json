@@ -18,7 +18,7 @@
 		"check": "svelte-kit sync && paraglide-js compile --project ./project.inlang && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"test": "vitest run",
-		"pretest": "paraglide-js compile --project ./project.inlang",
+		"pretest": "svelte-kit sync && paraglide-js compile --project ./project.inlang",
 		"test:watch": "vitest"
 	},
 	"devDependencies": {
@@ -57,6 +57,7 @@
 		"@tauri-apps/plugin-fs": "^2.7.1",
 		"@tauri-apps/plugin-haptics": "^2.4.2",
 		"@tauri-apps/plugin-notification": "^2.7.0",
+		"@tauri-apps/plugin-opener": "^2.7.2",
 		"@tauri-apps/plugin-sql": "^2.6.0",
 		"carta-md": "^4.11.5",
 		"dompurify": "^3.4.17",

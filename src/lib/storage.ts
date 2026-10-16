@@ -514,10 +514,13 @@ export async function importBackup(file: File, password?: string): Promise<Atlas
 
 function normalizeImportedSnapshot(snapshot: AtlasSnapshot): AtlasSnapshot {
 	const defaults = createEmptySnapshot();
+	// Backup sem categorias (arquivo editado à mão ou export antigo) deixaria
+	// finanças e tempo sem categorias base: cai no padrão.
+	const categories = snapshot.categories?.length ? snapshot.categories : defaults.categories;
 	const merged = {
 		...defaults,
 		...snapshot,
-		categories: (snapshot.categories ?? defaults.categories).map(normalizeCategory),
+		categories: categories.map(normalizeCategory),
 		preferences: { ...defaults.preferences, ...snapshot.preferences },
 		experience: { ...defaults.experience, ...snapshot.experience },
 		lifeForce: { ...defaults.lifeForce, ...snapshot.lifeForce },

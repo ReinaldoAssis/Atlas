@@ -15,7 +15,8 @@ function setup(overrides: Record<string, unknown> = {}) {
 		onaddcategory: vi.fn(),
 		onrenamecategory: vi.fn(),
 		onpause: vi.fn(),
-		onbackup: vi.fn(),
+		onexport: vi.fn(),
+		onimport: vi.fn(),
 		...overrides
 	};
 	render(SettingsSheet, { props });

@@ -22,7 +22,8 @@
 		onaddcategory,
 		onrenamecategory,
 		onpause,
-		onbackup
+		onexport,
+		onimport
 	}: {
 		snapshot: AtlasSnapshot;
 		testMode: boolean;
@@ -37,7 +38,8 @@
 		onaddcategory: (input: { module: 'finance' | 'time'; name: string; color: string }) => void;
 		onrenamecategory: (category: Category) => void;
 		onpause: () => void;
-		onbackup: () => void;
+		onexport: () => void;
+		onimport: () => void;
 	} = $props();
 
 	/** Paleta de categorias do guia (`docs/DESIGN.md` §2). */
@@ -151,15 +153,13 @@
 			<h3>{m.settings_backup_title()}</h3>
 			<div class="tile">
 				<div class="actions">
-					<button type="button" class="btn" aria-disabled="true" onclick={onbackup}>
+					<button type="button" class="btn" onclick={onexport}>
 						<ArrowDownRight size={16} />
 						{m.settings_backup_export()}
-						<em>{m.settings_backup_soon()}</em>
 					</button>
-					<button type="button" class="btn" aria-disabled="true" onclick={onbackup}>
+					<button type="button" class="btn" onclick={onimport}>
 						<ArrowUpRight size={16} />
 						{m.settings_backup_import()}
-						<em>{m.settings_backup_soon()}</em>
 					</button>
 				</div>
 				<p class="footnote">{m.settings_backup_footnote()}</p>
@@ -310,15 +310,6 @@
 		font-size: 13px;
 		font-weight: 600;
 		cursor: pointer;
-	}
-	.btn em {
-		padding: 2px 6px;
-		border-radius: 6px;
-		background: var(--accd);
-		color: var(--acc);
-		font-size: 10px;
-		font-style: normal;
-		font-weight: 700;
 	}
 	.footnote {
 		margin: 0;

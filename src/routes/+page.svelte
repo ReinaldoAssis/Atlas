@@ -12,9 +12,18 @@
 		experienceProgress, type AppPreferences, type AtlasSnapshot, type Category, type Habit, type HabitLog,
 		type NavigationKey, type TimeBlock, type Transaction
 	} from '#lib/atlas';
-	import { loadSnapshot, resetStorageCache, saveSnapshot } from '#lib/storage';
+	import {
+		exportBackupV2,
+		importBackupV2,
+		loadSnapshot,
+		resetStorageCache,
+		saveSnapshot,
+		type ImportedBackup
+	} from '#lib/storage';
+	import { backupFileName, pickFile, safetyCopyName, saveBytes, writeSafetyCopy } from '#lib/backup-io';
+	import { describeBackup, summarizeBackup } from '#lib/backup';
 import { readTestMode, writeTestMode } from '#lib/test-mode';
-import { resetNotesCache } from '#lib/notes-store';
+import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachments } from '#lib/notes-store';
 	import type { Note, NotesState } from '#lib/notes';
 	import { edgeRatio, isMilestone, nodeReached, type GraphState } from '#lib/graph';
 	import { reconcileGraph } from '#lib/graph-sources';
@@ -1520,8 +1529,58 @@ import { resetNotesCache } from '#lib/notes-store';
 		closeDialog(dialog.kind === 'prompt' ? dialogValue : 'ok');
 	}
 
-	function backupComingSoon() {
-		toastMessage('Backup local chega em breve.');
+	/**
+	 * Backup local.
+	 *
+	 * Export: zip (`atlas-backup-v2`) com snapshot, notas, pastas e anexos.
+	 * Import: substitui tudo, mas guarda uma cópia do estado atual em
+	 * `backups/` antes de sobrescrever.
+	 */
+	async function currentBackupBytes(): Promise<Uint8Array> {
+		if (!snapshot) return new Uint8Array();
+		const blob = await exportBackupV2(
+			{ snapshot, notes: notesState.notes, folders: notesState.folders },
+			await collectAttachments()
+		);
+		return new Uint8Array(await blob.arrayBuffer());
+	}
+
+	async function exportData() {
+		if (!snapshot) return;
+		const result = await saveBytes(await currentBackupBytes(), backupFileName());
+		toastMessage(result === 'saved' ? 'Backup exportado.' : 'Exportação cancelada.');
+	}
+
+	async function importData() {
+		if (!snapshot) return;
+		const picked = await pickFile(['zip', 'json']);
+		if (!picked) return;
+		let imported: ImportedBackup;
+		try {
+			imported = await importBackupV2(new File([picked.bytes as BlobPart], picked.name));
+		} catch (error) {
+			toastMessage(error instanceof Error ? error.message : 'Não foi possível ler o backup.', {
+				warning: true
+			});
+			return;
+		}
+		const confirmed = await askConfirm({
+			title: 'Importar backup?',
+			message: `${picked.name} — ${describeBackup(summarizeBackup(imported.data, imported.attachments))}. Os dados atuais serão substituídos.`,
+			confirmLabel: 'Importar'
+		});
+		if (!confirmed) return;
+		await writeSafetyCopy(await currentBackupBytes(), safetyCopyName()).catch(() => null);
+		await saveSnapshot(imported.data.snapshot);
+		await replaceNotesState({ notes: imported.data.notes, folders: imported.data.folders });
+		await restoreAttachments(imported.attachments);
+		resetStorageCache();
+		resetNotesCache();
+		snapshot = null;
+		ready = false;
+		notesVersion += 1;
+		await initialize();
+		toastMessage('Backup importado.');
 	}
 
 	async function changeCurrency(value: string): Promise<boolean> {
@@ -2394,7 +2453,8 @@ import { resetNotesCache } from '#lib/notes-store';
 			onaddcategory={addCategory}
 			onrenamecategory={renameCategory}
 			onpause={() => (modal = 'pause')}
-			onbackup={backupComingSoon}
+			onexport={exportData}
+			onimport={importData}
 		/>
 	{/if}
 	{#if dialog}
