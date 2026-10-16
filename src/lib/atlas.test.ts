@@ -165,6 +165,8 @@ describe('demoSnapshot (modo de teste)', () => {
 		expect(snapshot.habits.length).toBeGreaterThan(0);
 		expect(snapshot.trackers.length).toBeGreaterThan(0);
 		expect(snapshot.trackerEntries.length).toBeGreaterThan(0);
+		expect(snapshot.trackers.every((tracker) => ['boolean', 'duration', 'count'].includes(tracker.metric))).toBe(true);
+		expect(snapshot.trackers[0].askTime).toBe(true);
 		expect(snapshot.timeBlocks.length).toBeGreaterThan(0);
 		expect(snapshot.experience.totalXp).toBeGreaterThan(0);
 		expect(snapshot.graph.nodes.length).toBeGreaterThan(1);

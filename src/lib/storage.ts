@@ -236,6 +236,22 @@ function normalizeCategory(category: Category): Category {
 	return Object.keys(patch).length ? { ...category, ...patch } : category;
 }
 
+/** Trackers criados antes dos tipos de medida (S13) não têm `metric`/`askTime`. */
+function normalizeTracker(stored: Partial<Tracker>): Tracker {
+	return {
+		id: '',
+		name: '',
+		metric: 'count',
+		unit: '',
+		target: null,
+		targetDirection: 'up',
+		askTime: false,
+		active: true,
+		createdAt: '',
+		...stored
+	} as Tracker;
+}
+
 function readPreview(): AtlasSnapshot {
 	const key = previewKey(PREVIEW_KEY);
 	const raw = localStorage.getItem(key);
@@ -251,6 +267,7 @@ function readPreview(): AtlasSnapshot {
 			...defaults,
 			...stored,
 			categories: (stored.categories ?? defaults.categories).map(normalizeCategory),
+			trackers: (stored.trackers ?? defaults.trackers).map(normalizeTracker),
 			preferences: { ...defaults.preferences, ...stored.preferences },
 			experience: { ...defaults.experience, ...stored.experience },
 			lifeForce: { ...defaults.lifeForce, ...stored.lifeForce },
@@ -306,7 +323,7 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 		transactions: transactions.map((row) => JSON.parse(row.payload) as Transaction),
 		habits: habits.map((row) => JSON.parse(row.payload) as Habit),
 		habitLogs: habitLogs.map((row) => JSON.parse(row.payload) as HabitLog),
-		trackers: trackers.map((row) => JSON.parse(row.payload) as Tracker),
+		trackers: trackers.map((row) => normalizeTracker(JSON.parse(row.payload) as Partial<Tracker>)),
 		trackerEntries: trackerEntries.map((row) => JSON.parse(row.payload) as TrackerEntry),
 		timeBlocks: timeBlocks.map((row) => JSON.parse(row.payload) as TimeBlock),
 		lifeForce,
