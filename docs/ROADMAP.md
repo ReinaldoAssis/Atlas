@@ -16,8 +16,8 @@ Escopo do produto: `docs/MVP.md`. UI: `docs/DESIGN.md`. Estado do iOS: `context/
 - Ritmo **5–10 h/semana**; **feature branch + PR**, CI obrigatório; fatias sempre verdes.
 
 **Plataformas**
-- Ciclo atual: **iOS + Windows** (macOS depois). Mac do handoff disponível (build iOS roda nele).
-- Windows: **NSIS, per-user, x64**, instalador **sem code signing** (SmartScreen aparece).
+- Ciclo atual: **iOS + Windows** (macOS depois). Máquina de trabalho atual: **macOS** (Xcode 27) — o Mac faz iOS; Windows só via CI/parceiro.
+- Windows: **NSIS, per-user, x64**, instalador **sem code signing** (SmartScreen aparece). **O build do instalador roda no job Windows do CI**, não na máquina local (macOS não gera NSIS). A verificação manual do instalador continua exigindo uma máquina Windows.
 - **Updater** via **GitHub Releases**, **só Windows**; release por **tag semver**, versão **automática pela tag**.
 - CI: job **ubuntu** (check + vitest + cargo test) **+ job Windows** (check + test; build do instalador na fatia S7).
 
@@ -173,7 +173,7 @@ Fatos-chave da pesquisa:
 | C1 | Revisar `tauri.conf.json`: `bundle.windows` (targets `nsis`, `installMode`, idioma pt-BR), `productName`/`identifier` | conf | 0.5 |
 | C2 | Ajustar `bundle.targets` para não tentar empacotar tudo em toda plataforma; opcional `tauri.windows.conf.json` | conf | 0.5 |
 | C3 | Ícone `.ico` sem alpha (mesma fonte do iOS) | icons | 0.5 |
-| C4 | Build + teste do instalador em máquina limpa (Win11); validar WebView2, banco em `%APPDATA%`, notificações, dialog/fs | relatório | 1 |
+| C4 | Build do instalador no **job Windows do CI** (artefato `.exe`) + verificação manual em máquina Windows (Win11): WebView2, banco em `%APPDATA%`, notificações, dialog/fs | CI + relatório | 1 |
 | C5 | *(Opcional)* Azure Trusted Signing ou skip documentado p/ SmartScreen | doc/CI | 1–2 |
 | C6 | *(Opcional)* `tauri-plugin-updater` (exige assinatura + host) | — | 2 |
 
@@ -311,7 +311,7 @@ Ordem confirmada pelo usuário. Cada fatia termina com o CI verde e um PR.
 | **S4** | Notas com tombstone + grafo em tabelas `nodes/edges/domains` | A/D (storage) | S2 |
 | **S5** | i18n (Paraglide, pt-BR) + kit Sheet/Toggle/Segmented + Configurações reescritas | G1–G4, i18n | S3 |
 | **S6** | Pendências do handoff: backup + `openAttachment`, `PrivacyInfo.xcprivacy`, remover cabeçalho duplicado, verificar shell no device | D4, handoff | S5 |
-| **S7** | Windows: conf NSIS per-user x64 + ícone `.ico` + build local + job de build no CI | C1–C4 | S2 |
+| **S7** | Windows: conf NSIS per-user x64 + ícone `.ico` + **job de build no CI Windows** (artefato do instalador) + verificação manual do instalador numa máquina Windows | C1–C4 | S2 |
 | **S8** | Updater (GitHub Releases, Windows) + workflow de release por tag (versão automática) + CSP | C6, hardening | S7 |
 | **S9** | iOS/SideStore: `.ipa`, `docs/IOS-SIDELOAD.md`, verificação no device (Mac) | D1–D3 | S6 |
 | **S10** | Sync P2P: **spike E0 primeiro**, depois E1–E9 | E0–E9 | S4, S7 |
