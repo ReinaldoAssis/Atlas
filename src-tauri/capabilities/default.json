@@ -17,6 +17,16 @@
     "dialog:default",
     "fs:default",
     "fs:allow-appdata-write-recursive",
-    "fs:allow-appdata-meta-recursive"
+    "fs:allow-appdata-meta-recursive",
+    "fs:read-files",
+    "fs:write-files",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        {
+          "path": "$APPDATA/**"
+        }
+      ]
+    }
   ]
 }

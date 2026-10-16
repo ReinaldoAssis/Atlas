@@ -35,6 +35,13 @@ function send(method, params = {}) {
 
 await send('Page.enable');
 await send('Runtime.enable');
+if (process.env.ATLAS_DOWNLOADS) {
+	await send('Browser.setDownloadBehavior', {
+		behavior: 'allow',
+		downloadPath: process.env.ATLAS_DOWNLOADS,
+		eventsEnabled: true
+	});
+}
 await send('Emulation.setDeviceMetricsOverride', {
 	width: Number(width),
 	height: Number(height),
