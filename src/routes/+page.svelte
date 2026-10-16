@@ -10,7 +10,7 @@
 		currentStreak, dateOffset, didMeetTarget, formatMinutes, id, localDate, money, weekStartDate, WEEK_MAX,
 		TIME_SLOT_START_HOUR, TIME_SLOT_COUNT, TIME_SLOT_MINUTES,
 		experienceProgress, type AppPreferences, type AtlasSnapshot, type Category, type Habit, type HabitLog,
-		type NavigationKey, type TimeBlock, type Transaction
+		type NavigationKey, type TimeBlock, type Tracker, type TrackerEntry, type Transaction
 	} from '#lib/atlas';
 	import {
 		exportBackupV2,
@@ -30,6 +30,7 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 	import { reconcileGraph } from '#lib/graph-sources';
 	import GraphView from '#lib/components/graph/GraphView.svelte';
 	import NotesView from '#lib/components/notes/NotesView.svelte';
+	import TrackersView from '#lib/components/habits/TrackersView.svelte';
 	import SettingsSheet from '#lib/components/settings/SettingsSheet.svelte';
 	import Button from '#lib/components/ui/Button.svelte';
 	import Chip from '#lib/components/ui/Chip.svelte';
@@ -64,6 +65,8 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 	let ready = $state(false);
 	let loadError = $state('');
 	let activeTab = $state<NavigationKey>('dashboard');
+	/** Sub-aba do módulo Hábitos: hábitos recorrentes ou trackers. */
+	let habitView = $state<'habits' | 'trackers'>('habits');
 	let notesState = $state<NotesState>({ notes: [], folders: [] });
 	let notesVersion = $state(0);
 	let period = $state<Period>('week');
@@ -1097,6 +1100,75 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 		playTone(380, 0.1, 'sine', 0.05, snapshot?.preferences.soundEnabled ?? true);
 	}
 
+	/* ---------- trackers (acompanhamento sem recorrência) ---------- */
+	async function saveTracker(tracker: Tracker, isNew: boolean) {
+		if (!snapshot) return;
+		const next = cloneSnapshot();
+		const index = next.trackers.findIndex((item) => item.id === tracker.id);
+		if (index >= 0) next.trackers[index] = tracker;
+		else next.trackers.unshift(tracker);
+		await commit(next);
+		toastMessage(isNew ? 'Tracker criado.' : 'Tracker atualizado.');
+	}
+
+	async function archiveTracker(tracker: Tracker, active: boolean) {
+		if (!snapshot) return;
+		const before = snapshot.trackers.map((item) => ({ ...item }));
+		const next = cloneSnapshot();
+		next.trackers = next.trackers.map((item) => (item.id === tracker.id ? { ...item, active } : item));
+		await commit(next);
+		toastMessage(active ? 'Tracker reativado.' : 'Tracker arquivado. O histórico fica guardado.', {
+			undo: () => {
+				const copy = cloneSnapshot();
+				copy.trackers = before;
+				void commit(copy);
+			}
+		});
+	}
+
+	async function deleteTracker(tracker: Tracker) {
+		if (!snapshot) return;
+		const beforeTrackers = snapshot.trackers.map((item) => ({ ...item }));
+		const beforeEntries = snapshot.trackerEntries.filter((item) => item.trackerId === tracker.id).map((item) => ({ ...item }));
+		const next = cloneSnapshot();
+		next.trackers = next.trackers.filter((item) => item.id !== tracker.id);
+		next.trackerEntries = next.trackerEntries.filter((item) => item.trackerId !== tracker.id);
+		await commit(next);
+		toastMessage(`Tracker "${tracker.name}" excluído.`, {
+			undo: () => {
+				const copy = cloneSnapshot();
+				copy.trackers = beforeTrackers;
+				copy.trackerEntries = beforeEntries;
+				void commit(copy);
+			}
+		});
+	}
+
+	async function saveTrackerEntry(entry: TrackerEntry, isNew: boolean) {
+		if (!snapshot) return;
+		const next = cloneSnapshot();
+		const index = next.trackerEntries.findIndex((item) => item.id === entry.id);
+		if (index >= 0) next.trackerEntries[index] = entry;
+		else next.trackerEntries.unshift(entry);
+		await commit(next);
+		toastMessage(isNew ? 'Registro salvo.' : 'Registro atualizado.');
+	}
+
+	async function deleteTrackerEntry(entry: TrackerEntry) {
+		if (!snapshot) return;
+		const before = { ...entry };
+		const next = cloneSnapshot();
+		next.trackerEntries = next.trackerEntries.filter((item) => item.id !== entry.id);
+		await commit(next);
+		toastMessage('Registro removido.', {
+			undo: () => {
+				const copy = cloneSnapshot();
+				copy.trackerEntries = [before, ...copy.trackerEntries];
+				void commit(copy);
+			}
+		});
+	}
+
 	function pickDashHabit(habit: Habit) {
 		dashHabitPicker = false;
 		if (habit.metric === 'boolean') {
@@ -2109,6 +2181,32 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 					</section>
 				{:else if activeTab === 'habits'}
 					{#if snapshot}
+						<div class="habit-switch">
+							<Segmented
+								label="Seção de hábitos"
+								options={[
+									{ value: 'habits', label: 'Hábitos' },
+									{ value: 'trackers', label: 'Trackers' }
+								]}
+								value={habitView}
+								onchange={(value) => (habitView = value === 'trackers' ? 'trackers' : 'habits')}
+							/>
+						</div>
+						{#if habitView === 'trackers'}
+							<TrackersView
+								trackers={snapshot.trackers}
+								entries={snapshot.trackerEntries}
+								sound={snapshot.preferences.soundEnabled}
+								haptics={snapshot.preferences.hapticsEnabled}
+								oncreatetracker={(tracker) => saveTracker(tracker, true)}
+								onupdatetracker={(tracker) => saveTracker(tracker, false)}
+								onarchive={archiveTracker}
+								ondeletetracker={deleteTracker}
+								oncreateentry={(entry) => saveTrackerEntry(entry, true)}
+								onupdateentry={(entry) => saveTrackerEntry(entry, false)}
+								ondeleteentry={deleteTrackerEntry}
+							/>
+						{:else}
 						<section class="habit-prototype" aria-label="Hábitos">
 							<div class="habit-prototype-top">
 								<div class="habit-prototype-level"><small>Nível {levelProgress.level}</small><div class="habit-prototype-xpbar"><i style={`width:${levelProgress.currentXp / levelProgress.nextLevelXp * 100}%`}></i></div></div>
@@ -2164,6 +2262,7 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 								<div class="habit-prototype-dev"><button onclick={resetPrototypeDay}>Reiniciar dia</button></div>
 							{/if}
 						</section>
+						{/if}
 					{/if}
 				{:else if activeTab === 'time'}
 					<section class="tp-prototype" aria-label="Tempo">
