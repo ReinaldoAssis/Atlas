@@ -23,6 +23,7 @@
 	import { backupFileName, pickFile, safetyCopyName, saveBytes, writeSafetyCopy } from '#lib/backup-io';
 	import { describeBackup, summarizeBackup } from '#lib/backup';
 import { readTestMode, writeTestMode } from '#lib/test-mode';
+import { checkForUpdate, relaunchApp, updaterSupportedHere } from '#lib/updater';
 import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachments } from '#lib/notes-store';
 	import type { Note, NotesState } from '#lib/notes';
 	import { edgeRatio, isMilestone, nodeReached, type GraphState } from '#lib/graph';
@@ -72,6 +73,9 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 	let currentTime = $state(new Date());
 	let modal = $state<ModalKind>(null);
 	let testModeActive = $state(false);
+	let updaterAvailable = $state(false);
+	let updaterBusy = $state(false);
+	let updaterStatus = $state('');
 	let toast = $state('');
 	let toastWarning = $state(false);
 	let toastUndo = $state<(() => void) | null>(null);
@@ -477,6 +481,7 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 
 	async function initialize() {
 		testModeActive = readTestMode();
+		updaterAvailable = updaterSupportedHere();
 		try {
 			const loaded = await loadSnapshot();
 			advanceLifeForce(loaded);
@@ -1583,6 +1588,42 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 		toastMessage('Backup importado.');
 	}
 
+	/** S8: updater (GitHub Releases) — só Windows. */
+	async function checkAppUpdate() {
+		if (updaterBusy) return;
+		updaterBusy = true;
+		updaterStatus = 'Procurando atualização…';
+		try {
+			const update = await checkForUpdate();
+			if (!update) {
+				updaterStatus = 'Atlas está na versão mais recente';
+				return;
+			}
+			updaterStatus = `Versão ${update.version} disponível`;
+			const confirmed = await askConfirm({
+				title: 'Instalar atualização?',
+				message: `O Atlas baixa a versão ${update.version}, instala e reinicia.`,
+				confirmLabel: 'Instalar'
+			});
+			if (!confirmed) {
+				updaterStatus = '';
+				return;
+			}
+			await update.install((percent) => {
+				updaterStatus = percent === null ? 'Baixando…' : `Baixando… ${percent}%`;
+			});
+			updaterStatus = 'Instalado — reabrindo';
+			toastMessage('Atualização instalada.');
+			await relaunchApp();
+		} catch (error) {
+			console.error(error);
+			updaterStatus = 'Não foi possível atualizar agora';
+			toastMessage('Não foi possível atualizar agora.', { warning: true });
+		} finally {
+			updaterBusy = false;
+		}
+	}
+
 	async function changeCurrency(value: string): Promise<boolean> {
 		if (!snapshot || value === snapshot.preferences.currency) return true;
 		const confirmed = await askConfirm({
@@ -2445,6 +2486,9 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 		<SettingsSheet
 			{snapshot}
 			testMode={testModeActive}
+			{updaterAvailable}
+			{updaterBusy}
+			{updaterStatus}
 			onclose={() => (modal = null)}
 			onnotifications={toggleNotifications}
 			onpreference={setFeedbackPreference}
@@ -2455,6 +2499,7 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 			onpause={() => (modal = 'pause')}
 			onexport={exportData}
 			onimport={importData}
+			oncheckupdates={checkAppUpdate}
 		/>
 	{/if}
 	{#if dialog}

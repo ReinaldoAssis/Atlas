@@ -36,3 +36,9 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-haptics = "2"
 tauri-plugin-opener = "2.7.2"
+
+# Updater e relaunch só existem no desktop (o S8 é Windows). Ficam no target
+# desktop para o `tauri ios build` não puxar reqwest/zip no iOS.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
