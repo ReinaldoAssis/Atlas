@@ -3,7 +3,7 @@
 	import { isTauri } from '@tauri-apps/api/core';
 	import {
 		ArrowDownRight, ArrowUpRight, Bell, CalendarDays, Check, ChevronLeft, CircleDollarSign,
-		Flame, Keyboard, LayoutDashboard, Menu, NotebookPen, Plus, Route, Settings2, Target, Vibrate, Volume2,
+		Flame, FlaskConical, Keyboard, LayoutDashboard, Menu, NotebookPen, Plus, Route, Settings2, Target, Vibrate, Volume2,
 		Wallet, X, type LucideIcon
 	} from '@lucide/svelte';
 	import {
@@ -12,7 +12,9 @@
 		experienceProgress, type AppPreferences, type AtlasSnapshot, type Category, type Habit, type HabitLog,
 		type NavigationKey, type TimeBlock, type Transaction
 	} from '#lib/atlas';
-	import { loadSnapshot, saveSnapshot } from '#lib/storage';
+	import { loadSnapshot, resetStorageCache, saveSnapshot } from '#lib/storage';
+import { readTestMode, writeTestMode } from '#lib/test-mode';
+import { resetNotesCache } from '#lib/notes-store';
 	import type { Note, NotesState } from '#lib/notes';
 	import { edgeRatio, isMilestone, nodeReached, type GraphState } from '#lib/graph';
 	import { reconcileGraph } from '#lib/graph-sources';
@@ -54,6 +56,7 @@
 	let timeWeekStart = $state(weekStart(localDate()));
 	let currentTime = $state(new Date());
 	let modal = $state<ModalKind>(null);
+	let testModeActive = $state(false);
 	let toast = $state('');
 	let toastWarning = $state(false);
 	let toastUndo = $state<(() => void) | null>(null);
@@ -460,6 +463,7 @@
 	});
 
 	async function initialize() {
+		testModeActive = readTestMode();
 		try {
 			const loaded = await loadSnapshot();
 			advanceLifeForce(loaded);
@@ -1421,6 +1425,40 @@
 		await commit(next);
 	}
 
+	/**
+	 * Liga/desliga o modo de teste.
+	 *
+	 * Troca o banco ativo (`atlas.db` ↔ `atlas.test.db`), limpa os caches e
+	 * recarrega tudo. Os dados reais nunca são tocados.
+	 */
+	async function toggleTestMode(enabled: boolean) {
+		const hasData = Boolean(
+			snapshot && (snapshot.transactions.length || snapshot.habits.length || snapshot.timeBlocks.length)
+		);
+		if (enabled && hasData) {
+			const confirmed = await askConfirm({
+				title: 'Ativar modo de teste?',
+				message:
+					'O Atlas passa a usar um banco separado com dados de exemplo. Seus dados reais ficam intactos e voltam ao desativar.',
+				confirmLabel: 'Ativar'
+			});
+			if (!confirmed) return;
+		}
+		writeTestMode(enabled);
+		resetStorageCache();
+		resetNotesCache();
+		testModeActive = enabled;
+		snapshot = null;
+		ready = false;
+		notesVersion += 1;
+		await initialize();
+		toastMessage(enabled ? 'Modo de teste ativado.' : 'Modo de teste desativado.');
+	}
+
+	async function onTestModeToggle(event: Event) {
+		await toggleTestMode((event.currentTarget as HTMLInputElement).checked);
+	}
+
 	async function setFeedbackPreference(key: 'soundEnabled' | 'hapticsEnabled' | 'typingSoundEnabled', event: Event) {
 		const enabled = (event.currentTarget as HTMLInputElement).checked;
 		await updatePreferences({ [key]: enabled });
@@ -2116,6 +2154,13 @@
 		<div id="ov" class:on={quickMenuOpen || moreMenuOpen} role="presentation" onclick={closeShellMenus}></div>
 	</div>
 
+	{#if testModeActive}
+		<div class="test-mode-banner" role="status">
+			<span><FlaskConical size={15} /> Modo de teste</span>
+			<button type="button" onclick={() => toggleTestMode(false)}>Desativar</button>
+		</div>
+	{/if}
+
 	{#if habitSheet}
 		{@const sheetHabit = habitSheet}
 		<div class="habit-prototype-overlay" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) habitSheet = null; }}>
@@ -2238,7 +2283,7 @@
 					{:else if modal === 'pause'}
 						<form onsubmit={startPause} class="modal-form"><div class="pause-explainer"><Flame size={20} /><p>Na pausa, Life Force, streaks e lembretes ficam suspensos. Seus dados continuam guardados.</p></div><label>Data de retorno<input type="date" bind:value={pauseForm.until} min={dateOffset(today, 1)} required /></label><div class="modal-actions"><button type="button" class="button-secondary" onclick={() => (modal = null)}>Agora não</button><button class="button-primary">Ativar pausa</button></div></form>
 					{:else if modal === 'settings'}
-						<div class="settings-content"><section class="settings-section"><div class="settings-title"><div><strong>Preferências</strong><span>Este dispositivo</span></div></div><label class="settings-row"><span><Bell size={17} /><span><strong>Lembretes locais</strong><small>Hábito e blocos de tempo</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.notificationsEnabled} onchange={toggleNotifications} /></label><label class="settings-row"><span><Volume2 size={17} /><span><strong>Sons da interface</strong><small>Toques discretos em ações e registros</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.soundEnabled} onchange={(event) => setFeedbackPreference('soundEnabled', event)} /></label><label class="settings-row"><span><Keyboard size={17} /><span><strong>Som de digitação</strong><small>Teclas ao escrever notas e pesquisar</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.typingSoundEnabled} onchange={(event) => setFeedbackPreference('typingSoundEnabled', event)} /></label><label class="settings-row"><span><Vibrate size={17} /><span><strong>Feedback tátil</strong><small>Vibração curta em dispositivos compatíveis</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.hapticsEnabled} onchange={(event) => setFeedbackPreference('hapticsEnabled', event)} /></label><label class="settings-row"><span><CircleDollarSign size={17} /><span><strong>Moeda base</strong><small>Resumos financeiros</small></span></span><select class="compact-select" value={snapshot.preferences.currency} onchange={changeCurrency}><option value="BRL">BRL · Real</option><option value="USD">USD · Dólar</option><option value="EUR">EUR · Euro</option></select></label></section><section class="settings-section"><div class="settings-title"><div><strong>Backup local</strong><span>Escolha o formato ao exportar</span></div></div><div class="backup-actions"><button type="button" class="button-secondary is-soon" aria-disabled="true" onclick={backupComingSoon}><ArrowDownRight size={16} /> Exportar dados<span class="soon-tag">Em breve</span></button><button type="button" class="button-secondary is-soon" aria-disabled="true" onclick={backupComingSoon}><ArrowUpRight size={16} /> Importar arquivo<span class="soon-tag">Em breve</span></button></div><p class="settings-footnote">Backup local chega em breve. Os dados já ficam salvos neste dispositivo.</p></section><section class="settings-section"><div class="settings-title"><div><strong>Categorias</strong><span>Finanças e tempo</span></div></div><form class="inline-category-form" onsubmit={addCategory}><select bind:value={categoryForm.module}><option value="finance">Finanças</option><option value="time">Tempo</option></select><input bind:value={categoryForm.name} placeholder="Nova categoria" required /><input aria-label="Cor da categoria" type="color" bind:value={categoryForm.color} /><button class="icon-button add-category" aria-label="Adicionar categoria"><Plus size={16} /></button></form><div class="category-edit-list">{#each snapshot.categories as category}<button onclick={() => renameCategory(category)}><i style={`background:${category.color}`}></i>{category.name}<span>{category.module === 'finance' ? 'Finanças' : 'Tempo'}</span></button>{/each}</div></section><button class="pause-link" onclick={() => (modal = 'pause')}><Flame size={16} /> Pausar Atlas até uma data</button></div>
+						<div class="settings-content"><section class="settings-section"><div class="settings-title"><div><strong>Preferências</strong><span>Este dispositivo</span></div></div><label class="settings-row"><span><Bell size={17} /><span><strong>Lembretes locais</strong><small>Hábito e blocos de tempo</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.notificationsEnabled} onchange={toggleNotifications} /></label><label class="settings-row"><span><Volume2 size={17} /><span><strong>Sons da interface</strong><small>Toques discretos em ações e registros</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.soundEnabled} onchange={(event) => setFeedbackPreference('soundEnabled', event)} /></label><label class="settings-row"><span><Keyboard size={17} /><span><strong>Som de digitação</strong><small>Teclas ao escrever notas e pesquisar</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.typingSoundEnabled} onchange={(event) => setFeedbackPreference('typingSoundEnabled', event)} /></label><label class="settings-row"><span><Vibrate size={17} /><span><strong>Feedback tátil</strong><small>Vibração curta em dispositivos compatíveis</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.hapticsEnabled} onchange={(event) => setFeedbackPreference('hapticsEnabled', event)} /></label><label class="settings-row"><span><CircleDollarSign size={17} /><span><strong>Moeda base</strong><small>Resumos financeiros</small></span></span><select class="compact-select" value={snapshot.preferences.currency} onchange={changeCurrency}><option value="BRL">BRL · Real</option><option value="USD">USD · Dólar</option><option value="EUR">EUR · Euro</option></select></label><label class="settings-row"><span><FlaskConical size={17} /><span><strong>Modo de teste</strong><small>Banco separado com dados de exemplo</small></span></span><input class="toggle-input" type="checkbox" checked={testModeActive} onchange={onTestModeToggle} /></label></section><section class="settings-section"><div class="settings-title"><div><strong>Backup local</strong><span>Escolha o formato ao exportar</span></div></div><div class="backup-actions"><button type="button" class="button-secondary is-soon" aria-disabled="true" onclick={backupComingSoon}><ArrowDownRight size={16} /> Exportar dados<span class="soon-tag">Em breve</span></button><button type="button" class="button-secondary is-soon" aria-disabled="true" onclick={backupComingSoon}><ArrowUpRight size={16} /> Importar arquivo<span class="soon-tag">Em breve</span></button></div><p class="settings-footnote">Backup local chega em breve. Os dados já ficam salvos neste dispositivo.</p></section><section class="settings-section"><div class="settings-title"><div><strong>Categorias</strong><span>Finanças e tempo</span></div></div><form class="inline-category-form" onsubmit={addCategory}><select bind:value={categoryForm.module}><option value="finance">Finanças</option><option value="time">Tempo</option></select><input bind:value={categoryForm.name} placeholder="Nova categoria" required /><input aria-label="Cor da categoria" type="color" bind:value={categoryForm.color} /><button class="icon-button add-category" aria-label="Adicionar categoria"><Plus size={16} /></button></form><div class="category-edit-list">{#each snapshot.categories as category}<button onclick={() => renameCategory(category)}><i style={`background:${category.color}`}></i>{category.name}<span>{category.module === 'finance' ? 'Finanças' : 'Tempo'}</span></button>{/each}</div></section><button class="pause-link" onclick={() => (modal = 'pause')}><Flame size={16} /> Pausar Atlas até uma data</button></div>
 					{/if}
 			</div>
 		</div>

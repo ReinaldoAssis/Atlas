@@ -27,6 +27,8 @@ import {
 	upsertSql,
 	type BatchStatement
 } from './db/persist';
+import { demoSnapshot } from './fixtures';
+import { activeDbName, previewKey, readTestMode } from './test-mode';
 
 const PREVIEW_KEY = 'atlas-preview-state-v1';
 const LIFEFORCE_MIGRATION_KEY = 'atlas-preview-lifeforce-v3';
@@ -47,11 +49,24 @@ const knownActiveIds: Record<string, Set<string>> = {};
 let database: Promise<Database> | undefined;
 
 export async function getDatabase(): Promise<Database> {
-	if (!database) database = Database.load('sqlite:atlas.db');
+	if (!database) database = Database.load(activeDbName());
 	return database;
 }
 
 let initialized: Promise<Database> | undefined;
+
+/**
+ * Fecha os caches de conexão/estado.
+ *
+ * Necessário ao alternar o modo de teste: o banco ativo muda de arquivo e as
+ * conexões, o schema e os ids conhecidos deixam de valer.
+ */
+export function resetStorageCache(): void {
+	database = undefined;
+	initialized = undefined;
+	writeQueue = Promise.resolve();
+	for (const key of Object.keys(knownActiveIds)) delete knownActiveIds[key];
+}
 
 /**
  * Abre o banco e garante o schema uma única vez por sessão.
@@ -104,7 +119,7 @@ async function initializeDatabase(db: Database): Promise<void> {
 	};
 	await runMigrations(ctx);
 	await purgeTombstones(db);
-	await ensureDeviceId(db);
+	const deviceId = await ensureDeviceId(db);
 	const categoryRows = await db.select<Array<{ id: string }>>(
 		'SELECT id FROM categories WHERE deleted_at IS NULL LIMIT 1'
 	);
@@ -117,6 +132,29 @@ async function initializeDatabase(db: Database): Promise<void> {
 			]);
 		}
 	}
+	if (readTestMode()) await seedTestData(db, deviceId);
+}
+
+/** Popula o banco de teste com dados de exemplo, uma vez. */
+async function seedTestData(db: Database, deviceId: string): Promise<void> {
+	const seeded = await db.select<Array<{ key: string }>>('SELECT key FROM app_settings WHERE key = $1', [
+		'test_seeded'
+	]);
+	if (seeded.length > 0) return;
+	const [habits, transactions, blocks] = await Promise.all([
+		db.select<Array<{ id: string }>>('SELECT id FROM habits WHERE deleted_at IS NULL LIMIT 1'),
+		db.select<Array<{ id: string }>>('SELECT id FROM transactions WHERE deleted_at IS NULL LIMIT 1'),
+		db.select<Array<{ id: string }>>('SELECT id FROM time_blocks WHERE deleted_at IS NULL LIMIT 1')
+	]);
+	if (habits.length + transactions.length + blocks.length > 0) return;
+	const nextKnown: Record<string, Set<string>> = {};
+	const statements = buildSnapshotStatements(demoSnapshot(), deviceId, Date.now(), nextKnown);
+	statements.push({
+		sql: 'INSERT OR REPLACE INTO app_settings (key, value) VALUES ($1, $2)',
+		params: ['test_seeded', JSON.stringify(true)]
+	});
+	await invoke('db_batch', { db: activeDbName(), statements });
+	Object.assign(knownActiveIds, nextKnown);
 }
 
 /** Remove lápides antigas (o sync futuro não precisa revivê-las). */
@@ -189,10 +227,11 @@ function normalizeCategory(category: Category): Category {
 }
 
 function readPreview(): AtlasSnapshot {
-	const raw = localStorage.getItem(PREVIEW_KEY);
+	const key = previewKey(PREVIEW_KEY);
+	const raw = localStorage.getItem(key);
 	if (!raw) {
-		const initial = createEmptySnapshot();
-		localStorage.setItem(PREVIEW_KEY, JSON.stringify(initial));
+		const initial = readTestMode() ? demoSnapshot() : createEmptySnapshot();
+		localStorage.setItem(key, JSON.stringify(initial));
 		return initial;
 	}
 	try {
@@ -262,84 +301,91 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	return snapshot;
 }
 
+/** Statements do snapshot inteiro (upserts + lápides + settings). */
+function buildSnapshotStatements(
+	snapshot: AtlasSnapshot,
+	deviceId: string,
+	at: number,
+	nextKnown: Record<string, Set<string>>
+): BatchStatement[] {
+	const statements: BatchStatement[] = [];
+	pushRows(
+		statements,
+		nextKnown,
+		'categories',
+		['id', 'module', 'payload'],
+		snapshot.categories.map((item) => [item.id, item.module, JSON.stringify(item)]),
+		snapshot.categories.map((item) => item.id),
+		deviceId,
+		at
+	);
+	pushRows(
+		statements,
+		nextKnown,
+		'transactions',
+		['id', 'occurred_on', 'payload'],
+		snapshot.transactions.map((item) => [item.id, item.date, JSON.stringify(item)]),
+		snapshot.transactions.map((item) => item.id),
+		deviceId,
+		at
+	);
+	pushRows(
+		statements,
+		nextKnown,
+		'habits',
+		['id', 'payload'],
+		snapshot.habits.map((item) => [item.id, JSON.stringify(item)]),
+		snapshot.habits.map((item) => item.id),
+		deviceId,
+		at
+	);
+	pushRows(
+		statements,
+		nextKnown,
+		'habit_logs',
+		['id', 'habit_id', 'occurred_on', 'payload'],
+		snapshot.habitLogs.map((item) => [item.id, item.habitId, item.date, JSON.stringify(item)]),
+		snapshot.habitLogs.map((item) => item.id),
+		deviceId,
+		at
+	);
+	pushRows(
+		statements,
+		nextKnown,
+		'time_blocks',
+		['id', 'starts_at', 'payload'],
+		snapshot.timeBlocks.map((item) => [item.id, item.startAt, JSON.stringify(item)]),
+		snapshot.timeBlocks.map((item) => item.id),
+		deviceId,
+		at
+	);
+	statements.push(
+		...settingStatements({
+			lifeForce: snapshot.lifeForce,
+			preferences: snapshot.preferences,
+			experience: snapshot.experience,
+			finance: snapshot.finance,
+			graph: snapshot.graph
+		})
+	);
+	return statements;
+}
+
 export function saveSnapshot(snapshot: AtlasSnapshot): Promise<void> {
 	if (!isTauri()) {
-		localStorage.setItem(PREVIEW_KEY, JSON.stringify(snapshot));
+		localStorage.setItem(previewKey(PREVIEW_KEY), JSON.stringify(snapshot));
 		return Promise.resolve();
 	}
 	return runSerialized(async () => {
 		// Garante `load` + schema (e o pool) antes de escrever.
 		const db = await getReadyDatabase();
 		const deviceId = await ensureDeviceId(db);
-		const at = Date.now();
-		const statements: BatchStatement[] = [];
 		// Só aplicamos os ids conhecidos se a gravação tiver sucesso, para que
 		// uma falha não "esqueça" lápides pendentes.
 		const nextKnown: Record<string, Set<string>> = {};
-
-		pushRows(
-			statements,
-			nextKnown,
-			'categories',
-			['id', 'module', 'payload'],
-			snapshot.categories.map((item) => [item.id, item.module, JSON.stringify(item)]),
-			snapshot.categories.map((item) => item.id),
-			deviceId,
-			at
-		);
-		pushRows(
-			statements,
-			nextKnown,
-			'transactions',
-			['id', 'occurred_on', 'payload'],
-			snapshot.transactions.map((item) => [item.id, item.date, JSON.stringify(item)]),
-			snapshot.transactions.map((item) => item.id),
-			deviceId,
-			at
-		);
-		pushRows(
-			statements,
-			nextKnown,
-			'habits',
-			['id', 'payload'],
-			snapshot.habits.map((item) => [item.id, JSON.stringify(item)]),
-			snapshot.habits.map((item) => item.id),
-			deviceId,
-			at
-		);
-		pushRows(
-			statements,
-			nextKnown,
-			'habit_logs',
-			['id', 'habit_id', 'occurred_on', 'payload'],
-			snapshot.habitLogs.map((item) => [item.id, item.habitId, item.date, JSON.stringify(item)]),
-			snapshot.habitLogs.map((item) => item.id),
-			deviceId,
-			at
-		);
-		pushRows(
-			statements,
-			nextKnown,
-			'time_blocks',
-			['id', 'starts_at', 'payload'],
-			snapshot.timeBlocks.map((item) => [item.id, item.startAt, JSON.stringify(item)]),
-			snapshot.timeBlocks.map((item) => item.id),
-			deviceId,
-			at
-		);
-
-		statements.push(
-			...settingStatements({
-				lifeForce: snapshot.lifeForce,
-				preferences: snapshot.preferences,
-				experience: snapshot.experience,
-				finance: snapshot.finance,
-				graph: snapshot.graph
-			})
-		);
-
+		const statements = buildSnapshotStatements(snapshot, deviceId, Date.now(), nextKnown);
 		// Uma transação numa única conexão (ver `db_batch` no lib.rs).
-		await invoke('db_batch', { db: 'sqlite:atlas.db', statements });
+		await invoke('db_batch', { db: activeDbName(), statements });
 		Object.assign(knownActiveIds, nextKnown);
 	});
 }
