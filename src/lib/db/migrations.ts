@@ -25,9 +25,14 @@ async function hasColumn(ctx: SqlContext, table: string, column: string): Promis
 	return rows.some((row) => row.name === column);
 }
 
-async function addColumn(ctx: SqlContext, table: string, column: string, ddl: string): Promise<void> {
+/** Adiciona a coluna se ainda não existir (SQLite não tem `ADD COLUMN IF NOT EXISTS`). */
+export async function ensureColumn(ctx: SqlContext, table: string, column: string, ddl: string): Promise<void> {
 	if (await hasColumn(ctx, table, column)) return;
 	await ctx.execute(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+}
+
+async function addColumn(ctx: SqlContext, table: string, column: string, ddl: string): Promise<void> {
+	return ensureColumn(ctx, table, column, ddl);
 }
 
 export const migrations: Migration[] = [
@@ -88,7 +93,60 @@ export const migrations: Migration[] = [
 			await ctx.execute("DELETE FROM habits WHERE id LIKE 'demo-%'");
 			await ctx.execute("DELETE FROM time_blocks WHERE id LIKE 'demo-%'");
 			await ctx.execute("DELETE FROM habit_logs WHERE habit_id LIKE 'demo-%'");
-			await ctx.execute("DELETE FROM app_settings WHERE key IN ('finance', 'lifeForce', 'experience', 'graph', 'seeded')");
+			await ctx.execute("DELETE FROM app_settings WHERE key IN ('finance', 'lifeForce', 'experience', 'seeded')");
+		}
+	},
+	{
+		version: 4,
+		name: 'notes-and-graph-tables',
+		// Notas/pastas ganham metadados de sync; o grafo sai do blob JSON em
+		// `app_settings` e vira tabelas por entidade.
+		run: async (ctx) => {
+			await ctx.execute(`CREATE TABLE IF NOT EXISTS folders (
+				id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
+				position INTEGER NOT NULL DEFAULT 0, payload TEXT NOT NULL
+			)`);
+			await ctx.execute(`CREATE TABLE IF NOT EXISTS notes (
+				id TEXT PRIMARY KEY, folder_id TEXT, title TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+				pinned INTEGER NOT NULL DEFAULT 0, payload TEXT NOT NULL
+			)`);
+			for (const table of ['notes', 'folders']) {
+				await addColumn(ctx, table, 'deleted_at', 'deleted_at INTEGER');
+				await addColumn(ctx, table, 'device_id', 'device_id TEXT');
+			}
+			for (const table of ['graph_domains', 'graph_nodes', 'graph_edges']) {
+				await ctx.execute(`CREATE TABLE IF NOT EXISTS ${table} (
+					id TEXT PRIMARY KEY, payload TEXT NOT NULL,
+					updated_at INTEGER NOT NULL DEFAULT 0, deleted_at INTEGER, device_id TEXT
+				)`);
+			}
+			// Migra o blob do grafo uma única vez.
+			const existing = await ctx.select<{ id: string }>('SELECT id FROM graph_nodes LIMIT 1');
+			if (existing.length === 0) {
+				const rows = await ctx.select<{ value: string }>('SELECT value FROM app_settings WHERE key = $1', ['graph']);
+				if (rows.length > 0 && rows[0].value) {
+					try {
+						const graph = JSON.parse(rows[0].value) as {
+							domains?: Array<{ id: string }>;
+							nodes?: Array<{ id: string }>;
+							edges?: Array<{ id: string }>;
+						};
+						for (const domain of graph.domains ?? []) {
+							await ctx.execute('INSERT OR IGNORE INTO graph_domains (id, payload) VALUES ($1, $2)', [domain.id, JSON.stringify(domain)]);
+						}
+						for (const node of graph.nodes ?? []) {
+							await ctx.execute('INSERT OR IGNORE INTO graph_nodes (id, payload) VALUES ($1, $2)', [node.id, JSON.stringify(node)]);
+						}
+						for (const edge of graph.edges ?? []) {
+							await ctx.execute('INSERT OR IGNORE INTO graph_edges (id, payload) VALUES ($1, $2)', [edge.id, JSON.stringify(edge)]);
+						}
+					} catch {
+						/* blob inválido: ignora (o grafo cai no default) */
+					}
+				}
+			}
+			await ctx.execute("DELETE FROM app_settings WHERE key = 'graph'");
 		}
 	}
 ];

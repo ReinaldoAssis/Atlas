@@ -38,7 +38,7 @@ export function tombstoneStatements(table: string, ids: string[], at: number, de
 }
 
 /** Chaves de `app_settings` que nunca são apagadas (não entram no DELETE geral). */
-export const SETTING_KEYS = ['lifeForce', 'preferences', 'experience', 'finance', 'graph'] as const;
+export const SETTING_KEYS = ['lifeForce', 'preferences', 'experience', 'finance'] as const;
 
 export function settingStatements(values: Record<string, unknown>): BatchStatement[] {
 	return SETTING_KEYS.filter((key) => key in values).map((key) => ({
