@@ -2,8 +2,8 @@
 	import { onMount } from 'svelte';
 	import { isTauri } from '@tauri-apps/api/core';
 	import {
-		ArrowDownRight, ArrowUpRight, Bell, CalendarDays, Check, ChevronLeft, CircleDollarSign,
-		Flame, FlaskConical, Keyboard, LayoutDashboard, Menu, NotebookPen, Plus, Route, Settings2, Target, Vibrate, Volume2,
+		CalendarDays, Check, ChevronLeft,
+		Flame, FlaskConical, LayoutDashboard, Menu, NotebookPen, Plus, Route, Settings2, Target,
 		Wallet, X, type LucideIcon
 	} from '@lucide/svelte';
 	import {
@@ -20,6 +20,7 @@ import { resetNotesCache } from '#lib/notes-store';
 	import { reconcileGraph } from '#lib/graph-sources';
 	import GraphView from '#lib/components/graph/GraphView.svelte';
 	import NotesView from '#lib/components/notes/NotesView.svelte';
+	import SettingsSheet from '#lib/components/settings/SettingsSheet.svelte';
 	import {
 		burstAt, centerOf, confetti, floatValue, playFeedback, playTone, popElement,
 		prefersReducedMotion, pulseHaptic, vibrate
@@ -339,8 +340,6 @@ import { resetNotesCache } from '#lib/notes-store';
 	let timeSummaryOpen = $state(false);
 	let timeScrollReady = false;
 	let pauseForm = $state({ until: dateOffset(localDate(), 7) });
-	let categoryForm = $state({ module: 'finance' as 'finance' | 'time', name: '', color: '#b8cf78' });
-
 	onMount(() => {
 		let interval: ReturnType<typeof setInterval> | undefined;
 		const onPointerMove = (event: PointerEvent) => continueTimePaint(event);
@@ -1459,8 +1458,10 @@ import { resetNotesCache } from '#lib/notes-store';
 		await toggleTestMode((event.currentTarget as HTMLInputElement).checked);
 	}
 
-	async function setFeedbackPreference(key: 'soundEnabled' | 'hapticsEnabled' | 'typingSoundEnabled', event: Event) {
-		const enabled = (event.currentTarget as HTMLInputElement).checked;
+	async function setFeedbackPreference(
+		key: 'soundEnabled' | 'hapticsEnabled' | 'typingSoundEnabled',
+		enabled: boolean
+	) {
 		await updatePreferences({ [key]: enabled });
 		if (key === 'hapticsEnabled') pulseHaptic(enabled, [10, 22, 14]);
 		else playFeedback(key === 'typingSoundEnabled' ? 'paint' : 'success', enabled);
@@ -1518,29 +1519,23 @@ import { resetNotesCache } from '#lib/notes-store';
 		toastMessage('Backup local chega em breve.');
 	}
 
-	async function changeCurrency(event: Event) {
-		const select = event.currentTarget as HTMLSelectElement;
-		const value = select.value;
-		if (!snapshot || value === snapshot.preferences.currency) return;
+	async function changeCurrency(value: string): Promise<boolean> {
+		if (!snapshot || value === snapshot.preferences.currency) return true;
 		const confirmed = await askConfirm({
 			title: 'Trocar moeda base',
 			message: 'Alterar a moeda base muda apenas a forma de exibição. O Atlas não converte os valores já registrados.',
 			confirmLabel: 'Trocar'
 		});
-		if (!confirmed) {
-			select.value = snapshot.preferences.currency;
-			return;
-		}
+		if (!confirmed) return false;
 		await updatePreferences({ currency: value });
+		return true;
 	}
 
-	async function addCategory(event: SubmitEvent) {
-		event.preventDefault();
-		if (!snapshot || !categoryForm.name.trim()) return;
+	async function addCategory(input: { module: 'finance' | 'time'; name: string; color: string }) {
+		if (!snapshot || !input.name.trim()) return;
 		const next = cloneSnapshot();
-		next.categories.push({ id: id(), module: categoryForm.module, name: categoryForm.name.trim(), color: categoryForm.color, custom: true });
+		next.categories.push({ id: id(), module: input.module, name: input.name.trim(), color: input.color, custom: true });
 		await commit(next);
-		categoryForm.name = '';
 		toastMessage('Categoria adicionada.');
 	}
 
@@ -1676,9 +1671,9 @@ import { resetNotesCache } from '#lib/notes-store';
 		}
 	}
 
-	async function toggleNotifications() {
+	async function toggleNotifications(enabled: boolean) {
 		if (!snapshot) return;
-		const nextEnabled = !snapshot.preferences.notificationsEnabled;
+		const nextEnabled = enabled;
 		if (nextEnabled) {
 			try {
 				if (isTauriApp()) {
@@ -2271,10 +2266,10 @@ import { resetNotesCache } from '#lib/notes-store';
 		</div>
 	{/if}
 
-	{#if modal}
+	{#if modal && modal !== 'settings'}
 		<div class="modal-backdrop" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) modal = null; }}>
 			<div class="modal-card" role="dialog" aria-modal="true" aria-label="Janela Atlas" tabindex="-1">
-			<div class="modal-heading"><div><span class="eyebrow">ATLAS · SEU ESPAÇO</span><h2>{modal === 'transaction' ? editingTransactionId ? 'Editar lançamento' : 'Novo lançamento' : modal === 'habit' ? 'Novo hábito' : modal === 'settings' ? 'Preferências' : 'Pausa e descanso'}</h2></div><button class="icon-button" aria-label="Fechar" onclick={() => (modal = null)}><X size={19} /></button></div>
+			<div class="modal-heading"><div><h2>{modal === 'transaction' ? editingTransactionId ? 'Editar lançamento' : 'Novo lançamento' : modal === 'habit' ? 'Novo hábito' : 'Pausa e descanso'}</h2></div><button class="icon-button" aria-label="Fechar" onclick={() => (modal = null)}><X size={19} /></button></div>
 				{#if formError}<div class="form-error">{formError}</div>{/if}
 				{#if modal === 'transaction'}
 					<form onsubmit={saveTransaction} class="modal-form"><div class="segmented full-segmented"><button type="button" class:chosen={transactionForm.type === 'expense'} onclick={() => (transactionForm.type = 'expense')}>Despesa</button><button type="button" class:chosen={transactionForm.type === 'income'} onclick={() => (transactionForm.type = 'income')}>Receita</button></div><label>Descrição<input bind:value={transactionForm.description} placeholder="Ex.: mercado da semana" /></label><div class="form-row"><label>Valor ({currency()})<input bind:value={transactionForm.amount} inputmode="decimal" placeholder="0,00" required /></label><label>Data<input bind:value={transactionForm.date} type="date" required /></label></div><label>Categoria<select bind:value={transactionForm.categoryId} required>{#each snapshot.categories.filter((item) => item.module === 'finance') as category}<option value={category.id}>{category.name}</option>{/each}</select></label><div class="modal-actions"><button type="button" class="button-secondary" onclick={() => (modal = null)}>Cancelar</button><button class="button-primary"><Check size={16} /> {editingTransactionId ? 'Salvar alterações' : 'Salvar lançamento'}</button></div></form>
@@ -2282,16 +2277,29 @@ import { resetNotesCache } from '#lib/notes-store';
 						<form onsubmit={saveHabit} class="modal-form"><label>Nome do hábito<input bind:value={habitForm.name} placeholder="Ex.: leitura, caminhada…" required /></label><label>Como medir?<select bind:value={habitForm.metric}><option value="boolean">Feito ou não feito</option><option value="duration">Duração</option><option value="count">Contagem</option></select></label>{#if habitForm.metric !== 'boolean'}<div class="form-row"><label>Meta por dia<input bind:value={habitForm.target} type="number" min="1" required /></label>{#if habitForm.metric === 'count'}<label>Unidade<input bind:value={habitForm.unit} placeholder="páginas, copos…" required /></label>{:else}<div class="static-field"><span>Unidade</span><span class="input-static">minutos</span></div>{/if}</div>{/if}<fieldset class="day-choice"><legend>Dias programados</legend><div>{#each ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'] as day, index}<button type="button" class:active-day={habitForm.scheduledDays.includes(index)} aria-label={`Selecionar dia ${index}`} onclick={() => toggleScheduledDay(index)}>{day}</button>{/each}</div></fieldset><label class="optional-label">Lembrete <span>opcional</span><input type="time" bind:value={habitForm.reminder} /></label><div class="modal-actions"><button type="button" class="button-secondary" onclick={() => (modal = null)}>Cancelar</button><button class="button-primary"><Check size={16} /> Criar hábito</button></div></form>
 					{:else if modal === 'pause'}
 						<form onsubmit={startPause} class="modal-form"><div class="pause-explainer"><Flame size={20} /><p>Na pausa, Life Force, streaks e lembretes ficam suspensos. Seus dados continuam guardados.</p></div><label>Data de retorno<input type="date" bind:value={pauseForm.until} min={dateOffset(today, 1)} required /></label><div class="modal-actions"><button type="button" class="button-secondary" onclick={() => (modal = null)}>Agora não</button><button class="button-primary">Ativar pausa</button></div></form>
-					{:else if modal === 'settings'}
-						<div class="settings-content"><section class="settings-section"><div class="settings-title"><div><strong>Preferências</strong><span>Este dispositivo</span></div></div><label class="settings-row"><span><Bell size={17} /><span><strong>Lembretes locais</strong><small>Hábito e blocos de tempo</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.notificationsEnabled} onchange={toggleNotifications} /></label><label class="settings-row"><span><Volume2 size={17} /><span><strong>Sons da interface</strong><small>Toques discretos em ações e registros</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.soundEnabled} onchange={(event) => setFeedbackPreference('soundEnabled', event)} /></label><label class="settings-row"><span><Keyboard size={17} /><span><strong>Som de digitação</strong><small>Teclas ao escrever notas e pesquisar</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.typingSoundEnabled} onchange={(event) => setFeedbackPreference('typingSoundEnabled', event)} /></label><label class="settings-row"><span><Vibrate size={17} /><span><strong>Feedback tátil</strong><small>Vibração curta em dispositivos compatíveis</small></span></span><input class="toggle-input" type="checkbox" checked={snapshot.preferences.hapticsEnabled} onchange={(event) => setFeedbackPreference('hapticsEnabled', event)} /></label><label class="settings-row"><span><CircleDollarSign size={17} /><span><strong>Moeda base</strong><small>Resumos financeiros</small></span></span><select class="compact-select" value={snapshot.preferences.currency} onchange={changeCurrency}><option value="BRL">BRL · Real</option><option value="USD">USD · Dólar</option><option value="EUR">EUR · Euro</option></select></label><label class="settings-row"><span><FlaskConical size={17} /><span><strong>Modo de teste</strong><small>Banco separado com dados de exemplo</small></span></span><input class="toggle-input" type="checkbox" checked={testModeActive} onchange={onTestModeToggle} /></label></section><section class="settings-section"><div class="settings-title"><div><strong>Backup local</strong><span>Escolha o formato ao exportar</span></div></div><div class="backup-actions"><button type="button" class="button-secondary is-soon" aria-disabled="true" onclick={backupComingSoon}><ArrowDownRight size={16} /> Exportar dados<span class="soon-tag">Em breve</span></button><button type="button" class="button-secondary is-soon" aria-disabled="true" onclick={backupComingSoon}><ArrowUpRight size={16} /> Importar arquivo<span class="soon-tag">Em breve</span></button></div><p class="settings-footnote">Backup local chega em breve. Os dados já ficam salvos neste dispositivo.</p></section><section class="settings-section"><div class="settings-title"><div><strong>Categorias</strong><span>Finanças e tempo</span></div></div><form class="inline-category-form" onsubmit={addCategory}><select bind:value={categoryForm.module}><option value="finance">Finanças</option><option value="time">Tempo</option></select><input bind:value={categoryForm.name} placeholder="Nova categoria" required /><input aria-label="Cor da categoria" type="color" bind:value={categoryForm.color} /><button class="icon-button add-category" aria-label="Adicionar categoria"><Plus size={16} /></button></form><div class="category-edit-list">{#each snapshot.categories as category}<button onclick={() => renameCategory(category)}><i style={`background:${category.color}`}></i>{category.name}<span>{category.module === 'finance' ? 'Finanças' : 'Tempo'}</span></button>{/each}</div></section><button class="pause-link" onclick={() => (modal = 'pause')}><Flame size={16} /> Pausar Atlas até uma data</button></div>
 					{/if}
 			</div>
 		</div>
 	{/if}
+	{#if modal === 'settings' && snapshot}
+		<SettingsSheet
+			{snapshot}
+			testMode={testModeActive}
+			onclose={() => (modal = null)}
+			onnotifications={toggleNotifications}
+			onpreference={setFeedbackPreference}
+			oncurrency={changeCurrency}
+			ontestmode={toggleTestMode}
+			onaddcategory={addCategory}
+			onrenamecategory={renameCategory}
+			onpause={() => (modal = 'pause')}
+			onbackup={backupComingSoon}
+		/>
+	{/if}
 	{#if dialog}
 		<div class="modal-backdrop" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) closeDialog(null); }}>
 			<div class="modal-card dialog-card" role="dialog" aria-modal="true" aria-label={dialog.title}>
-				<div class="modal-heading"><div><span class="eyebrow">ATLAS · SEU ESPAÇO</span><h2>{dialog.title}</h2></div><button class="icon-button" aria-label="Fechar" onclick={() => closeDialog(null)}><X size={19} /></button></div>
+				<div class="modal-heading"><div><h2>{dialog.title}</h2></div><button class="icon-button" aria-label="Fechar" onclick={() => closeDialog(null)}><X size={19} /></button></div>
 				<form class="modal-form" onsubmit={submitDialog}>
 					{#if dialog.kind === 'prompt'}
 						<label>{dialog.label}<input bind:this={dialogInput} bind:value={dialogValue} placeholder={dialog.placeholder ?? ''} /></label>
