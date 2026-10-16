@@ -28,6 +28,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "Reinaldo Assis",
+    "copyright": "GPL-3.0 · github.com/ReinaldoAssis/Atlas",
+    "shortDescription": "Registro pessoal do dia a dia: hábitos, finanças, tempo, notas e grafo da vida.",
+    "category": "Productivity",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

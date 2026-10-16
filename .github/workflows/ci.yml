@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -48,3 +49,35 @@ jobs:
         with:
           workspaces: src-tauri
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+  # Instalador Windows (NSIS, per-user, x64). Só roda no Windows: é a única
+  # plataforma que produz o `.exe`. O artefato sai daqui (S7) e é o que vai
+  # para o GitHub Releases no S8.
+  windows-installer:
+    name: Instalador Windows (NSIS)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Build do instalador
+        run: npm run tauri build
+      - name: Conferir o artefato
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe -ErrorAction SilentlyContinue
+          if (-not $installer) { throw 'NSIS não gerou nenhum .exe' }
+          $installer | Format-Table Name, Length
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atlas-windows-nsis
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 14
