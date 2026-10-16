@@ -377,6 +377,12 @@ export async function listAttachments(noteId: string): Promise<string[]> {
 	}
 }
 
+/** Caminho absoluto de um anexo — usado pelo `openPath` no desktop. */
+export async function attachmentAbsolutePath(noteId: string, name: string): Promise<string> {
+	const { appDataDir, join } = await import('@tauri-apps/api/path');
+	return join(await appDataDir(), attachmentPath(noteId, name));
+}
+
 export async function readAttachment(noteId: string, name: string): Promise<Uint8Array | null> {
 	if (!isTauri()) return null;
 	try {

@@ -2,12 +2,14 @@
 	import { mount, onMount, untrack } from 'svelte';
 	import { getCarta, decodeArtifact } from '#lib/carta';
 	import {
+		attachmentAbsolutePath,
 		attachmentsEnabled,
 		deleteAttachment,
 		listAttachments,
 		readAttachment,
 		saveAttachment
 	} from '#lib/notes-store';
+	import { isIOSWebView, isTauriApp, saveBytes } from '#lib/backup-io';
 	import { isTauri } from '@tauri-apps/api/core';
 	import {
 		findNoteByTitle,
@@ -248,16 +250,24 @@
 		await refreshAttachments();
 	}
 
+	/**
+	 * Abrir anexo.
+	 *
+	 * - Desktop (Tauri): abre no app padrão do sistema (`openPath`).
+	 * - iOS: `<a download>` com blob não funciona no WKWebView, então usamos o
+	 *   picker do iOS para exportar o arquivo para onde o usuário escolher.
+	 * - Navegador: download por blob, como antes.
+	 */
 	async function openAttachment(name: string) {
 		const bytes = await readAttachment(note.id, name);
 		if (!bytes) return;
-		const url = URL.createObjectURL(new Blob([bytes as BlobPart]));
-		objectUrls.push(url);
-		const anchor = document.createElement('a');
-		anchor.href = url;
-		anchor.download = name;
-		anchor.rel = 'noopener';
-		anchor.click();
+		if (!isTauriApp() || isIOSWebView()) {
+			const result = await saveBytes(bytes, name);
+			ontoast(result === 'saved' ? 'Anexo exportado.' : 'Exportação cancelada.');
+			return;
+		}
+		const { openPath } = await import('@tauri-apps/plugin-opener');
+		await openPath(await attachmentAbsolutePath(note.id, name));
 	}
 
 	function onPreviewClick(event: MouseEvent) {
