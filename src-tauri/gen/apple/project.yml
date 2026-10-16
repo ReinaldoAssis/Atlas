@@ -59,6 +59,11 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         CFBundleShortVersionString: 0.1.0
         CFBundleVersion: "0.1.0"
+        # Backup/anexos: o export no iOS escreve em Documents antes de o picker
+        # mover o arquivo. Com essas chaves a pasta fica acessível em
+        # Arquivos › Atlas, servindo de escape manual se o picker falhar.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
     entitlements:
       path: app_iOS/app_iOS.entitlements
     scheme:
