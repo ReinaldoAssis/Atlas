@@ -56,12 +56,18 @@ npm run ipa
 
 - `--no-sign` é **necessário**: o SideStore assina com o Apple ID gratuito. O
   build sai sem `_CodeSignature` e sem precisar de time/certificado.
-- O artefato fica em `src-tauri/gen/apple/build/arm64/Atlas.ipa` (também há
+- Artefato fica em `src-tauri/gen/apple/build/arm64/Atlas.ipa` (também há
   cópia em `src-tauri/gen/apple/build/Atlas.ipa`).
 - `ios build` usa **release** por padrão e roda `npm run build` do front antes
   (SPA estático em `build/`).
 - Se o build reclamar de `cargo` não encontrado, rode de um shell interativo
   (o script phase do Xcode herda o PATH do processo que lançou o `tauri`).
+
+Verificado no Mac (Xcode 27): o `.ipa` sai com **7,4 MB sem `_CodeSignature`**,
+com `Payload/Atlas.app/PrivacyInfo.xcprivacy` dentro, `Info.plist` com
+`com.randroi75.atlas`/`MinimumOSVersion 15.4`/`UIFileSharingEnabled` e o Swift
+do plugin `opener` linkado no binário. O que falta é só o lado do iPhone
+(instalar e passar o checklist da seção 6).
 
 ## 3. Instalar o Atlas pelo SideStore
 

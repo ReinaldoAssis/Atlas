@@ -30,6 +30,10 @@ Ele sai do **job `windows-installer`** do CI (`Instalador Windows (NSIS)`):
 Não existe build local: **NSIS só compila no Windows**. No macOS não há como
 gerar esse artefato.
 
+Primeira execução validada (16/10/2026, PR #12): job verde em 8m33s com cache
+frio, produzindo **`Atlas_0.1.0_x64-setup.exe` (7,0 MB)** — o nome confirma o
+padrão `Atlas_<versão>_x64-setup.exe`.
+
 ## Instalar
 
 1. Baixe o `.exe` (ex.: `Atlas_0.1.0_x64-setup.exe`).
