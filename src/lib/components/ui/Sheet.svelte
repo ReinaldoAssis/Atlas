@@ -42,7 +42,10 @@
 		const previous = document.activeElement as HTMLElement | null;
 		const previousOverflow = document.body.style.overflow;
 		document.body.style.overflow = 'hidden';
-		(focusables()[0] ?? panel)?.focus();
+		const preferred = panel?.querySelector<HTMLElement>('[data-autofocus]') ?? null;
+		const target = preferred ?? focusables()[0] ?? panel;
+		target?.focus();
+		if (preferred instanceof HTMLInputElement && preferred.type !== 'date' && preferred.type !== 'time') preferred.select();
 
 		function onKeydown(event: KeyboardEvent) {
 			if (event.key === 'Escape') {

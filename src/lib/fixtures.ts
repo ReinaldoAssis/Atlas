@@ -81,8 +81,8 @@ export function demoTimeBlocks(): TimeBlock[] {
 export function demoTrackers(): Tracker[] {
 	const created = new Date().toISOString();
 	return [
-		{ id: 'demo-tracker-peso', name: 'Peso', unit: 'kg', target: 72, targetDirection: 'down', active: true, createdAt: created },
-		{ id: 'demo-tracker-humor', name: 'Humor', unit: '', target: null, targetDirection: 'up', active: true, createdAt: created }
+		{ id: 'demo-tracker-peso', name: 'Peso', metric: 'count', unit: 'kg', target: 72, targetDirection: 'down', askTime: true, active: true, createdAt: created },
+		{ id: 'demo-tracker-humor', name: 'Humor', metric: 'count', unit: '', target: null, targetDirection: 'up', askTime: false, active: true, createdAt: created }
 	];
 }
 

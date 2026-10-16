@@ -54,16 +54,23 @@ export interface HabitLog {
  * Tracker — acompanhamento sem recorrência (ex.: peso corporal).
  *
  * Diferente de hábito: não tem dias programados, streak nem meta diária.
- * Guarda um histórico de registros (`TrackerEntry`), vários por dia.
+ * Os tipos de medida são os mesmos dos hábitos (`boolean`, `duration`,
+ * `count`) — sem `weekly`. Guarda um histórico de registros (`TrackerEntry`),
+ * vários por dia.
  */
+export type TrackerMetric = 'boolean' | 'duration' | 'count';
+
 export interface Tracker {
 	id: string;
 	name: string;
+	metric: TrackerMetric;
 	unit: string;
 	/** Valor de referência opcional (ex.: 70 para 70 kg). */
 	target: number | null;
 	/** Qual lado da meta é o "bom" (`up` = maior é melhor). */
 	targetDirection: 'up' | 'down';
+	/** Perguntar a hora no lançamento rápido (senão usa a hora atual). */
+	askTime: boolean;
 	active: boolean;
 	createdAt: string;
 }

@@ -375,6 +375,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	});
 
 	let transactionForm = $state({ type: 'expense' as 'income' | 'expense', amount: '', categoryId: '', date: localDate(), description: '' });
+	let amountInput = $state<HTMLInputElement | null>(null);
 	let habitForm = $state({ name: '', metric: 'boolean' as Habit['metric'], unit: '', target: '1', scheduledDays: [1, 2, 3, 4, 5] as number[], reminder: '' });
 	let habitValues = $state<Record<string, string>>({});
 	let habitSheet = $state<Habit | null>(null);
@@ -928,6 +929,41 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			force.lastDecayDate = cursor;
 		}
 	}
+
+	/** Teclado do lançamento: dígitos caem no Valor quando o foco não está num campo. */
+	$effect(() => {
+		if (modal !== 'transaction') return;
+		const onKey = (event: KeyboardEvent) => {
+			if (event.metaKey || event.ctrlKey || event.altKey) return;
+			const active = document.activeElement as HTMLElement | null;
+			const inField = Boolean(
+				active &&
+					(active.tagName === 'INPUT' ||
+						active.tagName === 'TEXTAREA' ||
+						active.tagName === 'SELECT' ||
+						active.isContentEditable)
+			);
+			if (inField) return;
+			if (/^[0-9]$/.test(event.key) || event.key === ',' || event.key === '.') {
+				event.preventDefault();
+				transactionForm.amount = `${transactionForm.amount}${event.key}`;
+				amountInput?.focus();
+				return;
+			}
+			if (event.key === 'Backspace') {
+				event.preventDefault();
+				transactionForm.amount = transactionForm.amount.slice(0, -1);
+				amountInput?.focus();
+				return;
+			}
+			if (event.key === 'Enter') {
+				event.preventDefault();
+				document.querySelector<HTMLFormElement>('.sheet-form')?.requestSubmit();
+			}
+		};
+		window.addEventListener('keydown', onKey);
+		return () => window.removeEventListener('keydown', onKey);
+	});
 
 	function cloneSnapshot(): AtlasSnapshot {
 		return JSON.parse(JSON.stringify(snapshot)) as AtlasSnapshot;
@@ -2620,7 +2656,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					</Field>
 					<div class="sheet-row">
 						<Field label={`Valor (${currency()})`}>
-							<input bind:value={transactionForm.amount} inputmode="decimal" placeholder="0,00" required />
+							<input bind:this={amountInput} data-autofocus bind:value={transactionForm.amount} inputmode="decimal" placeholder="0,00" required />
 						</Field>
 						<Field label="Data">
 							<input bind:value={transactionForm.date} type="date" required />

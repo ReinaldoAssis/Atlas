@@ -459,10 +459,14 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .tp-c.on.st { border-radius: 8px 8px 0 0; }
 .tp-c.on.en { border-radius: 0 0 8px 8px; }
 .tp-c.on.st.en { border-radius: 8px; }
-/* Bloco com nota referenciando o horário: indicador discreto + bolha. */
+/* Bloco com nota referenciando o horário: contorno nas pontas do bloco + ponto.
+   O contorno é desenhado só nas células de início/fim — se fosse em toda
+   célula, apareceria uma linha no meio do bloco. */
 .tp-c { position: relative; }
-.tp-c.nt { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--lime) 65%, transparent); }
-.tp-c.hr.nt { box-shadow: inset 0 1px 0 #3a403a, inset 0 0 0 1.5px color-mix(in srgb, var(--lime) 65%, transparent); }
+.tp-c.nt { --tp-note-line: color-mix(in srgb, var(--lime) 65%, transparent); }
+.tp-c.nt.st { box-shadow: inset 1.5px 0 0 var(--tp-note-line), inset 0 1.5px 0 var(--tp-note-line); }
+.tp-c.nt.en { box-shadow: inset -1.5px 0 0 var(--tp-note-line), inset 0 -1.5px 0 var(--tp-note-line); }
+.tp-c.nt.st.en { box-shadow: inset 1.5px 0 0 var(--tp-note-line), inset -1.5px 0 0 var(--tp-note-line), inset 0 1.5px 0 var(--tp-note-line), inset 0 -1.5px 0 var(--tp-note-line); }
 .tp-note-dot { position: absolute; top: 4px; right: 4px; width: 5px; height: 5px; border-radius: 50%; background: var(--lime); }
 .tp-note-bubble {
 	position: fixed;
