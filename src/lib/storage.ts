@@ -15,7 +15,7 @@ import {
 	type TimeBlock,
 	type Transaction
 } from './atlas';
-import { normalizeGraph, type GraphState } from './graph';
+import { normalizeGraph } from './graph';
 import { reconcileGraph } from './graph-sources';
 import type { Note, NoteFolder } from './notes';
 import { normalizeNotesState } from './notes';
@@ -35,6 +35,8 @@ const LIFEFORCE_MIGRATION_KEY = 'atlas-preview-lifeforce-v3';
 /** Lápides de deleção são purgadas após esse prazo. */
 const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const SYNC_TABLES = ['categories', 'transactions', 'habits', 'habit_logs', 'time_blocks'] as const;
+/** Tabelas cujas lápides são purgadas (inclui grafo e notas/pastas). */
+const PURGE_TABLES = [...SYNC_TABLES, 'graph_domains', 'graph_nodes', 'graph_edges', 'notes', 'folders'];
 
 /**
  * Últimos ids ativos conhecidos por tabela.
@@ -160,7 +162,7 @@ async function seedTestData(db: Database, deviceId: string): Promise<void> {
 /** Remove lápides antigas (o sync futuro não precisa revivê-las). */
 async function purgeTombstones(db: Database): Promise<void> {
 	const cutoff = String(Date.now() - TOMBSTONE_TTL_MS);
-	for (const table of SYNC_TABLES) {
+	for (const table of PURGE_TABLES) {
 		await db.execute(`DELETE FROM ${table} WHERE deleted_at IS NOT NULL AND deleted_at < $1`, [cutoff]);
 	}
 }
@@ -177,6 +179,12 @@ async function ensureDeviceId(db: Database): Promise<string> {
 		JSON.stringify(value)
 	]);
 	return value;
+}
+
+/** `device_id` desta instalação, criado se necessário. */
+export async function getDeviceId(): Promise<string> {
+	const db = await getReadyDatabase();
+	return ensureDeviceId(db);
 }
 
 /** Monta os upserts das linhas e as lápides das que sumiram. */
@@ -264,12 +272,15 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	if (!isTauri()) return readPreview();
 	const db = await getReadyDatabase();
 	await writeQueue;
-	const [categories, transactions, habits, habitLogs, timeBlocks, settings] = await Promise.all([
+	const [categories, transactions, habits, habitLogs, timeBlocks, graphDomains, graphNodes, graphEdges, settings] = await Promise.all([
 		db.select<Array<{ payload: string }>>('SELECT payload FROM categories WHERE deleted_at IS NULL'),
 		db.select<Array<{ payload: string }>>('SELECT payload FROM transactions WHERE deleted_at IS NULL ORDER BY occurred_on DESC'),
 		db.select<Array<{ payload: string }>>('SELECT payload FROM habits WHERE deleted_at IS NULL'),
 		db.select<Array<{ payload: string }>>('SELECT payload FROM habit_logs WHERE deleted_at IS NULL ORDER BY occurred_on DESC'),
 		db.select<Array<{ payload: string }>>('SELECT payload FROM time_blocks WHERE deleted_at IS NULL ORDER BY starts_at DESC'),
+		db.select<Array<{ payload: string }>>('SELECT payload FROM graph_domains WHERE deleted_at IS NULL'),
+		db.select<Array<{ payload: string }>>('SELECT payload FROM graph_nodes WHERE deleted_at IS NULL'),
+		db.select<Array<{ payload: string }>>('SELECT payload FROM graph_edges WHERE deleted_at IS NULL'),
 		db.select<Array<{ key: string; value: string }>>('SELECT key, value FROM app_settings')
 	]);
 	const settingsMap = Object.fromEntries(settings.map((item) => [item.key, JSON.parse(item.value)]));
@@ -278,7 +289,14 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	const experience = { ...defaults.experience, ...(settingsMap.experience ?? {}) } as ExperienceState;
 	const finance = { ...defaults.finance, ...(settingsMap.finance ?? {}) } as FinanceState;
 	const preferences = { ...defaults.preferences, ...(settingsMap.preferences ?? {}) };
-	const graph = settingsMap.graph ? normalizeGraph(settingsMap.graph as GraphState) : defaults.graph;
+	const graph =
+		graphDomains.length + graphNodes.length + graphEdges.length === 0
+			? defaults.graph
+			: normalizeGraph({
+					domains: graphDomains.map((row) => JSON.parse(row.payload)),
+					nodes: graphNodes.map((row) => JSON.parse(row.payload)),
+					edges: graphEdges.map((row) => JSON.parse(row.payload))
+				});
 	const snapshot = {
 		categories: categories.map((row) => normalizeCategory(JSON.parse(row.payload) as Category)),
 		transactions: transactions.map((row) => JSON.parse(row.payload) as Transaction),
@@ -298,6 +316,9 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	knownActiveIds.habits = new Set(snapshot.habits.map((item) => item.id));
 	knownActiveIds.habit_logs = new Set(snapshot.habitLogs.map((item) => item.id));
 	knownActiveIds.time_blocks = new Set(snapshot.timeBlocks.map((item) => item.id));
+	knownActiveIds.graph_domains = new Set(snapshot.graph.domains.map((item) => item.id));
+	knownActiveIds.graph_nodes = new Set(snapshot.graph.nodes.map((item) => item.id));
+	knownActiveIds.graph_edges = new Set(snapshot.graph.edges.map((item) => item.id));
 	return snapshot;
 }
 
@@ -359,13 +380,42 @@ function buildSnapshotStatements(
 		deviceId,
 		at
 	);
+	pushRows(
+		statements,
+		nextKnown,
+		'graph_domains',
+		['id', 'payload'],
+		snapshot.graph.domains.map((item) => [item.id, JSON.stringify(item)]),
+		snapshot.graph.domains.map((item) => item.id),
+		deviceId,
+		at
+	);
+	pushRows(
+		statements,
+		nextKnown,
+		'graph_nodes',
+		['id', 'payload'],
+		snapshot.graph.nodes.map((item) => [item.id, JSON.stringify(item)]),
+		snapshot.graph.nodes.map((item) => item.id),
+		deviceId,
+		at
+	);
+	pushRows(
+		statements,
+		nextKnown,
+		'graph_edges',
+		['id', 'payload'],
+		snapshot.graph.edges.map((item) => [item.id, JSON.stringify(item)]),
+		snapshot.graph.edges.map((item) => item.id),
+		deviceId,
+		at
+	);
 	statements.push(
 		...settingStatements({
 			lifeForce: snapshot.lifeForce,
 			preferences: snapshot.preferences,
 			experience: snapshot.experience,
-			finance: snapshot.finance,
-			graph: snapshot.graph
+			finance: snapshot.finance
 		})
 	);
 	return statements;

@@ -57,4 +57,41 @@ describe('migrations', () => {
 		await runMigrations(db.ctx);
 		expect(db.executed.some((sql) => sql.includes('ADD COLUMN'))).toBe(false);
 	});
+
+	it('cria as tabelas do grafo', async () => {
+		const db = fakeContext(0);
+		await runMigrations(db.ctx);
+		expect(db.executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS graph_nodes'))).toBe(true);
+		expect(db.executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS graph_domains'))).toBe(true);
+		expect(db.executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS graph_edges'))).toBe(true);
+	});
+
+	it('migra o blob do grafo para as tabelas', async () => {
+		const graph = {
+			domains: [{ id: 'car' }],
+			nodes: [{ id: 'origem' }],
+			edges: [{ id: 'e1' }]
+		};
+		const executed: Array<{ sql: string; params?: unknown[] }> = [];
+		let version = 3;
+		const ctx: SqlContext = {
+			async execute(sql, params) {
+				executed.push({ sql, params });
+				const match = /PRAGMA user_version = (\d+)/.exec(sql);
+				if (match) version = Number(match[1]);
+			},
+			async select<T>(sql: string): Promise<T[]> {
+				if (sql.startsWith('PRAGMA user_version')) return [{ user_version: version }] as T[];
+				if (sql.startsWith('PRAGMA table_info')) return [] as T[];
+				if (sql.includes('graph_nodes')) return [] as T[];
+				if (sql.includes('app_settings')) return [{ value: JSON.stringify(graph) }] as T[];
+				return [] as T[];
+			}
+		};
+		await runMigrations(ctx);
+		expect(executed.some((entry) => entry.sql.includes('INSERT OR IGNORE INTO graph_domains'))).toBe(true);
+		expect(executed.some((entry) => entry.sql.includes('INSERT OR IGNORE INTO graph_nodes'))).toBe(true);
+		expect(executed.some((entry) => entry.sql.includes('INSERT OR IGNORE INTO graph_edges'))).toBe(true);
+		expect(executed.some((entry) => entry.sql.includes("DELETE FROM app_settings WHERE key = 'graph'"))).toBe(true);
+	});
 });

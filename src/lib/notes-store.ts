@@ -7,9 +7,11 @@
  */
 import { isTauri } from '@tauri-apps/api/core';
 import { BaseDirectory, mkdir, readDir, readFile, remove, writeFile } from '@tauri-apps/plugin-fs';
-import { getDatabase, runSerialized } from './storage';
+import { getDatabase, getDeviceId, runSerialized } from './storage';
 import { demoNotes } from './fixtures';
 import { activeDbName, attachmentsRoot, previewKey, readTestMode } from './test-mode';
+import { ensureColumn, type SqlContext } from './db/migrations';
+import { upsertSql } from './db/persist';
 import {
 	normalizeFolder,
 	normalizeNote,
@@ -52,7 +54,9 @@ async function setupSchema(): Promise<boolean> {
 		parent_id TEXT,
 		name TEXT NOT NULL,
 		position INTEGER NOT NULL DEFAULT 0,
-		payload TEXT NOT NULL
+		payload TEXT NOT NULL,
+		deleted_at INTEGER,
+		device_id TEXT
 	)`);
 	await db.execute(`CREATE TABLE IF NOT EXISTS notes (
 		id TEXT PRIMARY KEY,
@@ -61,10 +65,23 @@ async function setupSchema(): Promise<boolean> {
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL,
 		pinned INTEGER NOT NULL DEFAULT 0,
-		payload TEXT NOT NULL
+		payload TEXT NOT NULL,
+		deleted_at INTEGER,
+		device_id TEXT
 	)`);
 	await db.execute('CREATE INDEX IF NOT EXISTS notes_by_folder ON notes(folder_id)');
 	await db.execute('CREATE INDEX IF NOT EXISTS notes_by_updated ON notes(updated_at)');
+	// Tabelas podem ter vindo de uma instalação antiga (sem metadados de sync).
+	const ctx: SqlContext = {
+		execute: async (sql, params) => {
+			await db.execute(sql, params);
+		},
+		select: (sql, params) => db.select(sql, params)
+	};
+	for (const table of ['notes', 'folders']) {
+		await ensureColumn(ctx, table, 'deleted_at', 'deleted_at INTEGER');
+		await ensureColumn(ctx, table, 'device_id', 'device_id TEXT');
+	}
 	let fts = false;
 	try {
 		// Smoke test: o FTS5 pode não estar compilado no SQLite empacotado.
@@ -116,8 +133,8 @@ export async function loadNotes(): Promise<NotesState> {
 	void fts;
 	const db = await getDatabase();
 	const [noteRows, folderRows] = await Promise.all([
-		db.select<Array<{ payload: string }>>('SELECT payload FROM notes ORDER BY pinned DESC, updated_at DESC'),
-		db.select<Array<{ payload: string }>>('SELECT payload FROM folders ORDER BY position ASC')
+		db.select<Array<{ payload: string }>>('SELECT payload FROM notes WHERE deleted_at IS NULL ORDER BY pinned DESC, updated_at DESC'),
+		db.select<Array<{ payload: string }>>('SELECT payload FROM folders WHERE deleted_at IS NULL ORDER BY position ASC')
 	]);
 	const state: NotesState = {
 		notes: noteRows.map((row) => normalizeNote(JSON.parse(row.payload))),
@@ -152,12 +169,36 @@ export function replaceNotesState(state: NotesState): Promise<void> {
 		}
 		const fts = await ensureSchema();
 		const db = await getDatabase();
-		await db.execute('DELETE FROM notes');
-		await db.execute('DELETE FROM folders');
-		if (fts) await db.execute('DELETE FROM notes_fts');
+		const deviceId = await getDeviceId();
+		const at = Date.now();
+		const [existingNotes, existingFolders] = await Promise.all([
+			db.select<Array<{ id: string }>>('SELECT id FROM notes WHERE deleted_at IS NULL'),
+			db.select<Array<{ id: string }>>('SELECT id FROM folders WHERE deleted_at IS NULL')
+		]);
+		const nextNoteIds = new Set(state.notes.map((item) => item.id));
+		const nextFolderIds = new Set(state.folders.map((item) => item.id));
+		for (const row of existingNotes) {
+			if (!nextNoteIds.has(row.id)) await tombstoneRow(db, 'notes', row.id, at, deviceId, fts);
+		}
+		for (const row of existingFolders) {
+			if (!nextFolderIds.has(row.id)) await tombstoneRow(db, 'folders', row.id, at, deviceId, fts);
+		}
 		for (const folder of state.folders) await upsertFolderRaw(folder);
 		for (const note of state.notes) await upsertNoteRaw(note);
 	});
+}
+
+/** Marca uma linha como removida (lápide) em vez de apagar. */
+async function tombstoneRow(
+	db: Awaited<ReturnType<typeof getDatabase>>,
+	table: 'notes' | 'folders',
+	id: string,
+	at: number,
+	deviceId: string,
+	fts: boolean
+): Promise<void> {
+	await db.execute(`UPDATE ${table} SET deleted_at = $1, device_id = $2 WHERE id = $3`, [String(at), deviceId, id]);
+	if (fts && table === 'notes') await db.execute('DELETE FROM notes_fts WHERE note_id = $1', [id]);
 }
 
 /* ------------------------------------------------------------------ */
@@ -179,16 +220,10 @@ async function upsertNoteRaw(note: Note): Promise<void> {
 	}
 	const fts = await ensureSchema();
 	const db = await getDatabase();
+	const deviceId = await getDeviceId();
 	await db.execute(
-		`INSERT INTO notes (id, folder_id, title, created_at, updated_at, pinned, payload)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
-		 ON CONFLICT(id) DO UPDATE SET
-			folder_id = excluded.folder_id,
-			title = excluded.title,
-			updated_at = excluded.updated_at,
-			pinned = excluded.pinned,
-			payload = excluded.payload`,
-		[note.id, note.folderId, note.title, note.createdAt, note.updatedAt, note.pinned ? 1 : 0, JSON.stringify(note)]
+		upsertSql('notes', ['id', 'folder_id', 'title', 'created_at', 'updated_at', 'pinned', 'payload', 'device_id']),
+		[note.id, note.folderId, note.title, note.createdAt, note.updatedAt, note.pinned ? 1 : 0, JSON.stringify(note), deviceId]
 	);
 	if (fts) {
 		await db.execute('DELETE FROM notes_fts WHERE note_id = $1', [note.id]);
@@ -214,7 +249,12 @@ async function deleteNoteRaw(noteId: string): Promise<void> {
 	}
 	const fts = await ensureSchema();
 	const db = await getDatabase();
-	await db.execute('DELETE FROM notes WHERE id = $1', [noteId]);
+	const deviceId = await getDeviceId();
+	await db.execute('UPDATE notes SET deleted_at = $1, device_id = $2 WHERE id = $3', [
+		String(Date.now()),
+		deviceId,
+		noteId
+	]);
 	if (fts) await db.execute('DELETE FROM notes_fts WHERE note_id = $1', [noteId]);
 	await deleteNoteAttachments(noteId);
 }
@@ -234,16 +274,15 @@ async function upsertFolderRaw(folder: NoteFolder): Promise<void> {
 	}
 	await ensureSchema();
 	const db = await getDatabase();
-	await db.execute(
-		`INSERT INTO folders (id, parent_id, name, position, payload)
-		 VALUES ($1, $2, $3, $4, $5)
-		 ON CONFLICT(id) DO UPDATE SET
-			parent_id = excluded.parent_id,
-			name = excluded.name,
-			position = excluded.position,
-			payload = excluded.payload`,
-		[folder.id, folder.parentId, folder.name, folder.position, JSON.stringify(folder)]
-	);
+	const deviceId = await getDeviceId();
+	await db.execute(upsertSql('folders', ['id', 'parent_id', 'name', 'position', 'payload', 'device_id']), [
+		folder.id,
+		folder.parentId,
+		folder.name,
+		folder.position,
+		JSON.stringify(folder),
+		deviceId
+	]);
 }
 
 export function deleteFolders(folderIds: string[]): Promise<void> {
@@ -258,8 +297,14 @@ export function deleteFolders(folderIds: string[]): Promise<void> {
 		}
 		await ensureSchema();
 		const db = await getDatabase();
+		const deviceId = await getDeviceId();
+		const at = Date.now();
 		for (const folderId of folderIds) {
-			await db.execute('DELETE FROM folders WHERE id = $1', [folderId]);
+			await db.execute('UPDATE folders SET deleted_at = $1, device_id = $2 WHERE id = $3', [
+				String(at),
+				deviceId,
+				folderId
+			]);
 		}
 		// Remove em cascata as notas das pastas excluídas (e seus anexos).
 		const state = await loadNotes();
