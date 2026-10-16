@@ -20,6 +20,8 @@
 		type NoteFolder
 	} from '#lib/notes';
 	import { playTone, prefersReducedMotion, pulseHaptic } from '#lib/feedback';
+	import { decorateTempoRefs } from '#lib/tempo-ref';
+	import type { TimeBlock } from '#lib/atlas';
 	import { Printer } from '@lucide/svelte';
 	import FolderIcon from './FolderIcon.svelte';
 	import ArtifactFrame from './ArtifactFrame.svelte';
@@ -28,6 +30,7 @@
 		note,
 		notesList,
 		folders,
+		timeBlocks = [],
 		open,
 		initialMode,
 		sound,
@@ -46,6 +49,7 @@
 		note: Note;
 		notesList: Note[];
 		folders: NoteFolder[];
+		timeBlocks?: TimeBlock[];
 		open: boolean;
 		initialMode: 'write' | 'preview';
 		sound: boolean;
@@ -74,6 +78,8 @@
 	let paneEl = $state<HTMLElement | null>(null);
 	let editorEl = $state<HTMLTextAreaElement | null>(null);
 	let previewEl = $state<HTMLElement | null>(null);
+	/** Bolha de preview do bloco de tempo correspondente a uma referência `tempo`. */
+	let refBubble = $state<{ x: number; y: number; from: string; to: string } | null>(null);
 	let dirty = false;
 	let saveTimer: ReturnType<typeof setTimeout> | undefined;
 	let renderTimer: ReturnType<typeof setTimeout> | undefined;
@@ -131,6 +137,7 @@
 	/* ---------- preview (pipeline Carta) ---------- */
 	async function renderPreview() {
 		if (!previewEl) return;
+		refBubble = null;
 		try {
 			const html = await carta.render(body);
 			previewEl.innerHTML = html;
@@ -156,6 +163,15 @@
 		if (!previewEl) return;
 		for (const link of previewEl.querySelectorAll<HTMLElement>('a.wl[data-wl]')) {
 			if (!findNoteByTitle(notesList, link.dataset.wl ?? '')) link.classList.add('ms');
+		}
+		// Referências `tempo DD/MM HHh-HHh`: chip clicável + cruzamento com os blocos.
+		for (const span of decorateTempoRefs(previewEl, note.updatedAt)) {
+			const from = span.dataset.tpFrom ?? '';
+			const to = span.dataset.tpTo ?? '';
+			const matched = timeBlocks.some(
+				(block) => block.status !== 'cancelled' && from < block.endAt.slice(0, 16) && to > block.startAt.slice(0, 16)
+			);
+			if (!matched) span.classList.add('ms');
 		}
 		if (!isTauri()) return;
 		for (const image of previewEl.querySelectorAll<HTMLImageElement>('img[src^="attachments/"]')) {
@@ -272,10 +288,56 @@
 	}
 
 	function onPreviewClick(event: MouseEvent) {
-		const link = (event.target as HTMLElement)?.closest<HTMLElement>('a.wl[data-wl]');
+		const target = event.target as HTMLElement | null;
+		const ref = target?.closest<HTMLElement>('.tp-ref');
+		if (ref) {
+			event.preventDefault();
+			showRefBubble(ref);
+			return;
+		}
+		const link = target?.closest<HTMLElement>('a.wl[data-wl]');
 		if (!link) return;
 		event.preventDefault();
 		onwikilink(link.dataset.wl ?? '');
+	}
+
+	/** Blocos que cruzam a referência em foco (para a bolha). */
+	const refBlocks = $derived.by(() => {
+		const bubble = refBubble;
+		if (!bubble) return [];
+		return timeBlocks
+			.filter(
+				(block) =>
+					block.status !== 'cancelled' &&
+					bubble.from < block.endAt.slice(0, 16) &&
+					bubble.to > block.startAt.slice(0, 16)
+			)
+			.sort((a, b) => a.startAt.localeCompare(b.startAt));
+	});
+
+	function showRefBubble(element: HTMLElement) {
+		const rect = element.getBoundingClientRect();
+		refBubble = {
+			x: Math.min(Math.max(rect.left + rect.width / 2, 110), window.innerWidth - 110),
+			y: rect.top,
+			from: element.dataset.tpFrom ?? '',
+			to: element.dataset.tpTo ?? ''
+		};
+	}
+
+	function hideRefBubble() {
+		refBubble = null;
+	}
+
+	function onPreviewPointerOver(event: PointerEvent) {
+		const ref = (event.target as HTMLElement | null)?.closest<HTMLElement>('.tp-ref');
+		if (ref) showRefBubble(ref);
+		else if (refBubble) hideRefBubble();
+	}
+
+	function blockLabel(block: TimeBlock): string {
+		const [, month, day] = block.startAt.slice(0, 10).split('-');
+		return `${day}/${month} · ${block.startAt.slice(11, 16)}–${block.endAt.slice(11, 16)}`;
 	}
 
 	/**
@@ -319,6 +381,9 @@
 	onMount(() => {
 		void refreshAttachments();
 		paneEl?.addEventListener('click', onPreviewClick);
+		paneEl?.addEventListener('pointerover', onPreviewPointerOver);
+		paneEl?.addEventListener('pointerleave', hideRefBubble);
+		paneEl?.addEventListener('scroll', hideRefBubble, true);
 		void renderPreview();
 		// iOS suspende timers ao ir para segundo plano: grava o rascunho
 		// pendente antes que o debounce de 800ms se perca.
@@ -330,6 +395,9 @@
 		if (initialMode === 'write') setTimeout(() => editorEl?.focus(), 350);
 		return () => {
 			paneEl?.removeEventListener('click', onPreviewClick);
+			paneEl?.removeEventListener('pointerover', onPreviewPointerOver);
+			paneEl?.removeEventListener('pointerleave', hideRefBubble);
+			paneEl?.removeEventListener('scroll', hideRefBubble, true);
 			document.removeEventListener('visibilitychange', onVisibility);
 			window.removeEventListener('pagehide', flush);
 			for (const url of objectUrls) URL.revokeObjectURL(url);
@@ -434,4 +502,16 @@
 			<span class="nt-status" class:ok={status.includes('✓')}>{status}</span>
 		</div>
 	</div>
+
+	{#if refBubble}
+		<div class="nt-tp-bubble" style={`left:${refBubble.x}px;top:${refBubble.y}px`} role="tooltip">
+			{#if refBlocks.length}
+				{#each refBlocks as block (block.id)}
+					<div class="nt-tp-row"><b>{block.title || '—'}</b><small>{blockLabel(block)}</small></div>
+				{/each}
+			{:else}
+				<small>Sem bloco no planejador.</small>
+			{/if}
+		</div>
+	{/if}
 </div>

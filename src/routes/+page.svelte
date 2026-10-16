@@ -24,8 +24,9 @@
 	import { describeBackup, summarizeBackup } from '#lib/backup';
 import { readTestMode, writeTestMode } from '#lib/test-mode';
 import { checkForUpdate, relaunchApp, updaterSupportedHere } from '#lib/updater';
-import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachments } from '#lib/notes-store';
+import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, restoreAttachments } from '#lib/notes-store';
 	import type { Note, NotesState } from '#lib/notes';
+	import { notesForBlock, type NoteRef } from '#lib/tempo-ref';
 	import { edgeRatio, isMilestone, nodeReached, type GraphState } from '#lib/graph';
 	import { reconcileGraph } from '#lib/graph-sources';
 	import GraphView from '#lib/components/graph/GraphView.svelte';
@@ -84,6 +85,11 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 	let moreMenuOpen = $state(false);
 	let navDirection = $state(1);
 	let notesCreateToken = $state(0);
+	/** Deep-link de nota: abrir a nota `notesOpenId` quando o token muda. */
+	let notesOpenId = $state('');
+	let notesOpenToken = $state(0);
+	/** Bolha de notas de um horário no planejador. */
+	let timeNoteBubble = $state<{ x: number; y: number; blockId: string } | null>(null);
 	let editingTransactionId = $state('');
 	let formError = $state('');
 	let wasPaused = $state(false);
@@ -131,6 +137,41 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 			}
 		}
 		return grid;
+	});
+	/** Id do bloco por célula (paralelo ao `timeGrid`) — para marcar quem tem nota. */
+	let timeGridBlocks = $derived.by(() => {
+		const grid: (string | null)[][] = Array.from({ length: 7 }, () => Array<string | null>(TIME_SLOT_COUNT).fill(null));
+		if (!snapshot) return grid;
+		const weekStartMs = new Date(`${timeWeekStart}T12:00:00`).getTime();
+		for (const block of snapshot.timeBlocks) {
+			if (block.status === 'cancelled') continue;
+			const index = Math.round((new Date(`${block.startAt.slice(0, 10)}T12:00:00`).getTime() - weekStartMs) / 86_400_000);
+			if (index < 0 || index > 6) continue;
+			const startMinutes = Number(block.startAt.slice(11, 13)) * 60 + Number(block.startAt.slice(14, 16));
+			const startSlot = Math.round((startMinutes - TIME_SLOT_START_HOUR * 60) / TIME_SLOT_MINUTES);
+			const slots = Math.max(1, Math.round(block.plannedMinutes / TIME_SLOT_MINUTES));
+			for (let offset = 0; offset < slots; offset += 1) {
+				const slot = startSlot + offset;
+				if (slot >= 0 && slot < TIME_SLOT_COUNT) grid[index][slot] = block.id;
+			}
+		}
+		return grid;
+	});
+	/** Notas que referenciam cada bloco (`tempo`/`time`) na semana visível. */
+	let timeBlockNotes = $derived.by(() => {
+		const map = new Map<string, NoteRef[]>();
+		if (!snapshot) return map;
+		const active = notesState.notes.filter((note) => !note.trashedAt);
+		if (!active.length) return map;
+		const weekEnd = dateOffset(timeWeekStart, 6);
+		for (const block of snapshot.timeBlocks) {
+			if (block.status === 'cancelled') continue;
+			const date = block.startAt.slice(0, 10);
+			if (date < timeWeekStart || date > weekEnd) continue;
+			const found = notesForBlock(block, active);
+			if (found.length) map.set(block.id, found);
+		}
+		return map;
 	});
 	let timeTodayIndex = $derived((new Date().getDay() + 6) % 7);
 	let timeHeaderDays = $derived(Array.from({ length: 7 }, (_, index) => {
@@ -489,6 +530,8 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 			ready = true;
 			wasPaused = isCurrentPause(loaded);
 			await saveSnapshot(loaded);
+			// As notas são necessárias no planejador (referências `tempo`).
+			notesState = await loadNotes();
 			await syncIOSReminders(loaded);
 		} catch (error) {
 			console.error(error);
@@ -1117,6 +1160,54 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 		return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 	}
 
+	/* ---------- referências `tempo` das notas no planejador ---------- */
+	let blockBubbleTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function scheduleHideBlockNotes() {
+		clearTimeout(blockBubbleTimer);
+		blockBubbleTimer = setTimeout(() => (timeNoteBubble = null), 180);
+	}
+
+	function onTimePointerOver(event: PointerEvent) {
+		const cell = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-tp-slot]');
+		const blockId = cell ? timeGridBlocks[Number(cell.dataset.tpDay)]?.[Number(cell.dataset.tpSlot)] ?? null : null;
+		if (!blockId || !timeBlockNotes.has(blockId)) {
+			if (timeNoteBubble) scheduleHideBlockNotes();
+			return;
+		}
+		if (timeNoteBubble?.blockId === blockId) {
+			clearTimeout(blockBubbleTimer);
+			return;
+		}
+		clearTimeout(blockBubbleTimer);
+		const rect = (cell as HTMLElement).getBoundingClientRect();
+		timeNoteBubble = {
+			x: Math.min(Math.max(rect.left + rect.width / 2, 130), window.innerWidth - 130),
+			y: rect.top,
+			blockId
+		};
+	}
+
+	function hideBlockNotes() {
+		clearTimeout(blockBubbleTimer);
+		timeNoteBubble = null;
+	}
+
+	function noteExcerpt(body: string): string {
+		return body
+			.replace(/[#*_>`[\]]/g, '')
+			.replace(/\s+/g, ' ')
+			.trim()
+			.slice(0, 64);
+	}
+
+	function openNoteFromPlanner(noteId: string) {
+		timeNoteBubble = null;
+		notesOpenId = noteId;
+		notesOpenToken += 1;
+		goTab('notes');
+	}
+
 	function hmSlots(slots: number): string {
 		const hours = Math.floor(slots / 2);
 		const half = slots % 2;
@@ -1175,6 +1266,7 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 	}
 
 	function handleTimeScroll() {
+		hideBlockNotes();
 		if (!timeScroll) return;
 		timeVisibleStart = Math.round(timeScroll.scrollLeft / timeColumnWidth);
 	}
@@ -2191,17 +2283,40 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 								<span class="tp-corner"></span>
 								{#each timeHeaderDays as header, index}<span class:td={index === timeTodayIndex} class="tp-h">{header.label}<b>{header.dayNumber}</b></span>{/each}
 							</div>
-							<div class="tp-grid" role="grid" tabindex="0" aria-label="Grade semanal de tempo" onpointerdown={beginTimePaint} oncontextmenu={(event) => event.preventDefault()}>
+							<div class="tp-grid" role="grid" tabindex="0" aria-label="Grade semanal de tempo" onpointerdown={beginTimePaint} onpointerover={onTimePointerOver} onpointerleave={scheduleHideBlockNotes} oncontextmenu={(event) => event.preventDefault()}>
 								{#each Array.from({ length: TIME_SLOT_COUNT }, (_, index) => index) as slot}
 									<span class="tp-rl">{slot % 2 === 0 ? `${String(TIME_SLOT_START_HOUR + slot / 2).padStart(2, '0')}:00` : ''}</span>
 									{#each Array.from({ length: 7 }, (_, index) => index) as day}
 										{@const cell = timeCellData(day, slot)}
-										<div class:on={cell.categoryId} class:st={cell.isStart} class:en={cell.isEnd} class:hr={slot % 2 === 0} class="tp-c" style={cell.categoryId ? `--cc:${cell.color}` : ''} data-tp-day={day} data-tp-slot={slot} aria-label={`${timeHeaderDays[day].label} ${slotToTime(slot)}`}>{cell.label}</div>
+										{@const cellBlock = timeGridBlocks[day]?.[slot] ?? null}
+										{@const hasNotes = cellBlock ? timeBlockNotes.has(cellBlock) : false}
+										<div class:on={cell.categoryId} class:st={cell.isStart} class:en={cell.isEnd} class:hr={slot % 2 === 0} class:nt={hasNotes} class="tp-c" style={cell.categoryId ? `--cc:${cell.color}` : ''} data-tp-day={day} data-tp-slot={slot} aria-label={`${timeHeaderDays[day].label} ${slotToTime(slot)}${hasNotes ? ' · tem nota' : ''}`}>{cell.label}{#if hasNotes && cell.isStart}<i class="tp-note-dot" aria-hidden="true"></i>{/if}</div>
 									{/each}
 								{/each}
 								{#if timeNow}<div class="tp-now" style={`top:${timeNow.top}px;left:${timeNow.left}px;width:${timeNow.width}px`}></div>{/if}
 							</div>
 						</div>
+						{#if timeNoteBubble}
+							{@const bubbleNotes = timeBlockNotes.get(timeNoteBubble.blockId) ?? []}
+							<div
+								class="tp-note-bubble"
+								style={`left:${timeNoteBubble.x}px;top:${timeNoteBubble.y}px`}
+								role="dialog"
+								tabindex="-1"
+								aria-label="Notas neste horário"
+								onpointerdown={(event) => event.stopPropagation()}
+								onpointerenter={() => clearTimeout(blockBubbleTimer)}
+								onpointerleave={scheduleHideBlockNotes}
+							>
+								<span class="tp-nb-tip">Notas neste horário</span>
+								{#each bubbleNotes as item (item.note.id)}
+									<button onclick={() => openNoteFromPlanner(item.note.id)}>
+										<b>{item.note.title || 'Sem título'}</b>
+										<small>{noteExcerpt(item.note.body)}</small>
+									</button>
+								{/each}
+							</div>
+						{/if}
 					</section>
 				{:else if activeTab === 'notes'}
 					{#key notesVersion}
@@ -2210,6 +2325,9 @@ import { collectAttachments, replaceNotesState, resetNotesCache, restoreAttachme
 							typingSound={snapshot.preferences.typingSoundEnabled}
 							haptics={snapshot.preferences.hapticsEnabled}
 							createToken={notesCreateToken}
+							timeBlocks={snapshot.timeBlocks}
+							openNoteId={notesOpenId}
+							openNoteToken={notesOpenToken}
 							onchange={(state) => (notesState = state)}
 							oncreate={onNoteCreated}
 							ontoast={toastMessage}
