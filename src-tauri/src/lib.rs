@@ -67,3 +67,22 @@ pub fn run() {
     .run(tauri::generate_context!())
     .expect("error while building tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+  use super::BatchStatement;
+
+  #[test]
+  fn batch_statement_defaults_params_to_empty() {
+    let statement: BatchStatement = serde_json::from_str(r#"{"sql":"SELECT 1"}"#).unwrap();
+    assert_eq!(statement.sql, "SELECT 1");
+    assert!(statement.params.is_empty());
+  }
+
+  #[test]
+  fn batch_statement_reads_string_params() {
+    let statement: BatchStatement =
+      serde_json::from_str(r#"{"sql":"INSERT INTO t VALUES ($1, $2)","params":["a","b"]}"#).unwrap();
+    assert_eq!(statement.params, vec!["a", "b"]);
+  }
+}
