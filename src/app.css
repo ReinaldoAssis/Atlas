@@ -325,6 +325,14 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .dash-prototype { width: 100%; padding-bottom: 90px; color: var(--text); font: 15px/1.4 'Bricolage Grotesque', system-ui, sans-serif; }
 .dash-prototype * { box-sizing: border-box; }
 .dash-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 2px 4px 12px; }
+/*
+ * No mobile o top bar do shell já mostra o módulo ("Visão geral"): o
+ * dashboard não repete "Hoje" (docs/DESIGN.md §14). No desktop o top bar não
+ * existe, então o título fica.
+ */
+@media (max-width: 859px) {
+	.dash-top { display: none; }
+}
 .dash-top h1 { margin: 0; color: var(--text); font-family: 'Bricolage Grotesque', system-ui, sans-serif; font-size: 26px; font-weight: 800; letter-spacing: -.03em; }
 .dash-top small { display: block; color: var(--muted); font-size: 13px; }
 .dash-top-actions { display: flex; align-items: center; gap: 8px; }
