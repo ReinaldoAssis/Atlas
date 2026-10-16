@@ -21,6 +21,11 @@ import { resetNotesCache } from '#lib/notes-store';
 	import GraphView from '#lib/components/graph/GraphView.svelte';
 	import NotesView from '#lib/components/notes/NotesView.svelte';
 	import SettingsSheet from '#lib/components/settings/SettingsSheet.svelte';
+	import Button from '#lib/components/ui/Button.svelte';
+	import Chip from '#lib/components/ui/Chip.svelte';
+	import Field from '#lib/components/ui/Field.svelte';
+	import Segmented from '#lib/components/ui/Segmented.svelte';
+	import Sheet from '#lib/components/ui/Sheet.svelte';
 	import {
 		burstAt, centerOf, confetti, floatValue, playFeedback, playTone, popElement,
 		prefersReducedMotion, pulseHaptic, vibrate
@@ -1802,7 +1807,7 @@ import { resetNotesCache } from '#lib/notes-store';
 {#if !ready}
 	<div class="loading-screen"><div class="loading-mark">A</div><span>Preparando seu Atlas…</span></div>
 {:else if loadError}
-	<div class="loading-screen"><div class="loading-mark">A</div><strong>Atlas não conseguiu abrir</strong><span>{loadError}</span><button class="button-secondary" onclick={() => { ready = false; loadError = ''; void initialize(); }}>Tentar novamente</button></div>
+	<div class="loading-screen"><div class="loading-mark">A</div><strong>Atlas não conseguiu abrir</strong><span>{loadError}</span><Button variant="secondary" onclick={() => { ready = false; loadError = ''; void initialize(); }}>Tentar novamente</Button></div>
 {:else if snapshot}
 	<div class:col={sidebarCollapsed} class="app-shell">
 		<aside id="sb" aria-label="Navegação principal">
@@ -2269,19 +2274,113 @@ import { resetNotesCache } from '#lib/notes-store';
 	{/if}
 
 	{#if modal && modal !== 'settings'}
-		<div class="modal-backdrop" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) modal = null; }}>
-			<div class="modal-card" role="dialog" aria-modal="true" aria-label="Janela Atlas" tabindex="-1">
-			<div class="modal-heading"><div><h2>{modal === 'transaction' ? editingTransactionId ? 'Editar lançamento' : 'Novo lançamento' : modal === 'habit' ? 'Novo hábito' : 'Pausa e descanso'}</h2></div><button class="icon-button" aria-label="Fechar" onclick={() => (modal = null)}><X size={19} /></button></div>
-				{#if formError}<div class="form-error">{formError}</div>{/if}
-				{#if modal === 'transaction'}
-					<form onsubmit={saveTransaction} class="modal-form"><div class="segmented full-segmented"><button type="button" class:chosen={transactionForm.type === 'expense'} onclick={() => (transactionForm.type = 'expense')}>Despesa</button><button type="button" class:chosen={transactionForm.type === 'income'} onclick={() => (transactionForm.type = 'income')}>Receita</button></div><label>Descrição<input bind:value={transactionForm.description} placeholder="Ex.: mercado da semana" /></label><div class="form-row"><label>Valor ({currency()})<input bind:value={transactionForm.amount} inputmode="decimal" placeholder="0,00" required /></label><label>Data<input bind:value={transactionForm.date} type="date" required /></label></div><label>Categoria<select bind:value={transactionForm.categoryId} required>{#each snapshot.categories.filter((item) => item.module === 'finance') as category}<option value={category.id}>{category.name}</option>{/each}</select></label><div class="modal-actions"><button type="button" class="button-secondary" onclick={() => (modal = null)}>Cancelar</button><button class="button-primary"><Check size={16} /> {editingTransactionId ? 'Salvar alterações' : 'Salvar lançamento'}</button></div></form>
-					{:else if modal === 'habit'}
-						<form onsubmit={saveHabit} class="modal-form"><label>Nome do hábito<input bind:value={habitForm.name} placeholder="Ex.: leitura, caminhada…" required /></label><label>Como medir?<select bind:value={habitForm.metric}><option value="boolean">Feito ou não feito</option><option value="duration">Duração</option><option value="count">Contagem</option></select></label>{#if habitForm.metric !== 'boolean'}<div class="form-row"><label>Meta por dia<input bind:value={habitForm.target} type="number" min="1" required /></label>{#if habitForm.metric === 'count'}<label>Unidade<input bind:value={habitForm.unit} placeholder="páginas, copos…" required /></label>{:else}<div class="static-field"><span>Unidade</span><span class="input-static">minutos</span></div>{/if}</div>{/if}<fieldset class="day-choice"><legend>Dias programados</legend><div>{#each ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'] as day, index}<button type="button" class:active-day={habitForm.scheduledDays.includes(index)} aria-label={`Selecionar dia ${index}`} onclick={() => toggleScheduledDay(index)}>{day}</button>{/each}</div></fieldset><label class="optional-label">Lembrete <span>opcional</span><input type="time" bind:value={habitForm.reminder} /></label><div class="modal-actions"><button type="button" class="button-secondary" onclick={() => (modal = null)}>Cancelar</button><button class="button-primary"><Check size={16} /> Criar hábito</button></div></form>
-					{:else if modal === 'pause'}
-						<form onsubmit={startPause} class="modal-form"><div class="pause-explainer"><Flame size={20} /><p>Na pausa, Life Force, streaks e lembretes ficam suspensos. Seus dados continuam guardados.</p></div><label>Data de retorno<input type="date" bind:value={pauseForm.until} min={dateOffset(today, 1)} required /></label><div class="modal-actions"><button type="button" class="button-secondary" onclick={() => (modal = null)}>Agora não</button><button class="button-primary">Ativar pausa</button></div></form>
+		<Sheet
+			title={modal === 'transaction'
+				? editingTransactionId
+					? 'Editar lançamento'
+					: 'Novo lançamento'
+				: modal === 'habit'
+					? 'Novo hábito'
+					: 'Pausa e descanso'}
+			closeLabel="Fechar"
+			onclose={() => (modal = null)}
+		>
+			{#if formError}<p class="form-error">{formError}</p>{/if}
+			{#if modal === 'transaction'}
+				<form class="sheet-form" onsubmit={saveTransaction}>
+					<Segmented
+						label="Tipo de lançamento"
+						options={[
+							{ value: 'expense', label: 'Despesa' },
+							{ value: 'income', label: 'Receita' }
+						]}
+						bind:value={transactionForm.type}
+					/>
+					<Field label="Descrição">
+						<input bind:value={transactionForm.description} placeholder="Ex.: mercado da semana" />
+					</Field>
+					<div class="sheet-row">
+						<Field label={`Valor (${currency()})`}>
+							<input bind:value={transactionForm.amount} inputmode="decimal" placeholder="0,00" required />
+						</Field>
+						<Field label="Data">
+							<input bind:value={transactionForm.date} type="date" required />
+						</Field>
+					</div>
+					<Field label="Categoria">
+						<select bind:value={transactionForm.categoryId} required>
+							{#each snapshot.categories.filter((item) => item.module === 'finance') as category (category.id)}
+								<option value={category.id}>{category.name}</option>
+							{/each}
+						</select>
+					</Field>
+					<div class="sheet-actions">
+						<Button variant="secondary" onclick={() => (modal = null)}>Cancelar</Button>
+						<Button type="submit"><Check size={16} /> {editingTransactionId ? 'Salvar alterações' : 'Salvar lançamento'}</Button>
+					</div>
+				</form>
+			{:else if modal === 'habit'}
+				<form class="sheet-form" onsubmit={saveHabit}>
+					<Field label="Nome do hábito">
+						<input bind:value={habitForm.name} placeholder="Ex.: leitura, caminhada…" required />
+					</Field>
+					<Field label="Como medir?">
+						<select bind:value={habitForm.metric}>
+							<option value="boolean">Feito ou não feito</option>
+							<option value="duration">Duração</option>
+							<option value="count">Contagem</option>
+						</select>
+					</Field>
+					{#if habitForm.metric !== 'boolean'}
+						<div class="sheet-row">
+							<Field label="Meta por dia">
+								<input bind:value={habitForm.target} type="number" min="1" required />
+							</Field>
+							<Field label="Unidade">
+								{#if habitForm.metric === 'count'}
+									<input bind:value={habitForm.unit} placeholder="páginas, copos…" required />
+								{:else}
+									<span class="static">minutos</span>
+								{/if}
+							</Field>
+						</div>
 					{/if}
-			</div>
-		</div>
+					<div class="sheet-days">
+						<span class="sheet-days-label">Dias programados</span>
+						<div class="sheet-days-row">
+							{#each ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'] as day, index}
+								<Chip
+									selected={habitForm.scheduledDays.includes(index)}
+									ariaLabel={`Selecionar dia ${index}`}
+									onselect={() => toggleScheduledDay(index)}
+								>{day}</Chip>
+							{/each}
+						</div>
+					</div>
+					<Field label="Lembrete" hint="opcional">
+						<input type="time" bind:value={habitForm.reminder} />
+					</Field>
+					<div class="sheet-actions">
+						<Button variant="secondary" onclick={() => (modal = null)}>Cancelar</Button>
+						<Button type="submit"><Check size={16} /> Criar hábito</Button>
+					</div>
+				</form>
+			{:else}
+				<form class="sheet-form" onsubmit={startPause}>
+					<div class="sheet-explain">
+						<Flame size={20} />
+						<p>Na pausa, Life Force, streaks e lembretes ficam suspensos. Seus dados continuam guardados.</p>
+					</div>
+					<Field label="Data de retorno">
+						<input type="date" bind:value={pauseForm.until} min={dateOffset(today, 1)} required />
+					</Field>
+					<div class="sheet-actions">
+						<Button variant="secondary" onclick={() => (modal = null)}>Agora não</Button>
+						<Button type="submit">Ativar pausa</Button>
+					</div>
+				</form>
+			{/if}
+		</Sheet>
 	{/if}
 	{#if modal === 'settings' && snapshot}
 		<SettingsSheet
@@ -2299,25 +2398,24 @@ import { resetNotesCache } from '#lib/notes-store';
 		/>
 	{/if}
 	{#if dialog}
-		<div class="modal-backdrop" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) closeDialog(null); }}>
-			<div class="modal-card dialog-card" role="dialog" aria-modal="true" aria-label={dialog.title}>
-				<div class="modal-heading"><div><h2>{dialog.title}</h2></div><button class="icon-button" aria-label="Fechar" onclick={() => closeDialog(null)}><X size={19} /></button></div>
-				<form class="modal-form" onsubmit={submitDialog}>
-					{#if dialog.kind === 'prompt'}
-						<label>{dialog.label}<input bind:this={dialogInput} bind:value={dialogValue} placeholder={dialog.placeholder ?? ''} /></label>
-					{:else}
-						<p class="dialog-message">{dialog.message}</p>
-					{/if}
-					<div class="modal-actions">
-						<button type="button" class="button-secondary" onclick={() => closeDialog(null)}>Cancelar</button>
-						<button class="button-primary" class:danger={dialog.danger}>{dialog.confirmLabel}</button>
-					</div>
-				</form>
-			</div>
-		</div>
+		<Sheet title={dialog.title} closeLabel="Fechar" onclose={() => closeDialog(null)}>
+			<form class="sheet-form" onsubmit={submitDialog}>
+				{#if dialog.kind === 'prompt'}
+					<Field label={dialog.label}>
+						<input bind:this={dialogInput} bind:value={dialogValue} placeholder={dialog.placeholder ?? ''} />
+					</Field>
+				{:else}
+					<p class="sheet-message">{dialog.message}</p>
+				{/if}
+				<div class="sheet-actions">
+					<Button variant="secondary" onclick={() => closeDialog(null)}>Cancelar</Button>
+					<Button type="submit" variant={dialog.danger ? 'danger' : 'primary'}>{dialog.confirmLabel}</Button>
+				</div>
+			</form>
+		</Sheet>
 	{/if}
 	<canvas bind:this={effectsCanvas} class="atlas-confetti" aria-hidden="true"></canvas>
 	{#if toast}<div class:warn={toastWarning} class="toast">{#if !toastWarning}<Check size={16} />{/if}{toast}{#if toastUndo}<button class="toast-undo" onclick={() => { const action = toastUndo; toastUndo = null; toast = ''; action?.(); }}>Desfazer</button>{/if}</div>{/if}
 {:else}
-	<div class="loading-screen"><div class="empty-orbit"><X size={20} /></div><strong>Não foi possível abrir Atlas</strong><button class="button-secondary" onclick={initialize}>Tentar novamente</button></div>
+	<div class="loading-screen"><div class="empty-orbit"><X size={20} /></div><strong>Não foi possível abrir Atlas</strong><Button variant="secondary" onclick={initialize}>Tentar novamente</Button></div>
 {/if}
