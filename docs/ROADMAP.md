@@ -325,6 +325,23 @@ Ordem confirmada pelo usuário. Cada fatia termina com o CI verde e um PR.
 
 > S8 entregue em dois PRs: **CSP** (#14) e **updater + release por tag** (#15).
 
+### Ciclo S11–S14 — backlog de polimento e features (concluído)
+
+Ordem aprovada numa sessão de alinhamento: polimentos/bugs → Notas → Trackers → referência `tempo`. Também entrou o registro de ideias futuras.
+
+| Fatia | Conteúdo | Estado |
+|---|---|---|
+| **S11** | Criar hábito persistente (a ação sumia após o 1º hábito) · FAB de Finanças fora do `#pg` (o `transform` da troca de aba virava containing block do `position: fixed`) · rótulo "Pausar Atlas" · **Vida → Planejamento** · Notas com `+ Nota`/`+ Pasta` (FAB `+` removido) | ✅ #17 |
+| **S12** | Notas: arrastar nota/pasta para o path (raiz = "Notas") · **export PDF** por nota (diálogo de impressão do SO + `@media print`) | ✅ #18 |
+| **S13** | **Trackers** — aba em Hábitos, vários registros/dia, meta opcional com direção, gráfico SVG, arquivar/excluir com desfazer; migração v5 (`trackers`, `tracker_entries`) | ✅ #19 |
+| **—** | `docs/IDEAS.md`: split tabs · API de dados p/ artifacts HTML (análise de viabilidade) · TODO de integração de tracker | ✅ #20 |
+| **S14** | Referência `tempo`/`time` na nota (fallbacks no `updatedAt`) · chip + bolha do bloco · indicador no planejador + bolha com as notas + abrir a nota | ✅ #21 |
+
+Detalhes de estado e o que ficou pendente de verificação manual: `context/atlas-handoff-s11-s14.md`.
+
+> Segue **S10 (sync P2P)** como próxima fatia, e continua valendo: rodar o **spike E0** e revisar antes de implementar.
+
+
 **Fora do ciclo** (escolhas do usuário): ícone novo (1024 sem alpha), assinatura Windows (Azure Trusted Signing), AltStore PAL/notarização, kit completo + migração dos overlays de lançamento/hábito, i18n em `en`, macOS.
 
 **Estimativa (1 dev, 5–10 h/sem):** S1–S9 ≈ 30–45 dias-dev; S10 (sync) +15–20 dias-dev.
