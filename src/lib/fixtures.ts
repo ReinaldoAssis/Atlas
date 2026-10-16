@@ -13,6 +13,7 @@ import {
 	type Transaction
 } from './atlas';
 import { createGraphFromDemo } from './graph';
+import type { Note, NoteFolder, NotesState } from './notes';
 
 /**
  * Dados de exemplo do Atlas.
@@ -87,4 +88,38 @@ export function demoSnapshot(): AtlasSnapshot {
 		lifeForce: { ...base.lifeForce, value: 78, lastNoteDate: localDate() },
 		experience: { totalXp: 320 }
 	};
+}
+
+/** Notas/pastas de exemplo do modo de teste. */
+export function demoNotes(): NotesState {
+	const now = new Date().toISOString();
+	const folders: NoteFolder[] = [
+		{ id: 'demo-folder-diario', parentId: null, name: 'Diário', color: '#9cc8ff', position: 0, createdAt: now, updatedAt: now },
+		{ id: 'demo-folder-projetos', parentId: null, name: 'Projetos', color: '#d4f25a', position: 1, createdAt: now, updatedAt: now }
+	];
+	const notes: Note[] = [
+		{
+			id: 'demo-note-1',
+			folderId: 'demo-folder-diario',
+			title: 'Bom dia',
+			body: 'Comecei o dia com foco.\n\n- [x] Meditar\n- [ ] Ler 30 min',
+			tags: ['rotina'],
+			pinned: true,
+			createdAt: now,
+			updatedAt: now,
+			trashedAt: null
+		},
+		{
+			id: 'demo-note-2',
+			folderId: 'demo-folder-projetos',
+			title: 'Ideias do Atlas',
+			body: 'Sincronizar devices pela rede local.\n\nVer [[Bom dia]].',
+			tags: ['atlas', 'ideias'],
+			pinned: false,
+			createdAt: now,
+			updatedAt: now,
+			trashedAt: null
+		}
+	];
+	return { notes, folders };
 }

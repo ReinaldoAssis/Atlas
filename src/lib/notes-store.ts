@@ -8,6 +8,8 @@
 import { isTauri } from '@tauri-apps/api/core';
 import { BaseDirectory, mkdir, readDir, readFile, remove, writeFile } from '@tauri-apps/plugin-fs';
 import { getDatabase, runSerialized } from './storage';
+import { demoNotes } from './fixtures';
+import { activeDbName, attachmentsRoot, previewKey, readTestMode } from './test-mode';
 import {
 	normalizeFolder,
 	normalizeNote,
@@ -18,18 +20,29 @@ import {
 	type NotesState
 } from './notes';
 
-const PREVIEW_KEY = 'atlas-preview-notes-v1';
-const ATTACHMENTS_ROOT = 'attachments';
+const PREVIEW_KEY_BASE = 'atlas-preview-notes-v1';
 
-let schemaReady: Promise<boolean> | undefined;
+/**
+ * Cache do schema por banco. O modo de teste troca o arquivo SQLite, então o
+ * cache é invalidado quando o banco ativo muda.
+ */
+let schemaReady: { db: string; ready: Promise<boolean> } | undefined;
+
+/** Esquece o schema (usado ao alternar o modo de teste). */
+export function resetNotesCache(): void {
+	schemaReady = undefined;
+}
 
 /* ------------------------------------------------------------------ */
 /* Schema                                                              */
 /* ------------------------------------------------------------------ */
 
 async function ensureSchema(): Promise<boolean> {
-	if (!schemaReady) schemaReady = setupSchema().catch(() => false);
-	return schemaReady;
+	const db = activeDbName();
+	if (!schemaReady || schemaReady.db !== db) {
+		schemaReady = { db, ready: setupSchema().catch(() => false) };
+	}
+	return schemaReady.ready;
 }
 
 async function setupSchema(): Promise<boolean> {
@@ -64,6 +77,9 @@ async function setupSchema(): Promise<boolean> {
 	} catch {
 		fts = false;
 	}
+	await db.execute(`CREATE TABLE IF NOT EXISTS app_settings (
+		key TEXT PRIMARY KEY, value TEXT NOT NULL
+	)`);
 	return fts;
 }
 
@@ -72,8 +88,13 @@ async function setupSchema(): Promise<boolean> {
 /* ------------------------------------------------------------------ */
 
 function readPreview(): NotesState {
-	const raw = localStorage.getItem(PREVIEW_KEY);
-	if (!raw) return { notes: [], folders: [] };
+	const key = previewKey(PREVIEW_KEY_BASE);
+	const raw = localStorage.getItem(key);
+	if (!raw) {
+		const initial = readTestMode() ? demoNotes() : { notes: [], folders: [] };
+		localStorage.setItem(key, JSON.stringify(initial));
+		return initial;
+	}
 	try {
 		return normalizeNotesState(JSON.parse(raw));
 	} catch {
@@ -82,7 +103,7 @@ function readPreview(): NotesState {
 }
 
 function writePreview(state: NotesState): void {
-	localStorage.setItem(PREVIEW_KEY, JSON.stringify(state));
+	localStorage.setItem(previewKey(PREVIEW_KEY_BASE), JSON.stringify(state));
 }
 
 /* ------------------------------------------------------------------ */
@@ -98,10 +119,28 @@ export async function loadNotes(): Promise<NotesState> {
 		db.select<Array<{ payload: string }>>('SELECT payload FROM notes ORDER BY pinned DESC, updated_at DESC'),
 		db.select<Array<{ payload: string }>>('SELECT payload FROM folders ORDER BY position ASC')
 	]);
-	return {
+	const state: NotesState = {
 		notes: noteRows.map((row) => normalizeNote(JSON.parse(row.payload))),
 		folders: folderRows.map((row) => normalizeFolder(JSON.parse(row.payload)))
 	};
+	return (await seedTestNotes(db, state)) ?? state;
+}
+
+/** Popula notas de exemplo no banco de teste, uma vez. */
+async function seedTestNotes(db: Awaited<ReturnType<typeof getDatabase>>, state: NotesState): Promise<NotesState | null> {
+	if (!readTestMode() || state.notes.length > 0 || state.folders.length > 0) return null;
+	const seeded = await db.select<Array<{ key: string }>>('SELECT key FROM app_settings WHERE key = $1', [
+		'test_notes_seeded'
+	]);
+	if (seeded.length > 0) return null;
+	const demo = demoNotes();
+	for (const folder of demo.folders) await upsertFolderRaw(folder);
+	for (const note of demo.notes) await upsertNoteRaw(note);
+	await db.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES ($1, $2)', [
+		'test_notes_seeded',
+		JSON.stringify(true)
+	]);
+	return demo;
 }
 
 /** Substitui todo o acervo de notas/pastas (import de backup). */
@@ -263,7 +302,7 @@ export async function searchNotes(query: string): Promise<string[] | null> {
 export const attachmentsEnabled = (): boolean => isTauri();
 
 function attachmentDir(noteId: string): string {
-	return `${ATTACHMENTS_ROOT}/${noteId}`;
+	return `${attachmentsRoot()}/${noteId}`;
 }
 
 function attachmentPath(noteId: string, name: string): string {
@@ -280,7 +319,7 @@ export async function saveAttachment(noteId: string, file: File): Promise<string
 	const name = safeAttachmentName(file.name);
 	const bytes = new Uint8Array(await file.arrayBuffer());
 	await writeFile(attachmentPath(noteId, name), bytes, { baseDir: BaseDirectory.AppData });
-	return `${ATTACHMENTS_ROOT}/${noteId}/${name}`;
+	return `${attachmentsRoot()}/${noteId}/${name}`;
 }
 
 export async function listAttachments(noteId: string): Promise<string[]> {
@@ -330,7 +369,7 @@ export interface BackupAttachment {
 export async function collectAttachments(): Promise<BackupAttachment[]> {
 	if (!isTauri()) return [];
 	try {
-		const folders = await readDir(ATTACHMENTS_ROOT, { baseDir: BaseDirectory.AppData });
+		const folders = await readDir(attachmentsRoot(), { baseDir: BaseDirectory.AppData });
 		const result: BackupAttachment[] = [];
 		for (const folder of folders) {
 			if (!folder.isDirectory) continue;
