@@ -289,6 +289,12 @@
 		gap: 8px;
 		padding: 10px 0 4px;
 	}
+	/* Em telas estreitas o rótulo + selo "Em breve" não cabem lado a lado. */
+	@media (max-width: 480px) {
+		.actions {
+			flex-direction: column;
+		}
+	}
 	.btn {
 		flex: 1;
 		min-height: 44px;
