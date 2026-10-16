@@ -340,6 +340,8 @@ Estas dependem de fatos que só o spike revela — não decidir antes:
 3. **Relay/alcance**: só LAN ou relay de internet; política de pareamento e segredo.
 4. **SideStore**: detalhes de pairing/refresh e frequência de re-setup (após o primeiro `.ipa` instalado).
 
+Ideias registradas mas **não implementadas** (split tabs, API de dados para artifacts, integrações de tracker): ver **`docs/IDEAS.md`**.
+
 ---
 
 ## 9. Referências
