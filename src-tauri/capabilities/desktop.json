@@ -1,0 +1,8 @@
+{
+	"$schema": "../gen/schemas/desktop-schema.json",
+	"identifier": "desktop-capability",
+	"description": "Updater por GitHub Releases (S8) — só desktop.",
+	"platforms": ["macOS", "windows", "linux"],
+	"windows": ["main"],
+	"permissions": ["updater:default", "process:allow-restart"]
+}

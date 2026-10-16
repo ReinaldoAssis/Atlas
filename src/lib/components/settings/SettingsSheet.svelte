@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Bell, CircleDollarSign, FlaskConical, Keyboard, Volume2, Vibrate, ArrowDownRight, ArrowUpRight, Plus, Flame } from '@lucide/svelte';
+	import { Bell, CircleDollarSign, FlaskConical, Keyboard, Volume2, Vibrate, ArrowDownRight, ArrowUpRight, Plus, Flame, RefreshCw } from '@lucide/svelte';
 	import type { AtlasSnapshot, Category } from '#lib/atlas';
 	import { m } from '#lib/paraglide/messages.js';
 	import Segmented from '#lib/components/ui/Segmented.svelte';
@@ -14,6 +14,9 @@
 	let {
 		snapshot,
 		testMode,
+		updaterAvailable,
+		updaterBusy,
+		updaterStatus,
 		onclose,
 		onnotifications,
 		onpreference,
@@ -23,10 +26,14 @@
 		onrenamecategory,
 		onpause,
 		onexport,
-		onimport
+		onimport,
+		oncheckupdates
 	}: {
 		snapshot: AtlasSnapshot;
 		testMode: boolean;
+		updaterAvailable: boolean;
+		updaterBusy: boolean;
+		updaterStatus: string;
 		onclose: () => void;
 		onnotifications: (enabled: boolean) => void;
 		onpreference: (
@@ -40,6 +47,7 @@
 		onpause: () => void;
 		onexport: () => void;
 		onimport: () => void;
+		oncheckupdates: () => void;
 	} = $props();
 
 	/** Paleta de categorias do guia (`docs/DESIGN.md` §2). */
@@ -165,6 +173,29 @@
 				<p class="footnote">{m.settings_backup_footnote()}</p>
 			</div>
 		</section>
+
+		{#if updaterAvailable}
+			<section>
+				<h3>{m.settings_updates_title()}</h3>
+				<div class="tile">
+					<div class="row">
+						<span class="lead"><RefreshCw size={17} /></span>
+						<span class="text">
+							<strong>{m.settings_updates_strong()}</strong>
+							<small>{updaterStatus || m.settings_updates_hint()}</small>
+						</span>
+						<button
+							type="button"
+							class="btn compact"
+							disabled={updaterBusy}
+							onclick={oncheckupdates}
+						>
+							{updaterBusy ? m.settings_updates_busy() : m.settings_updates_action()}
+						</button>
+					</div>
+				</div>
+			</section>
+		{/if}
 
 		<section>
 			<h3>{m.settings_categories_title()}</h3>
@@ -310,6 +341,16 @@
 		font-size: 13px;
 		font-weight: 600;
 		cursor: pointer;
+	}
+	/* Botão de ação dentro de uma linha do tile (não divide espaço com outro). */
+	.btn.compact {
+		flex: none;
+		min-height: 34px;
+		color: var(--tx);
+	}
+	.btn:disabled {
+		opacity: 0.55;
+		cursor: default;
 	}
 	.footnote {
 		margin: 0;

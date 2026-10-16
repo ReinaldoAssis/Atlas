@@ -1,0 +1,109 @@
+name: Release
+
+# Release por tag semver (`v0.2.0`): a versão do app vem da **tag**, não do
+# `tauri.conf.json`. O job assina o instalador NSIS com a chave do updater,
+# gera o `latest.json` (manifesto que o app consulta) e publica tudo num
+# GitHub Release. O endpoint configurado em `tauri.conf.json` →
+# `plugins.updater.endpoints` aponta para o `latest.json` do release mais
+# recente. Passo a passo em `docs/RELEASES.md`.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Instalador assinado + release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Versão da tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Tag '$tag' fora do padrão vX.Y.Z — a versão do app vem da tag."
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$($tag.TrimStart('v'))" >> $env:GITHUB_OUTPUT
+          Write-Host "release $tag (versão $($tag.TrimStart('v')))"
+
+      - name: Config do release (versão da tag + artefatos do updater)
+        shell: pwsh
+        run: |
+          $config = @{
+            version = '${{ steps.version.outputs.version }}'
+            bundle  = @{ createUpdaterArtifacts = $true }
+          } | ConvertTo-Json -Depth 5
+          [System.IO.File]::WriteAllText("${{ github.workspace }}/release.conf.json", $config)
+          Get-Content release.conf.json
+
+      # Os artefatos do updater saem assinados; a chave privada vive só nos
+      # secrets do repositório (nunca no repositório).
+      - name: Build assinado
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri build --config "${{ github.workspace }}/release.conf.json"
+
+      - name: Conferir artefatos
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $installer) { throw 'NSIS não gerou nenhum .exe' }
+          if (-not (Test-Path "$($installer.FullName).sig")) { throw 'falta o .sig do updater (chave de assinatura ausente?)' }
+          $installer | Format-Table Name, Length
+          Get-ChildItem "$($installer.FullName).sig" | Format-Table Name, Length
+
+      - name: latest.json (manifesto do updater)
+        shell: pwsh
+        run: |
+          $tag = '${{ steps.version.outputs.tag }}'
+          $version = '${{ steps.version.outputs.version }}'
+          $installer = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
+          $signature = (Get-Content "$($installer.FullName).sig" -Raw).Trim()
+          $url = "https://github.com/${{ github.repository }}/releases/download/$tag/$($installer.Name)"
+          $manifest = @{
+            version   = $version
+            notes     = "Atlas $version"
+            pub_date  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            platforms = @{
+              'windows-x86_64' = @{ signature = $signature; url = $url }
+            }
+          } | ConvertTo-Json -Depth 6
+          # Sem BOM: o updater faz parse estrito do JSON.
+          [System.IO.File]::WriteAllText("${{ github.workspace }}/latest.json", $manifest)
+          Get-Content latest.json
+
+      - name: Publicar o release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ steps.version.outputs.tag }}'
+          $version = '${{ steps.version.outputs.version }}'
+          $installer = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
+          $assets = @($installer.FullName, "$($installer.FullName).sig", '${{ github.workspace }}/latest.json')
+          $notes = "Instalador do Windows (NSIS, per-user, sem code signing). O Atlas se atualiza por este release."
+          if (gh release view $tag 2>$null) {
+            gh release upload $tag @assets --clobber
+          } else {
+            gh release create $tag --title "Atlas $version" --notes $notes @assets
+          }

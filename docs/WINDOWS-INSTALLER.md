@@ -57,8 +57,16 @@ desinstalar.
 
 ## Atualizar
 
-Hoje: baixe o instalador novo e rode por cima (mesmo modo per-user) — os dados
-continuam. O updater automático (GitHub Releases) é o S8.
+O app **se atualiza sozinho** (S8): Configurações → **Atualizações** →
+*Verificar*. O Atlas consulta o `latest.json` do release mais recente
+(`github.com/ReinaldoAssis/Atlas/releases/latest/download/latest.json`),
+confere a assinatura minisign contra a `pubkey` embutida no app, baixa o
+instalador novo e reinstala por cima (mesmo modo per-user) — os dados em
+`%APPDATA%` continuam. No Windows o app **encerra** ao instalar; o Atlas chama
+`relaunch()` em seguida para reabrir.
+
+Para publicar uma versão: `docs/RELEASES.md`. Na mão, o caminho antigo continua
+valendo: baixe o instalador novo e rode por cima.
 
 ## Verificação manual (pendente, precisa de uma máquina Windows)
 
@@ -74,6 +82,10 @@ O CI garante que o `.exe` **compila**; o resto só se vê instalando:
       já cobre; confirme na tela): negrito, `código`, bloco com cor, tabela,
       `#tag` e a fence `artifact` renderizando e executando;
 - [ ] **Importar arquivo** lê o `.zip`, mostra o resumo e restaura;
+- [ ] Configurações → **Atualizações** → *Verificar*: sem versão nova mostra
+      "Atlas está na versão mais recente"; com uma versão publicada depois da
+      instalada (ex.: instale `0.1.0` e publique `v0.2.0`), baixa, instala,
+      **encerra e reabre sozinho** — e os dados continuam lá;
 - [ ] abrir anexo de nota abre no app padrão do Windows;
 - [ ] notificações locais (lembretes) pedem permissão e aparecem;
 - [ ] desinstalar remove o app e deixa os dados em `%APPDATA%` (confirmar).

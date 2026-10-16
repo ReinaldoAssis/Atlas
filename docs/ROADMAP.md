@@ -19,6 +19,9 @@ Escopo do produto: `docs/MVP.md`. UI: `docs/DESIGN.md`. Estado do iOS: `context/
 - Ciclo atual: **iOS + Windows** (macOS depois). Máquina de trabalho atual: **macOS** (Xcode 27) — o Mac faz iOS; Windows só via CI/parceiro.
 - Windows: **NSIS, per-user, x64**, instalador **sem code signing** (SmartScreen aparece). **O build do instalador roda no job Windows do CI**, não na máquina local (macOS não gera NSIS). A verificação manual do instalador continua exigindo uma máquina Windows.
 - **Updater** via **GitHub Releases**, **só Windows**; release por **tag semver**, versão **automática pela tag**.
+  - O instalador do release sai **assinado** (minisign) e o `latest.json` é publicado no mesmo release; a chave privada só existe nos secrets do repositório (`docs/RELEASES.md`).
+  - `createUpdaterArtifacts` entra por `--config` **só no workflow de release** (build de PR/local não precisa de chave).
+  - UI: linha em Configurações só quando é app Tauri **no Windows**; `process:allow-restart` para reabrir depois de instalar. Plugins ficam sob `cfg(desktop)` no Cargo (`tauri ios build` não os compila).
 - CI: job **ubuntu** (check + vitest + cargo test) **+ job Windows** (check + test; build do instalador na fatia S7).
 
 **iOS**
@@ -319,6 +322,8 @@ Ordem confirmada pelo usuário. Cada fatia termina com o CI verde e um PR.
 | **S8** | Updater (GitHub Releases, Windows) + workflow de release por tag (versão automática) + CSP | C6, hardening | S7 |
 | **S9** | iOS/SideStore: `.ipa`, `docs/IOS-SIDELOAD.md`, verificação no device (Mac) | D1–D3 | S6 |
 | **S10** | Sync P2P: **spike E0 primeiro**, depois E1–E9 | E0–E9 | S4, S7 |
+
+> S8 entregue em dois PRs: **CSP** (#14) e **updater + release por tag** (#15).
 
 **Fora do ciclo** (escolhas do usuário): ícone novo (1024 sem alpha), assinatura Windows (Azure Trusted Signing), AltStore PAL/notarização, kit completo + migração dos overlays de lançamento/hábito, i18n em `en`, macOS.
 

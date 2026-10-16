@@ -29,3 +29,18 @@ O ambiente precisa do toolchain Rust e das dependências nativas indicadas pela 
 ## Escopo acordado
 
 O escopo funcional, as regras de streak e Life Force, lembretes, privacidade e backup estão descritos em [docs/MVP.md](docs/MVP.md).
+
+## Testes e verificações
+
+```sh
+npm run check    # svelte-check (+ sync e i18n)
+npm test         # Vitest: projetos `unit` (node) e `components` (jsdom)
+cargo test --manifest-path src-tauri/Cargo.toml --locked
+npm run build && npm run csp:check   # CSP do app empacotado, num Chromium real
+```
+
+## Distribuição
+
+- **Windows**: instalador NSIS per-user, sem code signing — [docs/WINDOWS-INSTALLER.md](docs/WINDOWS-INSTALLER.md).
+- **iOS**: sideload com SideStore, `.ipa` sem assinatura — [docs/IOS-SIDELOAD.md](docs/IOS-SIDELOAD.md).
+- **Versões novas**: tag semver dispara o release assinado e o updater do app — [docs/RELEASES.md](docs/RELEASES.md).

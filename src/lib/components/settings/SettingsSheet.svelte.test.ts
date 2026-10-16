@@ -7,6 +7,9 @@ function setup(overrides: Record<string, unknown> = {}) {
 	const props = {
 		snapshot: demoSnapshot(),
 		testMode: false,
+		updaterAvailable: true,
+		updaterBusy: false,
+		updaterStatus: '',
 		onclose: vi.fn(),
 		onnotifications: vi.fn(),
 		onpreference: vi.fn(),
@@ -17,6 +20,7 @@ function setup(overrides: Record<string, unknown> = {}) {
 		onpause: vi.fn(),
 		onexport: vi.fn(),
 		onimport: vi.fn(),
+		oncheckupdates: vi.fn(),
 		...overrides
 	};
 	render(SettingsSheet, { props });
@@ -71,5 +75,18 @@ describe('SettingsSheet', () => {
 		const props = setup();
 		await fireEvent.click(screen.getByRole('button', { name: /Pausar Atlas/ }));
 		expect(props.onpause).toHaveBeenCalledTimes(1);
+	});
+
+	it('esconde a linha de atualizações quando o updater não vale', () => {
+		setup({ updaterAvailable: false });
+		expect(screen.queryByText('Atualizações')).toBeNull();
+	});
+
+	it('mostra o estado do updater e pede a verificação ao pai', async () => {
+		const props = setup({ updaterStatus: 'Atlas está na versão mais recente' });
+		expect(screen.getByText('Atlas está na versão mais recente')).toBeTruthy();
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Verificar' }));
+		expect(props.oncheckupdates).toHaveBeenCalledTimes(1);
 	});
 });
