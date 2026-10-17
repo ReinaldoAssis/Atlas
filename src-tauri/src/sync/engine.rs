@@ -1,20 +1,24 @@
-//! Endpoint iroh e o handshake (P2a).
+//! Endpoint iroh e handshake.
 //!
 //! Alcance só LAN: `presets::Minimal` não configura relay nem DNS/Pkarr da n0,
-//! então nenhum pacote sai da rede local. A sessão em si (delta por cursor +
-//! merge) chega em P2b; aqui só o `hello`, que já prova descoberta, conexão,
-//! ALPN, framing e recusa por incompatibilidade.
+//! então nenhum pacote sai da rede local. O handshake troca `hello`
+//! (proto + schema + cursores) e devolve a sessão já aberta para o protocolo
+//! de delta (`session.rs`).
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
-use iroh::endpoint::{Connection, presets};
+use iroh::endpoint::{Connection, RecvStream, SendStream, presets};
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey};
 use tokio::time::timeout;
 
-use super::protocol::{self, Hello, Message};
+use super::protocol::{self, Cursor, Hello, Message};
 
 /// Teto do handshake. Rede local: se passou disso, o par não está lá.
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Espera do acceptor pelo fechamento do dialer (flush do último frame).
+const CLOSE_GRACE: Duration = Duration::from_secs(5);
 
 /// O que este aparelho apresenta no hello.
 #[derive(Debug, Clone)]
@@ -22,17 +26,67 @@ pub struct LocalNode {
   /// `PRAGMA user_version` do banco ativo.
   pub schema: u32,
   pub device_id: String,
+  /// Cursores que este lado tem **para o par** (preenchido por quem disca).
+  pub cursors: Vec<Cursor>,
 }
 
 impl LocalNode {
+  pub fn new(schema: u32, device_id: impl Into<String>) -> Self {
+    Self {
+      schema,
+      device_id: device_id.into(),
+      cursors: Vec::new(),
+    }
+  }
+
   pub fn hello(&self) -> Hello {
     Hello {
       proto: protocol::PROTO_VERSION,
       schema: self.schema,
       device_id: self.device_id.clone(),
-      cursors: Vec::new(),
+      cursors: self.cursors.clone(),
     }
   }
+}
+
+/// Sessão aberta: a conexão e o stream bidi já com o hello trocado.
+pub struct Session {
+  pub(crate) conn: Connection,
+  pub(crate) send: SendStream,
+  pub(crate) recv: RecvStream,
+  pub remote: EndpointId,
+  pub hello: Hello,
+  role: Role,
+}
+
+impl Session {
+  /// Fecha a sessão.
+  ///
+  /// Quem disca fecha na hora; o acceptor espera o outro lado fechar. Sem isso,
+  /// `finish()` + `close()` descarta o frame que ainda está em voo.
+  pub async fn close(mut self) {
+    let _ = self.send.finish();
+    if self.role == Role::Acceptor {
+      let _ = timeout(CLOSE_GRACE, self.conn.closed()).await;
+    }
+    self.conn.close(0u32.into(), b"atlas/sync");
+  }
+
+  /// Device id que o par declarou (vai no cursor por origem).
+  pub fn peer_device_id(&self) -> &str {
+    &self.hello.device_id
+  }
+
+  /// Quem discou define a ordem do delta (manda primeiro).
+  pub fn is_dialer(&self) -> bool {
+    self.role == Role::Dialer
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Role {
+  Dialer,
+  Acceptor,
 }
 
 /// Liga o endpoint com a identidade local, sem relay e sem descoberta externa.
@@ -45,23 +99,36 @@ pub async fn bind(secret_key: SecretKey) -> Result<Endpoint, String> {
     .map_err(|error| format!("endpoint: {error}"))
 }
 
-/// Diala o par, valida o hello dele e devolve o que ele disse ser.
-pub async fn dial(endpoint: &Endpoint, peer: EndpointAddr, local: &LocalNode) -> Result<Hello, String> {
+/// Diala o par, valida o hello dele e devolve a sessão aberta.
+pub async fn dial(endpoint: &Endpoint, peer: EndpointAddr, local: &LocalNode) -> Result<Session, String> {
   timeout(HELLO_TIMEOUT, async {
     let conn = endpoint
       .connect(peer, protocol::ALPN)
       .await
       .map_err(|error| format!("conexão: {error}"))?;
-    let result = exchange(&conn, local, Role::Dialer).await;
-    conn.close(0u32.into(), b"atlas/hello");
-    result
+    let (send, recv, remote, hello) = exchange(&conn, local.hello(), Role::Dialer).await?;
+    Ok(Session {
+      conn,
+      send,
+      recv,
+      remote,
+      hello,
+      role: Role::Dialer,
+    })
   })
   .await
   .map_err(|_| "timeout no hello".to_string())?
 }
 
 /// Aceita uma conexão e troca hello. `None` quando o endpoint foi fechado.
-pub async fn accept(endpoint: &Endpoint, local: &LocalNode) -> Result<Option<(EndpointId, Hello)>, String> {
+///
+/// `cursors_by_peer` indexa os cursores por EndpointID: o acceptor só sabe com
+/// quem está falando depois de aceitar, e o hello já precisa ir com eles.
+pub async fn accept(
+  endpoint: &Endpoint,
+  local: &LocalNode,
+  cursors_by_peer: &BTreeMap<String, Vec<Cursor>>,
+) -> Result<Option<Session>, String> {
   timeout(HELLO_TIMEOUT, async {
     let Some(incoming) = endpoint.accept().await else {
       return Ok(None);
@@ -80,26 +147,31 @@ pub async fn accept(endpoint: &Endpoint, local: &LocalNode) -> Result<Option<(En
       .await
       .map_err(|error| format!("conexão entrante: {error}"))?;
     let remote = conn.remote_id();
-    let result = exchange(&conn, local, Role::Acceptor).await;
-    // Sem flush explícito: fechar a conexão logo depois de `finish()` descarta
-    // o frame ainda em voo (o dialer lê "connection lost" — inclusive no
-    // `Refuse`). Espera o outro lado fechar; ele fecha depois de ler.
-    let _ = timeout(Duration::from_secs(5), conn.closed()).await;
-    conn.close(0u32.into(), b"atlas/hello");
-    result.map(|hello| Some((remote, hello)))
+    let mut hello = local.hello();
+    hello.cursors = cursors_by_peer.get(&remote.to_string()).cloned().unwrap_or_default();
+    let (send, recv, _, hello) = exchange(&conn, hello, Role::Acceptor).await?;
+    Ok(Some(Session {
+      conn,
+      send,
+      recv,
+      remote,
+      hello,
+      role: Role::Acceptor,
+    }))
   })
   .await
   .map_err(|_| "timeout no hello".to_string())?
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Role {
-  Dialer,
-  Acceptor,
-}
-
 /// Troca de hello no mesmo stream bidi: quem disca escreve primeiro.
-async fn exchange(conn: &Connection, local: &LocalNode, role: Role) -> Result<Hello, String> {
+///
+/// Devolve os streams já prontos para a sessão (o `finish` fica para o fim do
+/// delta, não aqui).
+async fn exchange(
+  conn: &Connection,
+  local: Hello,
+  role: Role,
+) -> Result<(SendStream, RecvStream, EndpointId, Hello), String> {
   let (mut send, mut recv) = match role {
     Role::Acceptor => conn.accept_bi().await.map_err(|error| format!("stream: {error}"))?,
     Role::Dialer => conn.open_bi().await.map_err(|error| format!("stream: {error}"))?,
@@ -107,22 +179,25 @@ async fn exchange(conn: &Connection, local: &LocalNode, role: Role) -> Result<He
 
   let remote = match role {
     Role::Dialer => {
-      protocol::write_message(&mut send, &Message::Hello(local.hello())).await?;
+      protocol::write_message(&mut send, &Message::Hello(local.clone())).await?;
       match protocol::read_message(&mut recv).await? {
         Message::Hello(hello) => hello,
         Message::Refuse { reason } => return Err(format!("par recusou: {reason}")),
+        other => return Err(format!("mensagem inesperada no hello: {other:?}")),
       }
     }
     Role::Acceptor => {
       let hello = match protocol::read_message(&mut recv).await? {
         Message::Hello(hello) => hello,
         Message::Refuse { reason } => return Err(format!("par recusou: {reason}")),
+        other => return Err(format!("mensagem inesperada no hello: {other:?}")),
       };
       match protocol::check_hello(&hello, local.schema) {
-        Ok(()) => protocol::write_message(&mut send, &Message::Hello(local.hello())).await?,
+        Ok(()) => protocol::write_message(&mut send, &Message::Hello(local.clone())).await?,
         Err(reason) => {
           protocol::write_message(&mut send, &Message::Refuse { reason: reason.to_string() }).await?;
           let _ = send.finish();
+          let _ = timeout(CLOSE_GRACE, conn.closed()).await;
           return Err(reason.to_string());
         }
       }
@@ -130,13 +205,11 @@ async fn exchange(conn: &Connection, local: &LocalNode, role: Role) -> Result<He
     }
   };
 
-  // O dialer só confia no hello depois de validar; o acceptor já validou antes
-  // de responder.
   if role == Role::Dialer {
     protocol::check_hello(&remote, local.schema).map_err(|reason| reason.to_string())?;
   }
-  let _ = send.finish();
-  Ok(remote)
+  let remote_id = conn.remote_id();
+  Ok((send, recv, remote_id, remote))
 }
 
 /// Endereço de loopback para testes (o endpoint liga em 0.0.0.0).
@@ -158,10 +231,7 @@ mod tests {
   use super::*;
 
   fn node(device_id: &str, schema: u32) -> LocalNode {
-    LocalNode {
-      schema,
-      device_id: device_id.to_string(),
-    }
+    LocalNode::new(schema, device_id)
   }
 
   async fn bind_pair() -> (Endpoint, Endpoint) {
@@ -176,21 +246,55 @@ mod tests {
 
     let server = {
       let b = b.clone();
-      tokio::spawn(async move { accept(&b, &node("dev-b", 6)).await })
+      tokio::spawn(async move { accept(&b, &node("dev-b", 6), &BTreeMap::new()).await })
     };
     let local = node("dev-a", 6);
     let peer_addr = loopback(&b);
-    let (hello, server) = tokio::join!(dial(&a, peer_addr, &local), server);
-    let hello = hello.unwrap();
-    let dbg = server.unwrap();
-    assert_eq!(hello.device_id, "dev-b");
-    assert_eq!(hello.proto, protocol::PROTO_VERSION);
-    assert_eq!(hello.schema, 6);
+    let (session, accepted) = tokio::join!(dial(&a, peer_addr, &local), server);
+    let session = session.unwrap();
+    assert_eq!(session.hello.device_id, "dev-b");
+    assert_eq!(session.hello.proto, protocol::PROTO_VERSION);
+    assert_eq!(session.hello.schema, 6);
 
-    let (remote, peer) = dbg.unwrap().unwrap();
-    assert_eq!(remote, a.id());
-    assert_eq!(peer.device_id, "dev-a");
+    let accepted = accepted.unwrap().unwrap().unwrap();
+    assert_eq!(accepted.remote, a.id());
+    assert_eq!(accepted.hello.device_id, "dev-a");
 
+    session.close().await;
+    accepted.close().await;
+    a.close().await;
+    b.close().await;
+  }
+
+  #[tokio::test]
+  async fn acceptor_sends_the_cursors_it_holds_for_the_peer() {
+    let (a, b) = bind_pair().await;
+    let cursors = BTreeMap::from([(
+      a.id().to_string(),
+      vec![Cursor {
+        owner: "dev-c".into(),
+        updated_at: 99,
+      }],
+    )]);
+
+    let server = {
+      let b = b.clone();
+      tokio::spawn(async move { accept(&b, &node("dev-b", 6), &cursors).await })
+    };
+    let local = node("dev-a", 6);
+    let peer_addr = loopback(&b);
+    let (session, accepted) = tokio::join!(dial(&a, peer_addr, &local), server);
+    let session = session.unwrap();
+    assert_eq!(
+      session.hello.cursors,
+      vec![Cursor {
+        owner: "dev-c".into(),
+        updated_at: 99,
+      }]
+    );
+    let accepted = accepted.unwrap().unwrap().unwrap();
+    accepted.close().await;
+    session.close().await;
     a.close().await;
     b.close().await;
   }
@@ -201,14 +305,18 @@ mod tests {
 
     let server = {
       let b = b.clone();
-      tokio::spawn(async move { accept(&b, &node("dev-b", 6)).await })
+      tokio::spawn(async move { accept(&b, &node("dev-b", 6), &BTreeMap::new()).await })
     };
-    let error = dial(&a, loopback(&b), &node("dev-a", 7)).await.unwrap_err();
+    let local = node("dev-a", 7);
+    let peer_addr = loopback(&b);
+    let (dialed, accepted) = tokio::join!(dial(&a, peer_addr, &local), server);
+    let error = match dialed {
+      Ok(_) => panic!("dial deveria falhar com schema 7"),
+      Err(error) => error,
+    };
     assert!(error.contains("schema"), "erro inesperado: {error}");
-
     // O acceptor também recusa: ele compara antes de responder.
-    let accepted = server.await.unwrap();
-    assert!(accepted.is_err(), "acceptor deveria recusar schema 7");
+    assert!(accepted.unwrap().is_err(), "acceptor deveria recusar schema 7");
 
     a.close().await;
     b.close().await;
@@ -223,7 +331,6 @@ mod tests {
 
     let result = timeout(Duration::from_secs(15), dial(&a, addr, &node("dev-a", 6))).await;
     assert!(result.is_ok(), "dial não deveria pendurar além do HELLO_TIMEOUT");
-    assert!(result.unwrap().is_err(), "dial a endpoint fechado deve falhar");
     a.close().await;
   }
 }

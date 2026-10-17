@@ -6,7 +6,6 @@
 
 use iroh::endpoint::{RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
-
 /// ALPN do protocolo. Trocar a versão invalida conexão antiga de propósito.
 pub const ALPN: &[u8] = b"atlas/sync/1";
 
@@ -15,6 +14,10 @@ pub const PROTO_VERSION: u32 = 1;
 
 /// Teto de um frame. Um lote de 500 linhas cabe folgado; acima disso é bug.
 pub const MAX_FRAME: usize = 4 * 1024 * 1024;
+
+/// Linhas por frame do delta. Payload de nota é o maior item; 200 linhas ficam
+/// bem abaixo de `MAX_FRAME` e mantêm o progresso visível.
+pub const MAX_ROWS_PER_FRAME: usize = 200;
 
 /// O que este lado já recebeu deste par, por aparelho de origem.
 ///
@@ -40,10 +43,54 @@ pub struct Hello {
   pub cursors: Vec<Cursor>,
 }
 
+/// Linha replicada: tabela + valores por coluna.
+///
+/// Colunas numéricas viajam como texto: o SQLite converte pela afinidade da
+/// coluna, igual ao `db_batch`, e `NULL` continua `NULL` (não vira a string
+/// "null"). `updated_at`/`device_id` também estão em `cols` — não há cópia de
+/// metadado fora da linha.
+pub type Cols = std::collections::BTreeMap<String, Option<String>>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Row {
+  pub table: String,
+  pub cols: Cols,
+}
+
+impl Row {
+  /// Carimbo LWW da linha. Ausente/ inválido é erro de protocolo.
+  pub fn updated_at(&self) -> Result<i64, String> {
+    let raw = self
+      .cols
+      .get("updated_at")
+      .and_then(|value| value.as_deref())
+      .ok_or_else(|| format!("{}: linha sem updated_at", self.table))?;
+    raw.parse::<i64>()
+      .map_err(|_| format!("{}: updated_at inválido: {raw}", self.table))
+  }
+
+  /// Origem da linha (`device_id`); vazio/ausente vira `legacy`.
+  pub fn owner(&self) -> &str {
+    origin(self.cols.get("device_id").and_then(|value| value.as_deref()))
+  }
+}
+
+/// Normaliza a origem: linhas antigas (antes do `device_id`) contam como `legacy`.
+pub fn origin(device_id: Option<&str>) -> &str {
+  match device_id {
+    Some(value) if !value.is_empty() => value,
+    _ => "legacy",
+  }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Message {
   Hello(Hello),
+  /// Lote de linhas (delta por cursor). Pode vir mais de um.
+  Rows { rows: Vec<Row> },
+  /// Fim do delta deste lado; o receptor pode fechar o turno.
+  Done,
   /// Recusa explícita: o outro lado sabe *por que* a sessão não andou.
   Refuse { reason: String },
 }

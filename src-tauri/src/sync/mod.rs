@@ -10,3 +10,5 @@ pub mod discovery;
 pub mod engine;
 pub mod identity;
 pub mod protocol;
+pub mod session;
+pub mod store;
