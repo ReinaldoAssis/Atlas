@@ -203,6 +203,20 @@ no device depois (mesmo fluxo de S7/S9).
 - Testes: 127 no Vitest (rótulo relativo, SAS sheet, seção de sync); nada de
   Rust mudou.
 
+**P5c (auto-sync) ✅** — `commands.rs` + Configurações › Avançado:
+
+- Com o sync ligado, um loop no backend disca os pares **pareados e descobertos**
+  a cada `sync_interval` (padrão **2 s**, faixa 1–300 s; `sync_auto` liga/desliga).
+- Só o EndpointID menor disca (mesma regra da descoberta); `in_flight` e
+  `last_attempt` impedem sessões sobrepostas. `sync_now` fura o cooldown.
+- O loop acorda por `Notify` ao mudar toggle/intervalo ou parar; desligado,
+  dorme 60 s e só volta quando o toggle muda.
+- Sessões ociosas não emitem `atlas://sync-applied` nem log `info`: `skipped` do
+  reenvio de cursor não é novidade. O pareamento manual guarda o endereço usado
+  no mapa de descobertos para o auto-sync continuar alcançando o par.
+- Configurações › **Avançado**: toggle "Sincronizar automaticamente" + campo de
+  intervalo (1–300 s). Valores fora da faixa são presos no backend.
+
 **P5a (conflito de nota) ✅** — `store.rs`/`session.rs`:
 
 - Quando a linha que chega **perde** o LWW, as duas versões estão vivas (sem
@@ -245,16 +259,17 @@ no device depois (mesmo fluxo de S7/S9).
 
 **P2c (wiring) ✅** — `sync/commands.rs` + `lib.rs`:
 
-- Commands: `sync_start`, `sync_stop`, `sync_now`, `sync_status` e
-  `sync_cursors` (diagnóstico). Só desktop, como o resto do módulo.
+- Commands: `sync_start`, `sync_stop`, `sync_now`, `sync_status`, `sync_set_auto`
+  e `sync_cursors` (diagnóstico). Só desktop, como o resto do módulo.
 - Opt-in em `app_settings.sync_enabled` (ausente = desligado); `sync_start`
   liga a flag, `sync_stop` desliga preservando pares/cursores. O banco de teste
   (`sqlite:atlas.test.db`) **recusa** `sync_start`/`sync_now`.
 - Allowlist = `sync_peers`, checada **antes** de responder o hello (par
   desconhecido recebe `Refuse` e não vê metadado). `sync_now` só disca pares já
   descobertos com EndpointID maior (o menor inicia).
-- Evento `atlas://sync-applied` `{peer, applied, skipped, at}` quando algo foi
-  aplicado ou ignorado; o front recarrega no P5.
+- Evento `atlas://sync-applied` `{peer, applied, skipped, at}` quando alguma
+  linha foi aplicada ou uma cópia de conflito nasceu; `skipped` sozinho é só o
+  reenvio do cursor (não avisa). O front recarrega no P5.
 - Loop de descoberta com dedupe e cooldown de 30 s por par; accept e mDNS param
   quando o endpoint fecha (`sync_stop`).
 - `nextWriteStamp` no front agora **relê** `hlc_last` a cada gravação: o merge

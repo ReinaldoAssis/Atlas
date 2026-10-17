@@ -35,6 +35,10 @@ export interface SyncStatus {
 	endpointId: string | null;
 	peers: SyncPeerStatus[];
 	pendingPairs: SyncPendingPair[];
+	/** Auto-sync enquanto o app está aberto (Configurações › Avançado). */
+	autoSync: boolean;
+	/** Segundos entre sessões automáticas (1–300). */
+	intervalSecs: number;
 	discovery: SyncDiscoveryStatus;
 }
 
@@ -86,6 +90,11 @@ export function syncStop(): Promise<SyncStatus> {
 
 export function syncDiscoveryRestart(): Promise<SyncStatus> {
 	return invoke<SyncStatus>('sync_discovery_restart', { db: activeDbName() });
+}
+
+/** Liga/desliga o auto-sync e ajusta o intervalo (1–300 s). */
+export function syncSetAuto(enabled: boolean, intervalSecs: number): Promise<SyncStatus> {
+	return invoke<SyncStatus>('sync_set_auto', { db: activeDbName(), enabled, intervalSecs });
 }
 
 export function syncNow(): Promise<SyncStatus> {

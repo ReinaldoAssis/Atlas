@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Bell, CircleDollarSign, FlaskConical, Keyboard, Volume2, Vibrate, ArrowDownRight, ArrowUpRight, Plus, Flame, RefreshCw, Wifi, Link2, Smartphone } from '@lucide/svelte';
+	import { Bell, CircleDollarSign, FlaskConical, Keyboard, Volume2, Vibrate, ArrowDownRight, ArrowUpRight, Plus, Flame, RefreshCw, Wifi, Link2, Smartphone, Timer } from '@lucide/svelte';
 	import type { AtlasSnapshot, Category } from '#lib/atlas';
 	import { m } from '#lib/paraglide/messages.js';
 	import Segmented from '#lib/components/ui/Segmented.svelte';
@@ -35,6 +35,8 @@
 		onsynctoggle,
 		onsyncnow,
 		onsyncdiscoveryrestart,
+		onsyncauto,
+		onsyncinterval,
 		onpair,
 		onunpair
 	}: {
@@ -63,6 +65,8 @@
 		onsynctoggle: (enabled: boolean) => void;
 		onsyncnow: () => void;
 		onsyncdiscoveryrestart: () => void;
+		onsyncauto: (enabled: boolean) => void;
+		onsyncinterval: (secs: number) => void;
 		onpair: () => void;
 		onunpair: (peer: SyncPeerStatus) => void;
 	} = $props();
@@ -109,6 +113,20 @@
 		} catch {
 			// Sem o plugin/permissão, a instrução na mensagem continua valendo.
 		}
+	}
+
+	/** Intervalo do auto-sync: inteiro de 1 a 300 s; valor inválido volta ao atual. */
+	function handleInterval(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const current = sync?.intervalSecs ?? 2;
+		const value = Math.round(Number(input.value));
+		if (!Number.isFinite(value)) {
+			input.value = String(current);
+			return;
+		}
+		const clamped = Math.min(300, Math.max(1, value));
+		input.value = String(clamped);
+		if (clamped !== current) onsyncinterval(clamped);
 	}
 
 	function submitCategory(event: SubmitEvent) {
@@ -276,6 +294,48 @@
 			</section>
 		{/if}
 
+		{#if syncAvailable}
+			<section>
+				<h3>{m.settings_section_advanced()}</h3>
+				<div class="tile">
+					<div class="row">
+						<span class="lead"><Timer size={17} /></span>
+						<span class="text">
+							<strong>{m.sync_auto_title()}</strong>
+							<small>{m.sync_auto_hint()}</small>
+						</span>
+						<Toggle
+							label={m.sync_auto_title()}
+							checked={Boolean(sync?.autoSync)}
+							disabled={syncBusy}
+							onchange={onsyncauto}
+						/>
+					</div>
+					{#if sync?.autoSync}
+						<div class="row">
+							<span class="lead"><RefreshCw size={17} /></span>
+							<span class="text">
+								<strong>{m.sync_auto_interval()}</strong>
+								<small>{m.sync_auto_interval_hint()}</small>
+							</span>
+							<input
+								class="select interval"
+								type="number"
+								min="1"
+								max="300"
+								step="1"
+								inputmode="numeric"
+								aria-label={m.sync_auto_interval()}
+								value={sync?.intervalSecs ?? 2}
+								disabled={syncBusy}
+								onchange={handleInterval}
+							/>
+						</div>
+					{/if}
+				</div>
+			</section>
+		{/if}
+
 		<section>
 			<h3>{m.settings_backup_title()}</h3>
 			<div class="tile">
@@ -437,6 +497,10 @@
 		color: var(--tx);
 		font-size: 13px;
 		color-scheme: dark;
+	}
+	.interval {
+		width: 76px;
+		text-align: right;
 	}
 	.actions {
 		display: flex;
