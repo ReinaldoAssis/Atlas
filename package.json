@@ -1,7 +1,7 @@
 {
 	"name": "atlas",
 	"private": true,
-	"version": "0.0.1",
+	"version": "0.3.2",
 	"type": "module",
 	"engines": {
 		"node": ">=24.15"
@@ -16,6 +16,8 @@
 		"build:macos": "bash tools/build-macos.sh",
 		"ipa": "tauri ios build --no-sign --target aarch64",
 		"prepare": "svelte-kit sync && paraglide-js compile --project ./project.inlang || echo ''",
+		"version:set": "node tools/version.mjs set",
+		"version:check": "node tools/version.mjs check",
 		"i18n:compile": "paraglide-js compile --project ./project.inlang",
 		"check": "svelte-kit sync && paraglide-js compile --project ./project.inlang && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",

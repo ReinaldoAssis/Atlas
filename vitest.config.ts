@@ -3,7 +3,9 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { svelteTesting } from '@testing-library/svelte/vite';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 
+const appVersion = readFileSync(new URL('./VERSION', import.meta.url), 'utf8').trim();
 const commit = (() => {
 	try {
 		return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
@@ -24,6 +26,7 @@ const commit = (() => {
  */
 export default defineConfig({
 	define: {
+		__ATLAS_VERSION__: JSON.stringify(appVersion),
 		__ATLAS_COMMIT__: JSON.stringify(commit)
 	},
 	test: {

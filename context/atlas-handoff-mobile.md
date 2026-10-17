@@ -180,3 +180,7 @@
   nada. Auto-scroll perto das bordas.
 - **Release**: `v0.3.2` só depois do teste no iPhone; build/instalação única no
   fim da implementação.
+- **Versão única**: `VERSION` na raiz é a fonte; `npm run version:set -- X.Y.Z`
+  sincroniza `package.json`, `package-lock.json`, `tauri.conf.json`,
+  `Cargo.toml` e `Cargo.lock`. O rodapé de Configurações e o build macOS leem
+  esse valor; o release falha se a tag não bater com ele.

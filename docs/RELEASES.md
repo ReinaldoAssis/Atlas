@@ -8,9 +8,23 @@ tem o app instalado recebe a atualização em Configurações → **Atualizaçõ
 Decisões de produto: `docs/ROADMAP.md` (§ "Decisões travadas" → plataformas).
 O updater é **só do Windows** (o iOS renova pelo SideStore, `docs/IOS-SIDELOAD.md`).
 
+## Versão única
+
+- **`VERSION`** na raiz é a fonte única (`0.3.2`).
+- `npm run version:set -- 0.3.2` grava `VERSION`, `package.json`,
+  `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` e
+  `Cargo.lock` de uma vez.
+- `npm run version:check` confere todos (roda no CI e no release).
+- O rodapé de Configurações mostra `Atlas <VERSION> · <commit>`.
+- O build macOS lê `VERSION`; o build iOS/Windows usa o `tauri.conf.json`
+  sincronizado (o release Windows ainda sobrepõe com a versão da tag).
+- **A tag precisa bater com `VERSION`**: o workflow `Release` falha se
+  `v0.3.2` não for `0.3.2`.
+
 ## O que o workflow faz
 
-1. valida a tag (`^v\d+\.\d+\.\d+$`) e extrai a versão dela;
+1. valida a tag (`^v\d+\.\d+\.\d+$`), confere se ela bate com `VERSION`
+   (`node tools/version.mjs check <versão>`) e extrai a versão dela;
 2. builda com `--config` (a versão da tag **sobrepõe** `tauri.conf.json`, e
    `bundle.createUpdaterArtifacts: true` é ligado só aqui — build local/CI de PR
    não precisa de chave);
@@ -32,9 +46,15 @@ recente **que não é pré-release**.
 git checkout main && git pull
 npm run check && npm test
 
-# 2. tag semver (a versão do app vem daqui; `tauri.conf.json` pode ficar em 0.1.0)
-git tag v0.2.0
-git push origin v0.2.0
+# 2. versão única (grava VERSION, package.json e tauri.conf.json)
+npm run version:set -- 0.3.2
+git add VERSION package.json package-lock.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+git commit -m "chore: release v0.3.2"
+git push
+
+# 3. tag semver (precisa bater com VERSION)
+git tag v0.3.2
+git push origin v0.3.2
 ```
 
 Acompanhe em **Actions › Release**. Ao terminar, o release está em
@@ -43,20 +63,21 @@ Acompanhe em **Actions › Release**. Ao terminar, o release está em
 ## macOS (build local)
 
 O updater e o workflow de release são **só do Windows**: não existe job macOS no
-CI. O `.dmg` do macOS sai da máquina Apple Silicon, com a mesma versão da tag:
+CI. O `.dmg` do macOS sai da máquina Apple Silicon, com a versão de `VERSION`:
 
 ```bash
 # depois de o workflow `Release` da tag terminar:
-tools/build-macos.sh --version 0.3.1
+tools/build-macos.sh
+# pergunta: Fazer upload do .dmg para v0.3.2? [y/N]
 # .app: src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Atlas.app
-# .dmg: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Atlas_0.3.1_aarch64.dmg
-# e sobe o .dmg para o release v0.3.1 (gh release upload --clobber)
+# .dmg: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Atlas_0.3.2_aarch64.dmg
 ```
 
-O script **não** roda no CI e é manual: rode quando quiser publicar/atualizar o
-`.dmg` do Mac. Use `--no-upload` para build só local; sem `--version` ele não
-sobe nada (não há tag). Se o release ainda não existir, ele para e pede para
-esperar o workflow — não cria release incompleto.
+Opções: `--no-upload` (build local), `--yes` (sobe sem perguntar) e
+`--version 0.3.2` (atualiza a fonte única antes do build). O script **não**
+roda no CI e é manual: rode quando quiser publicar/atualizar o `.dmg` do Mac.
+Se o release ainda não existir, ele avisa e deixa o build local — não cria
+release incompleto.
 
 - O script builda só o `.app` (`--bundles app`) e cria o `.dmg` com `hdiutil`
   (volume "Atlas" + atalho para `/Applications`). O `bundle_dmg.sh` do Tauri
@@ -68,9 +89,8 @@ esperar o workflow — não cria release incompleto.
   `xattr -dr com.apple.quarantine /Applications/Atlas.app`.
 - O macOS **não** entra no `latest.json` (updater é Windows-only); atualizar no
   Mac é baixar o `.dmg` novo e arrastar por cima.
-- O script usa `npm run build` (via `tauri build`) e a versão passada em
-  `--version` só para nomear/versionar o bundle — `tauri.conf.json` continua em
-  `0.1.0`.
+- O script usa `npm run build` (via `tauri build`) e a versão de `VERSION`
+  (também já gravada em `tauri.conf.json`) para nomear o bundle e o `.dmg`.
 
 ## Chaves de assinatura
 

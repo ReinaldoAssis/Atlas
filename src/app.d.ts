@@ -3,6 +3,8 @@
 declare global {
 	/** SHA curto do commit injetado pelo Vite (rodapé de Configurações). */
 	const __ATLAS_COMMIT__: string;
+	/** Versão de `VERSION` injetada pelo Vite (rodapé de Configurações). */
+	const __ATLAS_VERSION__: string;
 
 	namespace App {
 		// interface Error {}
