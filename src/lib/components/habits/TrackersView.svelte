@@ -69,6 +69,8 @@
 	let menu = $state<{ tracker: Tracker; x: number; y: number } | null>(null);
 	let pressTimer: ReturnType<typeof setTimeout> | undefined;
 	let pressOrigin = { x: 0, y: 0 };
+	/** O clique que fecha o long-press não pode abrir/registrar o tracker. */
+	let pressSuppress = false;
 
 	let trackerForm = $state({
 		name: '',
@@ -242,9 +244,13 @@
 	function startPress(event: PointerEvent, tracker: Tracker) {
 		if (event.button !== 0) return;
 		if (event.pointerType === 'mouse') return;
+		pressSuppress = false;
 		pressOrigin = { x: event.clientX, y: event.clientY };
 		clearTimeout(pressTimer);
-		pressTimer = setTimeout(() => openMenu(tracker, event.clientX, event.clientY), 460);
+		pressTimer = setTimeout(() => {
+			pressSuppress = true;
+			openMenu(tracker, event.clientX, event.clientY);
+		}, 460);
 	}
 
 	function cancelPress() {
@@ -501,7 +507,7 @@
 
 <div class="tk">
 	<div class="habit-prototype-grid habit-prototype-habits">
-		<button class="habit-prototype-card habit-prototype-wide habit-prototype-empty tk-new" onclick={openNewTracker}><Plus size={20} /> Tracker</button>
+		<button class="habit-prototype-card habit-prototype-empty tk-new" onclick={openNewTracker}><Plus size={20} /> Tracker</button>
 		{#each visibleTrackers as tracker (tracker.id)}
 			{@const last = lastEntry(tracker.id)}
 			{@const current = tracker.metric === 'boolean' ? todayEntry(tracker.id) : null}
@@ -513,7 +519,9 @@
 					class:archived={!tracker.active}
 					class="habit-prototype-card habit-prototype-habit tk-card"
 					style={`--habit-progress:${progressOf(tracker, last)}`}
-					onclick={() => tapCard(tracker)}
+					onclick={() => {
+						if (!pressSuppress) void tapCard(tracker);
+					}}
 					oncontextmenu={(event) => {
 						event.preventDefault();
 						openMenu(tracker, event.clientX, event.clientY);

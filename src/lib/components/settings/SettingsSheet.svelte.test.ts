@@ -26,6 +26,7 @@ function setup(overrides: Record<string, unknown> = {}) {
 		oncheckupdates: vi.fn(),
 		onsynctoggle: vi.fn(),
 		onsyncnow: vi.fn(),
+		onsyncdiscoveryrestart: vi.fn(),
 		onpair: vi.fn(),
 		onunpair: vi.fn(),
 		...overrides
@@ -46,10 +47,48 @@ describe('SettingsSheet', () => {
 	it('mostra a seção de sincronização quando o app tem suporte', () => {
 		setup({
 			syncAvailable: true,
-			sync: { enabled: false, running: false, endpointId: null, peers: [], pendingPairs: [] }
+			sync: { enabled: false, running: false, endpointId: null, peers: [], pendingPairs: [], discovery: { state: 'off', found: 0, message: null } }
 		});
 		expect(screen.getByText('Sincronização')).toBeTruthy();
 		expect(screen.getByRole('switch', { name: 'Sincronizar aparelhos' })).toBeTruthy();
+	});
+
+	it('mostra o estado da descoberta e reinicia só ela', async () => {
+		const props = setup({
+			syncAvailable: true,
+			sync: {
+				enabled: true,
+				running: true,
+				endpointId: 'abc',
+				peers: [],
+				pendingPairs: [],
+				discovery: { state: 'browsing', found: 2, message: null }
+			}
+		});
+		expect(screen.getByText('Descoberta')).toBeTruthy();
+		expect(screen.getByText('2 na rede')).toBeTruthy();
+		await fireEvent.click(screen.getByRole('button', { name: 'Reiniciar' }));
+		expect(props.onsyncdiscoveryrestart).toHaveBeenCalledTimes(1);
+	});
+
+	it('explica a permissão de Rede Local negada', () => {
+		setup({
+			syncAvailable: true,
+			sync: {
+				enabled: true,
+				running: true,
+				endpointId: 'abc',
+				peers: [],
+				pendingPairs: [],
+				discovery: {
+					state: 'permission',
+					found: 0,
+					message: 'Rede Local negada pelo iOS. Ative em Ajustes › Apps › Atlas › Rede Local.'
+				}
+			}
+		});
+		expect(screen.getByText(/Rede Local negada/)).toBeTruthy();
+		expect(screen.getByRole('button', { name: 'Abrir Ajustes' })).toBeTruthy();
 	});
 
 	it('inverte o interruptor de som e avisa o pai', async () => {

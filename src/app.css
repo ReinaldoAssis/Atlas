@@ -109,6 +109,14 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .habit-prototype *, .habit-prototype-overlay *, .habit-prototype-celebration * { box-sizing: border-box; }
 .habit-prototype button, .habit-prototype-overlay button, .habit-prototype-celebration button { border: 0; color: inherit; font: inherit; text-align: left; touch-action: manipulation; }
 .habit-switch { display: grid; width: min(320px, 100%); margin: 0 auto; padding: 6px 4px 14px; }
+/* Pager de Hábitos/Trackers: as duas views ficam montadas lado a lado. */
+.habit-pager { overflow: hidden; touch-action: pan-y; }
+.habit-track { display: flex; align-items: flex-start; transition: transform .18s cubic-bezier(.2,.9,.2,1); will-change: transform; }
+.habit-track.dragging { transition: none; }
+.habit-pane { flex: 0 0 100%; min-width: 0; }
+@media (prefers-reduced-motion: reduce) {
+	.habit-track { transition: none; }
+}
 /* Card com menu (hábitos e trackers): envolve o card para caber o "⋯". */
 .hcard { position: relative; display: grid; min-width: 0; }
 .hcard > .habit-prototype-card { height: 100%; }
@@ -117,6 +125,10 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 	.hcard:hover .hcard-more, .hcard:focus-within .hcard-more { opacity: 1; }
 }
 .hcard-more:focus-visible { opacity: 1; }
+@media (hover: none) {
+	/* Sem hover o botão ficaria invisível e clicável por cima do card. */
+	.hcard-more { display: none; }
+}
 .habit-prototype-top { display: flex; align-items: center; gap: 14px; padding: 6px 4px 12px; }
 .habit-prototype-streak { display: flex; align-items: center; gap: 4px; color: var(--hp-flame); }
 .habit-prototype-streak svg { animation: habit-prototype-flame 1.6s ease-in-out infinite; transform-origin: 50% 90%; }
@@ -462,6 +474,11 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .tp-grid { position: relative; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .tp-rl { position: sticky; left: 0; z-index: 3; background: var(--bg); font-size: 10px; color: var(--muted); height: 28px; padding-top: 2px; }
 .tp-c { height: 28px; margin: 0 2px; background: var(--panel); box-sizing: border-box; }
+/* Anel do dwell: SVG fixo sobre o bloco, preenchendo em 1,5 s. */
+.tp-dwell-ring { position: fixed; z-index: 55; pointer-events: none; overflow: visible; filter: drop-shadow(0 0 4px #0008); }
+@media (prefers-reduced-motion: reduce) {
+	.tp-dwell-ring rect { transition: none !important; }
+}
 .tp-c.hr { box-shadow: inset 0 1px 0 #3a403a; }
 .tp-c.on { background: var(--cc); box-shadow: none; color: #141a0a; font-size: 11px; font-weight: 800; line-height: 28px; padding-left: 8px; overflow: hidden; white-space: nowrap; }
 .tp-c.on.st { border-radius: 8px 8px 0 0; }
@@ -985,11 +1002,20 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 }
 
 /* Menu de contexto */
-.nt-menu { position: fixed; z-index: 70; min-width: 184px; padding: 6px; border: 1px solid var(--nt-ln); border-radius: 12px; background: var(--nt-s2); box-shadow: 0 14px 34px #000a; animation: nt-menu-in .14s ease-out; }
+.nt-menu-ov { position: fixed; inset: 0; z-index: 69; background: transparent; }
+.nt-menu { position: fixed; z-index: 70; min-width: 184px; padding: 6px; border: 1px solid #ffffff22; border-radius: 12px; background: color-mix(in srgb, var(--nt-tint, #8d968a) 13%, #1d211db8); backdrop-filter: blur(18px) saturate(1.5); -webkit-backdrop-filter: blur(18px) saturate(1.5); box-shadow: 0 14px 34px #000a, inset 0 1px 0 #ffffff18; animation: nt-menu-in .14s ease-out; }
 .nt-menu button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 10px 12px; border-radius: 8px; font-weight: 600; font-size: 14px; color: var(--nt-tx); }
-.nt-menu button:hover { background: #3a2a26; }
+.nt-menu button:active { background: #ffffff1a; }
+@media (hover: hover) {
+	.nt-menu button:hover { background: #ffffff12; }
+}
 .nt-menu button.danger { color: #e58f83; }
 @keyframes nt-menu-in { from { opacity: 0; transform: scale(.96); } }
+@media (prefers-reduced-motion: reduce) {
+	.nt-menu { animation: none; }
+}
+.nt-row, .nt-fo { transition: transform .12s ease; }
+.nt-armed { transform: scale(.98); }
 
 /* Confirmação */
 .nt-confirm-text { margin: 0 0 16px; color: var(--nt-tx); font-size: 16px; font-weight: 600; line-height: 1.45; }

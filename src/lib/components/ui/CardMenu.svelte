@@ -3,7 +3,8 @@
 
 	/**
 	 * Kit Atlas — menu de contexto de card (segurar no toque / botão direito /
-	 * botão `⋯` no desktop). O chamador posiciona e fecha.
+	 * botão `⋯` no desktop). O chamador posiciona; o menu fecha ao tocar fora,
+	 * no Esc ou quando uma ação roda.
 	 */
 	let {
 		x,
@@ -16,7 +17,23 @@
 		items: { label: string; danger?: boolean; icon?: Component<{ size?: number }>; action: () => void }[];
 		onclose: () => void;
 	} = $props();
+
+	const openedAt = Date.now();
+
+	function closeFromBackdrop() {
+		// O clique que solta o long-press chega logo depois de abrir: ignora.
+		if (Date.now() - openedAt < 320) return;
+		onclose();
+	}
+
+	function onWindowKeyDown(event: KeyboardEvent) {
+		if (event.key === 'Escape') onclose();
+	}
 </script>
+
+<svelte:window onkeydown={onWindowKeyDown} />
+
+<div class="cm-ov" role="presentation" onclick={closeFromBackdrop}></div>
 
 <div class="cm" role="menu" style={`left:${x}px;top:${y}px`}>
 	{#each items as item, index (index)}
@@ -25,8 +42,8 @@
 			role="menuitem"
 			class:danger={item.danger}
 			onclick={() => {
-				onclose();
 				item.action();
+				onclose();
 			}}
 		>
 			{#if item.icon}
@@ -39,6 +56,12 @@
 </div>
 
 <style>
+	.cm-ov {
+		position: fixed;
+		inset: 0;
+		z-index: 69;
+		background: transparent;
+	}
 	.cm {
 		position: fixed;
 		z-index: 70;

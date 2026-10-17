@@ -45,6 +45,8 @@ export class TimeBubble {
 	private html = '';
 	private hideTimer: ReturnType<typeof setTimeout> | undefined;
 	private token = 0;
+	/** Bolha "presa" (dwell no toque): só fecha por fora, rolagem ou ação. */
+	private pinned = false;
 
 	constructor(private readonly options: BubbleOptions = {}) {
 		const el = document.createElement('div');
@@ -58,7 +60,9 @@ export class TimeBubble {
 		this.tail = this.body.lastElementChild as HTMLElement;
 
 		el.addEventListener('pointerenter', () => clearTimeout(this.hideTimer));
-		el.addEventListener('pointerleave', () => this.later());
+		el.addEventListener('pointerleave', () => {
+			if (!this.pinned) this.later();
+		});
 		el.addEventListener('click', (event) => {
 			const row = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-i]');
 			if (!row) return;
@@ -209,12 +213,20 @@ export class TimeBubble {
 
 	/** Esconde depois de 180 ms (dá tempo do ponteiro chegar na bolha). */
 	later() {
+		if (this.pinned) return;
 		clearTimeout(this.hideTimer);
 		this.hideTimer = setTimeout(() => this.hide(), 180);
 	}
 
+	/** Prende a bolha para a interação por toque (dwell). */
+	setPinned(value: boolean) {
+		this.pinned = value;
+		if (!value) this.later();
+	}
+
 	hide(now = false) {
 		if (!this.open) return;
+		this.pinned = false;
 		clearTimeout(this.hideTimer);
 		this.open = false;
 		const token = ++this.token;

@@ -31,6 +31,7 @@ import { checkForUpdate, relaunchApp, updaterSupportedHere } from '#lib/updater'
 		onSyncApplied,
 		shortId,
 		syncDiscovered,
+		syncDiscoveryRestart,
 		syncNow,
 		syncPairBegin,
 		syncPairConfirm,
@@ -92,6 +93,18 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let activeTab = $state<NavigationKey>('dashboard');
 	/** Sub-aba do módulo Hábitos: hábitos recorrentes ou trackers. */
 	let habitView = $state<'habits' | 'trackers'>('habits');
+	let habitPagerEl = $state<HTMLDivElement>();
+	let habitDrag = $state(0);
+	let habitDragging = $state(false);
+	let habitSwipe: {
+		pointerId: number;
+		startX: number;
+		startY: number;
+		width: number;
+		axis: 'x' | 'y' | null;
+	} | null = null;
+	let suppressHabitClick = false;
+	const habitIndex = $derived(habitView === 'trackers' ? 1 : 0);
 	let notesState = $state<NotesState>({ notes: [], folders: [] });
 	let notesVersion = $state(0);
 	/** Pede ao NotesView para reler do banco (merge de outro aparelho). */
@@ -128,6 +141,15 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	/** Bolha de notas de um horário no planejador. */
 	let timeGridEl = $state<HTMLElement | null>(null);
 	let plannerBubble: TimeBubble | null = null;
+	/** Dwell do toque no planejador: bolha presa até tocar fora/rolar. */
+	let plannerBubblePinned = false;
+	let plannerBubbleCurrent: NoteRef[] = [];
+	let dwellTimer: ReturnType<typeof setTimeout> | undefined;
+	let dwellBlockId = '';
+	let dwellCell: { day: number; slot: number } | null = null;
+	let dwellNoteRefs: NoteRef[] = [];
+	let dwellAnchor: HTMLElement | null = null;
+	let dwellRing: SVGSVGElement | null = null;
 	let editingTransactionId = $state('');
 	let formError = $state('');
 	let wasPaused = $state(false);
@@ -428,6 +450,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let habitMenu = $state<{ habit: Habit; x: number; y: number } | null>(null);
 	let habitPressTimer: ReturnType<typeof setTimeout> | undefined;
 	let habitPressOrigin = { x: 0, y: 0 };
+	/** O clique que fecha o long-press não pode registrar/abrir o hábito. */
+	let habitPressSuppress = false;
 	let habitValues = $state<Record<string, string>>({});
 	let habitSheet = $state<Habit | null>(null);
 	let habitSheetValue = $state(0);
@@ -694,6 +718,18 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	async function confirmSyncIntro() {
 		syncIntro = null;
 		await startSync();
+	}
+
+	async function restartSyncDiscovery() {
+		syncBusy = true;
+		try {
+			sync = await syncDiscoveryRestart();
+		} catch (error) {
+			toastMessage(m.sync_error(), { warning: true });
+			console.error(error);
+		} finally {
+			syncBusy = false;
+		}
 	}
 
 	async function refreshPairDevices() {
@@ -1366,13 +1402,95 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	function startHabitPress(event: PointerEvent, habit: Habit) {
 		if (event.button !== 0 || event.pointerType === 'mouse') return;
+		if ((event.target as HTMLElement | null)?.closest('.habit-prototype-pip')) return;
+		habitPressSuppress = false;
 		habitPressOrigin = { x: event.clientX, y: event.clientY };
 		clearTimeout(habitPressTimer);
-		habitPressTimer = setTimeout(() => openHabitMenu(habit, event.clientX, event.clientY), 460);
+		habitPressTimer = setTimeout(() => {
+			habitPressSuppress = true;
+			openHabitMenu(habit, event.clientX, event.clientY);
+		}, 460);
 	}
 
 	function cancelHabitPress() {
 		clearTimeout(habitPressTimer);
+	}
+
+	/* ---------- pager Hábitos ↔ Trackers (toque) ---------- */
+	function changeHabitView(next: 'habits' | 'trackers') {
+		habitView = next;
+		habitDrag = 0;
+	}
+
+	function beginHabitSwipe(event: PointerEvent) {
+		if (event.pointerType === 'mouse' || !habitPagerEl || habitSwipe) return;
+		const target = event.target as HTMLElement | null;
+		if (target?.closest('.habit-prototype-pip')) return;
+		habitSwipe = {
+			pointerId: event.pointerId,
+			startX: event.clientX,
+			startY: event.clientY,
+			width: habitPagerEl.clientWidth,
+			axis: null
+		};
+	}
+
+	function moveHabitSwipe(event: PointerEvent) {
+		const swipe = habitSwipe;
+		if (!swipe || event.pointerId !== swipe.pointerId) return;
+		const dx = event.clientX - swipe.startX;
+		const dy = event.clientY - swipe.startY;
+		if (!swipe.axis) {
+			if (Math.hypot(dx, dy) < 8) return;
+			swipe.axis = Math.abs(dx) > Math.abs(dy) * 1.2 ? 'x' : 'y';
+			if (swipe.axis === 'y') {
+				habitSwipe = null;
+				return;
+			}
+			habitDragging = true;
+			suppressHabitClick = true;
+			try {
+				habitPagerEl?.setPointerCapture(event.pointerId);
+			} catch {
+				// Sem captura o gesto ainda funciona dentro do pager.
+			}
+		}
+		if (event.cancelable) event.preventDefault();
+		const limit = swipe.width * 0.4;
+		let drag = Math.max(-limit, Math.min(limit, dx));
+		// Nas extremidades (sem loop) o gesto resiste em vez de revelar vazio.
+		if (dx > 0 && habitIndex === 0) drag = Math.min(drag, limit * 0.35);
+		if (dx < 0 && habitIndex === 1) drag = Math.max(drag, -limit * 0.35);
+		habitDrag = Math.round(drag);
+	}
+
+	function endHabitSwipe(event: PointerEvent) {
+		const swipe = habitSwipe;
+		if (!swipe || event.pointerId !== swipe.pointerId) return;
+		habitSwipe = null;
+		habitDragging = false;
+		const dx = habitDrag;
+		if (swipe.axis === 'x') {
+			const next =
+				dx < -48 && habitIndex === 0 ? 'trackers' : dx > 48 && habitIndex === 1 ? 'habits' : null;
+			if (next) changeHabitView(next);
+			else habitDrag = 0;
+			setTimeout(() => (suppressHabitClick = false), 80);
+		} else {
+			habitDrag = 0;
+		}
+		try {
+			habitPagerEl?.releasePointerCapture(event.pointerId);
+		} catch {
+			// Captura já liberada.
+		}
+	}
+
+	function suppressSwipeClick(event: MouseEvent) {
+		if (!suppressHabitClick) return;
+		event.preventDefault();
+		event.stopPropagation();
+		suppressHabitClick = false;
 	}
 
 	async function deleteHabit(habit: Habit) {
@@ -1657,6 +1775,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function openNoteFromPlanner(noteId: string) {
+		plannerBubblePinned = false;
+		plannerBubble?.setPinned(false);
 		plannerBubble?.hide(true);
 		notesOpenId = noteId;
 		notesOpenToken += 1;
@@ -1664,26 +1784,165 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function hideBlockNotes() {
+		plannerBubblePinned = false;
+		plannerBubble?.setPinned(false);
 		plannerBubble?.hide(true);
+	}
+
+	function plannerBlockTint(blockId: string): string {
+		const block = snapshot?.timeBlocks.find((item) => item.id === blockId);
+		return (block ? currentCategory(block.categoryId)?.color : null) ?? '#d4f25a';
+	}
+
+	function plannerBubbleHtml(items: NoteRef[]): string {
+		const rows = items
+			.map(
+				(item, index) =>
+					`<button class="tbb-r" data-i="${index}"><div class="tbb-1">${escapeText(item.note.title || 'Sem título')}</div><div class="tbb-2">${escapeText(noteExcerpt(item.note.body))}</div></button>`
+			)
+			.join('');
+		return `<div class="tbb-lb">Notas neste horário</div>${rows}`;
+	}
+
+	function showPlannerBubble(anchor: HTMLElement, items: NoteRef[], blockId: string) {
+		plannerBubbleCurrent = items;
+		plannerBubble?.show(anchor, plannerBubbleHtml(items), plannerBlockTint(blockId));
+	}
+
+	/** Células que pertencem ao mesmo bloco (um bloco pode ocupar vários slots). */
+	function dwellBlockCells(blockId: string): HTMLElement[] {
+		const grid = timeGridEl;
+		if (!grid || !blockId) return [];
+		return Array.from(grid.querySelectorAll<HTMLElement>(`[data-tp-block="${CSS.escape(blockId)}"]`));
+	}
+
+	function dwellBlockRect(blockId: string): DOMRect | null {
+		const cells = dwellBlockCells(blockId);
+		if (!cells.length) return null;
+		let top = Number.POSITIVE_INFINITY;
+		let left = Number.POSITIVE_INFINITY;
+		let right = Number.NEGATIVE_INFINITY;
+		let bottom = Number.NEGATIVE_INFINITY;
+		for (const cell of cells) {
+			const rect = cell.getBoundingClientRect();
+			top = Math.min(top, rect.top);
+			left = Math.min(left, rect.left);
+			right = Math.max(right, rect.right);
+			bottom = Math.max(bottom, rect.bottom);
+		}
+		return new DOMRect(left, top, right - left, bottom - top);
+	}
+
+	/** Só abre a nota se o centro do bloco estiver na faixa central da tela. */
+	function dwellBlockInFocus(blockId: string): boolean {
+		const rect = dwellBlockRect(blockId);
+		if (!rect || !rect.height) return false;
+		const center = rect.top + rect.height / 2;
+		return center >= window.innerHeight * 0.4 && center <= window.innerHeight * 0.6;
+	}
+
+	function clearDwellRing() {
+		dwellRing?.remove();
+		dwellRing = null;
+	}
+
+	function showDwellRing(blockId: string) {
+		clearDwellRing();
+		const rect = dwellBlockRect(blockId);
+		if (!rect) return;
+		const margin = 3;
+		const width = rect.width + margin * 2;
+		const height = rect.height + margin * 2;
+		const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+		svg.setAttribute('class', 'tp-dwell-ring');
+		svg.setAttribute('width', String(width));
+		svg.setAttribute('height', String(height));
+		svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+		svg.setAttribute('aria-hidden', 'true');
+		svg.style.left = `${rect.left - margin}px`;
+		svg.style.top = `${rect.top - margin}px`;
+		svg.style.width = `${width}px`;
+		svg.style.height = `${height}px`;
+		const outline = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+		outline.setAttribute('x', '1');
+		outline.setAttribute('y', '1');
+		outline.setAttribute('width', String(Math.max(0, width - 2)));
+		outline.setAttribute('height', String(Math.max(0, height - 2)));
+		outline.setAttribute('rx', '7');
+		outline.setAttribute('fill', 'none');
+		outline.setAttribute('pathLength', '100');
+		outline.style.strokeDasharray = '100';
+		outline.style.strokeDashoffset = prefersReducedMotion() ? '0' : '100';
+		outline.setAttribute('stroke-width', '2.5');
+		outline.style.stroke = plannerBlockTint(blockId);
+		svg.appendChild(outline);
+		document.body.appendChild(svg);
+		dwellRing = svg;
+		if (prefersReducedMotion()) return;
+		requestAnimationFrame(() => {
+			outline.style.transition = 'stroke-dashoffset 1.5s linear';
+			outline.style.strokeDashoffset = '0';
+		});
+	}
+
+	function clearDwell() {
+		if (dwellTimer) clearTimeout(dwellTimer);
+		dwellTimer = undefined;
+		clearDwellRing();
+		dwellBlockId = '';
+		dwellCell = null;
+		dwellNoteRefs = [];
+		dwellAnchor = null;
+	}
+
+	function startDwell(
+		anchor: HTMLElement,
+		blockId: string,
+		notes: NoteRef[],
+		cell: { day: number; slot: number }
+	) {
+		clearDwell();
+		dwellBlockId = blockId;
+		dwellNoteRefs = notes;
+		dwellCell = cell;
+		dwellAnchor = anchor;
+		showDwellRing(blockId);
+		dwellTimer = setTimeout(() => {
+			const refs = dwellNoteRefs.slice();
+			const tintId = dwellBlockId;
+			const target = dwellAnchor;
+			clearDwell();
+			pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 10);
+			playTone(660, 0.08, 'sine', 0.04, snapshot?.preferences.soundEnabled ?? true);
+			if (refs.length === 1) {
+				openNoteFromPlanner(refs[0].note.id);
+				return;
+			}
+			if (!target) return;
+			plannerBubblePinned = true;
+			plannerBubble?.setPinned(true);
+			showPlannerBubble(target, refs, tintId);
+		}, 1500);
 	}
 
 	// Cria a bolha quando a grade do planejador está montada e liga o hover das células.
 	$effect(() => {
 		const grid = timeGridEl;
 		if (!grid) return;
-		let current: NoteRef[] = [];
 		const bubble = new TimeBubble({
 			interactive: true,
 			offset: 8,
+			touch: true,
 			sound: snapshot?.preferences.soundEnabled ?? true,
 			haptics: snapshot?.preferences.hapticsEnabled ?? true,
 			onRowClick: (index) => {
-				const item = current[index];
+				const item = plannerBubbleCurrent[index];
 				if (item) openNoteFromPlanner(item.note.id);
 			}
 		});
 		plannerBubble = bubble;
 		const onOver = (event: PointerEvent) => {
+			if (plannerBubblePinned) return;
 			const cell = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-tp-block]');
 			const blockId = cell?.dataset.tpBlock ?? '';
 			const found = blockId ? timeBlockNotes.get(blockId) : undefined;
@@ -1691,24 +1950,33 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 				if (bubble.isOpen) bubble.later();
 				return;
 			}
-			const block = snapshot?.timeBlocks.find((item) => item.id === blockId);
-			current = found;
-			const rows = found
-				.map(
-					(item, index) =>
-						`<button class="tbb-r" data-i="${index}"><div class="tbb-1">${escapeText(item.note.title || 'Sem título')}</div><div class="tbb-2">${escapeText(noteExcerpt(item.note.body))}</div></button>`
-				)
-				.join('');
-			bubble.show(cell, `<div class="tbb-lb">Notas neste horário</div>${rows}`, block ? currentCategory(block.categoryId)?.color ?? '#d4f25a' : '#d4f25a');
+			showPlannerBubble(cell, found, blockId);
 		};
-		const onLeave = () => bubble.later();
+		const onLeave = () => {
+			if (!plannerBubblePinned) bubble.later();
+		};
+		const onDocPointerDown = (event: PointerEvent) => {
+			if (!plannerBubblePinned) return;
+			const target = event.target as HTMLElement | null;
+			if (target?.closest('.tbb')) return;
+			hideBlockNotes();
+		};
+		const onWindowScroll = () => {
+			clearDwell();
+			if (plannerBubblePinned) hideBlockNotes();
+		};
 		grid.addEventListener('pointerover', onOver);
 		grid.addEventListener('pointerleave', onLeave);
+		document.addEventListener('pointerdown', onDocPointerDown, true);
+		window.addEventListener('scroll', onWindowScroll, { passive: true });
 		return () => {
 			grid.removeEventListener('pointerover', onOver);
 			grid.removeEventListener('pointerleave', onLeave);
+			document.removeEventListener('pointerdown', onDocPointerDown, true);
+			window.removeEventListener('scroll', onWindowScroll);
 			bubble.destroy();
 			plannerBubble = null;
+			plannerBubblePinned = false;
 		};
 	});
 
@@ -1770,6 +2038,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function handleTimeScroll() {
+		clearDwell();
 		hideBlockNotes();
 		if (!timeScroll) return;
 		timeVisibleStart = Math.round(timeScroll.scrollLeft / timeColumnWidth);
@@ -1869,6 +2138,22 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const cell = timeCellFromEvent(event);
 		if (!cell) return;
 		timePaintStart = [event.clientX, event.clientY];
+		const anchor = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-tp-block]');
+		const blockId = anchor?.dataset.tpBlock ?? '';
+		const notes = blockId ? timeBlockNotes.get(blockId) : undefined;
+		if (
+			event.pointerType !== 'mouse' &&
+			timeSelected !== 'x' &&
+			anchor &&
+			blockId &&
+			notes?.length &&
+			dwellBlockInFocus(blockId)
+		) {
+			// Segurar no centro abre a nota; o arrasto vira pintura em `continueTimePaint`.
+			startDwell(anchor, blockId, notes, cell);
+			return;
+		}
+		clearDwell();
 		if (event.pointerType === 'mouse') {
 			startTimePaint(cell);
 			return;
@@ -1884,6 +2169,14 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function continueTimePaint(event: PointerEvent) {
+		if (dwellBlockId) {
+			if (Math.hypot(event.clientX - timePaintStart[0], event.clientY - timePaintStart[1]) > 8) {
+				const cell = timeCellFromEvent(event) ?? dwellCell;
+				clearDwell();
+				if (cell) startTimePaint(cell);
+			}
+			return;
+		}
 		if (timePaintPending) {
 			if (Math.hypot(event.clientX - timePaintStart[0], event.clientY - timePaintStart[1]) > 8) {
 				if (timePaintTimer) clearTimeout(timePaintTimer);
@@ -1903,6 +2196,12 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	async function finishTimePaint(event?: PointerEvent) {
+		if (dwellBlockId) {
+			const cell = dwellCell;
+			clearDwell();
+			// Soltar antes dos 1,5 s: toque simples pinta a célula, como hoje.
+			if (event?.type === 'pointerup' && cell) startTimePaint(cell);
+		}
 		if (timePaintTimer) {
 			clearTimeout(timePaintTimer);
 			timePaintTimer = null;
@@ -2729,89 +3028,112 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 									{ value: 'trackers', label: 'Trackers' }
 								]}
 								value={habitView}
-								onchange={(value) => (habitView = value === 'trackers' ? 'trackers' : 'habits')}
+								onchange={(value) => changeHabitView(value === 'trackers' ? 'trackers' : 'habits')}
 							/>
 						</div>
-						{#if habitView === 'trackers'}
-							<TrackersView
-								trackers={snapshot.trackers}
-								entries={snapshot.trackerEntries}
-								sound={snapshot.preferences.soundEnabled}
-								haptics={snapshot.preferences.hapticsEnabled}
-								oncreatetracker={(tracker) => saveTracker(tracker, true)}
-								onupdatetracker={(tracker) => saveTracker(tracker, false)}
-								onarchive={archiveTracker}
-								ondeletetracker={deleteTracker}
-								oncreateentry={(entry) => saveTrackerEntry(entry, true)}
-								onupdateentry={(entry) => saveTrackerEntry(entry, false)}
-								ondeleteentry={deleteTrackerEntry}
-							/>
-						{:else}
-						<section class="habit-prototype" aria-label="Hábitos">
-							<div class="habit-prototype-top">
-								<div class="habit-prototype-level"><small>Nível {levelProgress.level}</small><div class="habit-prototype-xpbar"><i style={`width:${levelProgress.currentXp / levelProgress.nextLevelXp * 100}%`}></i></div></div>
-							</div>
+						<div
+							class="habit-pager"
+							role="group"
+							aria-label="Hábitos e trackers"
+							bind:this={habitPagerEl}
+							onpointerdown={beginHabitSwipe}
+							onpointermove={moveHabitSwipe}
+							onpointerup={endHabitSwipe}
+							onpointercancel={endHabitSwipe}
+							onclickcapture={suppressSwipeClick}
+						>
+							<div
+								class="habit-track"
+								class:dragging={habitDragging}
+								style={`transform:translate3d(calc(${habitIndex * -100}% + ${habitDrag}px),0,0)`}
+							>
+								<div class="habit-pane" aria-hidden={habitView !== 'habits'} inert={habitView !== 'habits'}>
+									<section class="habit-prototype" aria-label="Hábitos">
+										<div class="habit-prototype-top">
+											<div class="habit-prototype-level"><small>Nível {levelProgress.level}</small><div class="habit-prototype-xpbar"><i style={`width:${levelProgress.currentXp / levelProgress.nextLevelXp * 100}%`}></i></div></div>
+										</div>
 
-							<div class="habit-prototype-grid">
-								<section class="habit-prototype-card habit-prototype-wide habit-prototype-hero">
-									<div class="habit-prototype-ring"><svg width="84" height="84" viewBox="0 0 84 84" aria-hidden="true"><circle cx="42" cy="42" r="34" class="habit-prototype-ring-track"/><circle cx="42" cy="42" r="34" class="habit-prototype-ring-value" style={`stroke-dashoffset:${214 * (1 - (prototypeTodayGoal ? Math.min(prototypeTodayDone, prototypeTodayGoal) / prototypeTodayGoal : 0))}`}/></svg><strong>{Math.min(prototypeTodayDone, prototypeTodayGoal)}<small>/{prototypeTodayGoal}</small></strong></div>
-									<div><h2>{prototypeTodayGoal > 0 && prototypeTodayDone >= prototypeTodayGoal ? 'Meta concluída' : 'Meta do dia'}</h2><p>{prototypeTodayGoal > 0 && prototypeTodayDone >= prototypeTodayGoal ? 'Continue se quiser ir além' : `Faltam ${Math.max(0, prototypeTodayGoal - prototypeTodayDone)}`}</p></div>
-								</section>
-								<section class="habit-prototype-card habit-prototype-wide habit-prototype-week" aria-label="Sequência da semana">
-									{#each habitWeekDays as day, index}
-										{@const reached = day.goal > 0 && day.done >= day.goal}
-										<div class:done={reached} class:today={day.date === today} class="habit-prototype-day"><span>{#if reached}<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/></svg>{/if}</span>{['S', 'T', 'Q', 'Q', 'S', 'S', 'D'][index]}</div>
-									{/each}
-								</section>
-							</div>
-
-							<div class="habit-prototype-grid habit-prototype-habits">
-								<button class="habit-prototype-card habit-prototype-wide habit-prototype-empty" onclick={() => openHabit()}>
-									<Target size={20} /> {snapshot.habits.filter((habit) => habit.active).length ? 'Novo hábito' : 'Criar primeiro hábito'}
-								</button>
-								{#each snapshot.habits.filter((habit) => habit.active) as habit}
-									{#if habit.metric === 'weekly'}
-										{@const count = weeklyValue(habit)}
-										{@const complete = count >= habit.target}
-										<div class="hcard habit-prototype-wide">
-											<section class:done={complete} class="habit-prototype-card habit-prototype-wide habit-prototype-pips" data-habit-id={habit.id}>
-												<div class="habit-prototype-row"><b>{habit.name}</b><small>{count} de {habit.target} na semana</small></div>
-												<div class="habit-prototype-pip-track">
-													{#each Array.from({ length: WEEK_MAX }, (_, index) => index + 1) as step}
-														<button class="habit-prototype-pip" class:on={step <= count} class:goal={step === habit.target} aria-label={`${step} de ${WEEK_MAX} na semana`} aria-pressed={step <= count} onclick={() => setWeeklyValue(habit, count === step ? step - 1 : step)}></button>
-													{/each}
-												</div>
+										<div class="habit-prototype-grid">
+											<section class="habit-prototype-card habit-prototype-wide habit-prototype-hero">
+												<div class="habit-prototype-ring"><svg width="84" height="84" viewBox="0 0 84 84" aria-hidden="true"><circle cx="42" cy="42" r="34" class="habit-prototype-ring-track"/><circle cx="42" cy="42" r="34" class="habit-prototype-ring-value" style={`stroke-dashoffset:${214 * (1 - (prototypeTodayGoal ? Math.min(prototypeTodayDone, prototypeTodayGoal) / prototypeTodayGoal : 0))}`}/></svg><strong>{Math.min(prototypeTodayDone, prototypeTodayGoal)}<small>/{prototypeTodayGoal}</small></strong></div>
+												<div><h2>{prototypeTodayGoal > 0 && prototypeTodayDone >= prototypeTodayGoal ? 'Meta concluída' : 'Meta do dia'}</h2><p>{prototypeTodayGoal > 0 && prototypeTodayDone >= prototypeTodayGoal ? 'Continue se quiser ir além' : `Faltam ${Math.max(0, prototypeTodayGoal - prototypeTodayDone)}`}</p></div>
 											</section>
-											<button class="hcard-more" aria-label={`Opções de ${habit.name}`} onclick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openHabitMenu(habit, rect.left, rect.bottom + 6); }}><MoreHorizontal size={16} /></button>
+											<section class="habit-prototype-card habit-prototype-wide habit-prototype-week" aria-label="Sequência da semana">
+												{#each habitWeekDays as day, index}
+													{@const reached = day.goal > 0 && day.done >= day.goal}
+													<div class:done={reached} class:today={day.date === today} class="habit-prototype-day"><span>{#if reached}<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/></svg>{/if}</span>{['S', 'T', 'Q', 'Q', 'S', 'S', 'D'][index]}</div>
+												{/each}
+											</section>
 										</div>
-									{:else}
-										{@const log = snapshot.habitLogs.find((item) => item.habitId === habit.id && item.date === today)}
-										{@const value = log?.value ?? 0}
-										{@const complete = log ? didMeetTarget(habit, value) : false}
-										{@const progress = habit.metric === 'boolean' ? (complete ? 1 : 0) : Math.min(1, value / habit.target)}
-										{@const label = habit.metric === 'boolean' ? (log ? booleanLabelOf(habit, value, HABIT_BOOLEAN_LABELS) : 'Hoje') : prototypeValue(habit, value)}
-										<div class="hcard">
-											<button
-												class:done={complete}
-												class="habit-prototype-card habit-prototype-habit"
-												data-habit-id={habit.id}
-												style={`--habit-progress:${progress}`}
-												onclick={() => (habit.metric === 'boolean' ? logHabit(habit) : openHabitSheet(habit))}
-												oncontextmenu={(event) => { event.preventDefault(); openHabitMenu(habit, event.clientX, event.clientY); }}
-												onpointerdown={(event) => startHabitPress(event, habit)}
-											>
-												<b>{habit.name}</b><span><span class="habit-prototype-value" class:idle={habit.metric === 'boolean' && !log}>{label}</span><br /><small>{habit.metric === 'boolean' ? (log ? (complete ? 'Concluído' : 'Registrado') : 'Toque para registrar') : `meta ${prototypeValue(habit, habit.target)}`}</small></span>{#if complete}<i class="habit-prototype-check"><Check size={15} /></i>{/if}
+
+										<div class="habit-prototype-grid habit-prototype-habits">
+											<button class="habit-prototype-card habit-prototype-empty" onclick={() => openHabit()}>
+												<Plus size={20} /> Hábito
 											</button>
-											<button class="hcard-more" aria-label={`Opções de ${habit.name}`} onclick={(event) => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); openHabitMenu(habit, rect.left, rect.bottom + 6); }}><MoreHorizontal size={16} /></button>
+											{#each snapshot.habits.filter((habit) => habit.active) as habit}
+												{#if habit.metric === 'weekly'}
+													{@const count = weeklyValue(habit)}
+													{@const complete = count >= habit.target}
+													<div class="hcard habit-prototype-wide">
+														<section role="group" class:done={complete} class="habit-prototype-card habit-prototype-wide habit-prototype-pips" data-habit-id={habit.id} onpointerdown={(event) => startHabitPress(event, habit)}>
+															<div class="habit-prototype-row"><b>{habit.name}</b><small>{count} de {habit.target} na semana</small></div>
+															<div class="habit-prototype-pip-track">
+																{#each Array.from({ length: WEEK_MAX }, (_, index) => index + 1) as step}
+																	<button class="habit-prototype-pip" class:on={step <= count} class:goal={step === habit.target} aria-label={`${step} de ${WEEK_MAX} na semana`} aria-pressed={step <= count} onclick={() => { if (habitPressSuppress) return; setWeeklyValue(habit, count === step ? step - 1 : step); }}></button>
+																{/each}
+															</div>
+														</section>
+														<button class="hcard-more" aria-label={`Opções de ${habit.name}`} onclick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openHabitMenu(habit, rect.left, rect.bottom + 6); }}><MoreHorizontal size={16} /></button>
+													</div>
+												{:else}
+													{@const log = snapshot.habitLogs.find((item) => item.habitId === habit.id && item.date === today)}
+													{@const value = log?.value ?? 0}
+													{@const complete = log ? didMeetTarget(habit, value) : false}
+													{@const progress = habit.metric === 'boolean' ? (complete ? 1 : 0) : Math.min(1, value / habit.target)}
+													{@const label = habit.metric === 'boolean' ? (log ? booleanLabelOf(habit, value, HABIT_BOOLEAN_LABELS) : 'Hoje') : prototypeValue(habit, value)}
+													<div class="hcard">
+														<button
+															class:done={complete}
+															class="habit-prototype-card habit-prototype-habit"
+															data-habit-id={habit.id}
+															style={`--habit-progress:${progress}`}
+															onclick={() => {
+																if (habitPressSuppress) return;
+																if (habit.metric === 'boolean') logHabit(habit);
+																else openHabitSheet(habit);
+															}}
+															oncontextmenu={(event) => { event.preventDefault(); openHabitMenu(habit, event.clientX, event.clientY); }}
+															onpointerdown={(event) => startHabitPress(event, habit)}
+														>
+															<b>{habit.name}</b><span><span class="habit-prototype-value" class:idle={habit.metric === 'boolean' && !log}>{label}</span><br /><small>{habit.metric === 'boolean' ? (log ? (complete ? 'Concluído' : 'Registrado') : 'Toque para registrar') : `meta ${prototypeValue(habit, habit.target)}`}</small></span>{#if complete}<i class="habit-prototype-check"><Check size={15} /></i>{/if}
+														</button>
+														<button class="hcard-more" aria-label={`Opções de ${habit.name}`} onclick={(event) => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); openHabitMenu(habit, rect.left, rect.bottom + 6); }}><MoreHorizontal size={16} /></button>
+													</div>
+												{/if}
+											{/each}
 										</div>
-									{/if}
-								{/each}
+										{#if testModeActive}
+											<div class="habit-prototype-dev"><button onclick={resetPrototypeDay}>Reiniciar dia</button></div>
+										{/if}
+									</section>
+								</div>
+								<div class="habit-pane" aria-hidden={habitView !== 'trackers'} inert={habitView !== 'trackers'}>
+									<TrackersView
+										trackers={snapshot.trackers}
+										entries={snapshot.trackerEntries}
+										sound={snapshot.preferences.soundEnabled}
+										haptics={snapshot.preferences.hapticsEnabled}
+										oncreatetracker={(tracker) => saveTracker(tracker, true)}
+										onupdatetracker={(tracker) => saveTracker(tracker, false)}
+										onarchive={archiveTracker}
+										ondeletetracker={deleteTracker}
+										oncreateentry={(entry) => saveTrackerEntry(entry, true)}
+										onupdateentry={(entry) => saveTrackerEntry(entry, false)}
+										ondeleteentry={deleteTrackerEntry}
+									/>
+								</div>
 							</div>
-							{#if testModeActive}
-								<div class="habit-prototype-dev"><button onclick={resetPrototypeDay}>Reiniciar dia</button></div>
-							{/if}
-						</section>
-						{/if}
+						</div>
 					{/if}
 				{:else if activeTab === 'time'}
 					<section class="tp-prototype" aria-label="Tempo">
@@ -3208,6 +3530,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			oncheckupdates={checkAppUpdate}
 			onsynctoggle={setSyncEnabled}
 			onsyncnow={runSyncNow}
+			onsyncdiscoveryrestart={() => void restartSyncDiscovery()}
 			onpair={openPairing}
 			onunpair={unpair}
 		/>

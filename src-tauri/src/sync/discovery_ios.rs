@@ -29,6 +29,9 @@ const SERVICE_TYPE: &str = "_atlas-sync._udp.";
 const SERVICE_DOMAIN: &str = "local.";
 /// Tempo do `poll`; também é o atraso máximo do `stop`.
 const POLL_TIMEOUT_MS: c_int = 250;
+/// `kDNSServiceErr_PolicyDenied`: o iOS recusou por falta da permissão de Rede
+/// Local (o usuário negou o prompt ou desligou em Ajustes).
+const POLICY_DENIED: ServiceError = -65570;
 
 type RegisterReply = extern "C" fn(
   ServiceRef,
@@ -120,8 +123,26 @@ struct PendingService {
 struct State {
   self_id: String,
   alive: bool,
+  registered: bool,
+  browsing: bool,
   peers: BTreeMap<String, IosPeer>,
   pending: Vec<PendingService>,
+  last_error: Option<DiscoveryError>,
+}
+
+#[derive(Debug, Clone)]
+struct DiscoveryError {
+  code: ServiceError,
+  message: String,
+}
+
+/// Estado legível da descoberta para o `sync_status` (UI de Configurações).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IosReport {
+  /// `off` | `starting` | `announcing` | `browsing` | `permission` | `error`.
+  pub state: String,
+  pub found: usize,
+  pub message: Option<String>,
 }
 
 type Shared = Arc<Mutex<State>>;
@@ -131,6 +152,44 @@ static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
 
 fn shared() -> Option<Shared> {
   SHARED.lock().ok().and_then(|slot| slot.clone())
+}
+
+/// Último estado, mesmo quando `Discovery::start` falhou (o objeto não existe).
+pub fn last_report() -> Option<IosReport> {
+  shared().map(|state| Handle { state }.report())
+}
+
+/// Traduz o erro do DNS-SD para algo acionável na UI.
+fn describe_error(code: ServiceError) -> String {
+  if code == POLICY_DENIED {
+    "Rede Local negada pelo iOS. Ative em Ajustes › Apps › Atlas › Rede Local.".to_string()
+  } else {
+    format!("DNS-SD retornou o erro {code}.")
+  }
+}
+
+fn record_error(state: &Shared, code: ServiceError) {
+  if code == NO_ERROR {
+    return;
+  }
+  let message = describe_error(code);
+  log::warn!("descoberta iOS: {message}");
+  if let Ok(mut state) = state.lock() {
+    state.last_error = Some(DiscoveryError { code, message });
+  }
+}
+
+fn record_error_message(state: &Shared, message: String) {
+  log::warn!("descoberta iOS: {message}");
+  if let Ok(mut state) = state.lock() {
+    state.last_error = Some(DiscoveryError { code: -1, message });
+  }
+}
+
+fn clear_error(state: &Shared) {
+  if let Ok(mut state) = state.lock() {
+    state.last_error = None;
+  }
 }
 
 /// Handle de leitura usado pelo loop de descoberta.
@@ -145,6 +204,46 @@ impl Handle {
       return Vec::new();
     };
     state.peers.values().cloned().collect()
+  }
+
+  pub fn report(&self) -> IosReport {
+    let Ok(state) = self.state.lock() else {
+      return IosReport {
+        state: "error".to_string(),
+        found: 0,
+        message: Some("descoberta iOS: lock envenenado".to_string()),
+      };
+    };
+    let found = state.peers.len();
+    if !state.alive {
+      return IosReport {
+        state: "off".to_string(),
+        found,
+        message: None,
+      };
+    }
+    if let Some(error) = &state.last_error {
+      return IosReport {
+        state: if error.code == POLICY_DENIED {
+          "permission".to_string()
+        } else {
+          "error".to_string()
+        },
+        found,
+        message: Some(error.message.clone()),
+      };
+    }
+    IosReport {
+      state: if state.browsing {
+        "browsing".to_string()
+      } else if state.registered {
+        "announcing".to_string()
+      } else {
+        "starting".to_string()
+      },
+      found,
+      message: None,
+    }
   }
 }
 
@@ -195,6 +294,10 @@ impl Discovery {
     Handle {
       state: self.state.clone(),
     }
+  }
+
+  pub fn report(&self) -> IosReport {
+    self.handle().report()
   }
 
   pub fn stop(mut self) {
@@ -263,8 +366,12 @@ fn poll_loop(
     )
   };
   if error != NO_ERROR || register.is_null() {
-    let _ = ready.send(Err(format!("descoberta iOS: register falhou ({error})")));
+    record_error(&state, error);
+    let _ = ready.send(Err(format!("descoberta iOS: {}", describe_error(error))));
     return;
+  }
+  if let Ok(mut state) = state.lock() {
+    state.registered = true;
   }
 
   let mut browse: ServiceRef = ptr::null_mut();
@@ -281,8 +388,12 @@ fn poll_loop(
   };
   if error != NO_ERROR || browse.is_null() {
     unsafe { DNSServiceRefDeallocate(register) };
-    let _ = ready.send(Err(format!("descoberta iOS: browse falhou ({error})")));
+    record_error(&state, error);
+    let _ = ready.send(Err(format!("descoberta iOS: {}", describe_error(error))));
     return;
+  }
+  if let Ok(mut state) = state.lock() {
+    state.browsing = true;
   }
   let _ = ready.send(Ok(()));
   let mut refs: Vec<(ServiceRef, bool)> = vec![(register, false), (browse, false)];
@@ -293,7 +404,7 @@ fn poll_loop(
       .map(|mut state| std::mem::take(&mut state.pending))
       .unwrap_or_default();
     for service in pending {
-      if let Some(reference) = start_resolve(&service) {
+      if let Some(reference) = start_resolve(&service, &state) {
         refs.push((reference, true));
       }
     }
@@ -309,7 +420,14 @@ fn poll_loop(
       })
       .collect();
     let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, POLL_TIMEOUT_MS) };
-    if ready <= 0 {
+    if ready < 0 {
+      record_error_message(
+        &state,
+        format!("poll falhou: {}", std::io::Error::last_os_error()),
+      );
+      continue;
+    }
+    if ready == 0 {
       continue;
     }
     let mut index = 0;
@@ -320,7 +438,10 @@ fn poll_loop(
         continue;
       }
       let (reference, is_resolve) = refs[index];
-      unsafe { DNSServiceProcessResult(reference) };
+      let code = unsafe { DNSServiceProcessResult(reference) };
+      if code != NO_ERROR {
+        record_error(&state, code);
+      }
       if is_resolve {
         // O resolve entrega um único resultado.
         unsafe { DNSServiceRefDeallocate(reference) };
@@ -336,7 +457,7 @@ fn poll_loop(
   }
 }
 
-fn start_resolve(service: &PendingService) -> Option<ServiceRef> {
+fn start_resolve(service: &PendingService, state: &Shared) -> Option<ServiceRef> {
   let name = CString::new(service.name.clone()).ok()?;
   let regtype = CString::new(service.regtype.clone()).ok()?;
   let domain = CString::new(service.domain.clone()).ok()?;
@@ -353,18 +474,33 @@ fn start_resolve(service: &PendingService) -> Option<ServiceRef> {
       ptr::null_mut(),
     )
   };
-  (error == NO_ERROR && !reference.is_null()).then_some(reference)
+  if error != NO_ERROR {
+    record_error(state, error);
+    return None;
+  }
+  (!reference.is_null()).then_some(reference)
 }
 
 extern "C" fn on_register(
   _reference: ServiceRef,
   _flags: ServiceFlags,
-  _error: ServiceError,
+  error: ServiceError,
   _name: *const c_char,
   _regtype: *const c_char,
   _domain: *const c_char,
   _context: *mut c_void,
 ) {
+  if error != NO_ERROR {
+    if let Some(state) = shared() {
+      record_error(&state, error);
+    }
+    return;
+  }
+  if let Some(state) = shared() {
+    if let Ok(mut state) = state.lock() {
+      state.registered = true;
+    }
+  }
 }
 
 extern "C" fn on_browse(
@@ -377,12 +513,21 @@ extern "C" fn on_browse(
   _context: *mut c_void,
 ) {
   if error != NO_ERROR || name.is_null() || regtype.is_null() || domain.is_null() {
+    if error != NO_ERROR {
+      if let Some(state) = shared() {
+        record_error(&state, error);
+      }
+    }
     return;
   }
   let name = unsafe { CStr::from_ptr(name) }.to_string_lossy().to_string();
   let regtype = unsafe { CStr::from_ptr(regtype) }.to_string_lossy().to_string();
   let domain = unsafe { CStr::from_ptr(domain) }.to_string_lossy().to_string();
   let Some(state) = shared() else { return };
+  clear_error(&state);
+  if let Ok(mut state) = state.lock() {
+    state.browsing = true;
+  }
   let Ok(mut state) = state.lock() else { return };
   if flags & FLAG_ADD != 0 {
     state.pending.push(PendingService {
@@ -407,6 +552,11 @@ extern "C" fn on_resolve(
   _context: *mut c_void,
 ) {
   if error != NO_ERROR || fullname.is_null() || host.is_null() {
+    if error != NO_ERROR {
+      if let Some(state) = shared() {
+        record_error(&state, error);
+      }
+    }
     return;
   }
   let full = unsafe { CStr::from_ptr(fullname) }.to_string_lossy().to_string();
@@ -417,11 +567,22 @@ extern "C" fn on_resolve(
   if id.is_empty() {
     return;
   }
-  let addresses = resolve_addresses(&host);
+  let Some(state) = shared() else { return };
+  let addresses = match resolve_addresses(&host) {
+    Ok(addresses) => addresses,
+    Err(code) => {
+      record_error_message(
+        &state,
+        format!("não resolveu {host} (getaddrinfo {code})."),
+      );
+      return;
+    }
+  };
   if addresses.is_empty() {
+    record_error_message(&state, format!("{host} não devolveu nenhum IPv4."));
     return;
   }
-  let Some(state) = shared() else { return };
+  clear_error(&state);
   let Ok(mut state) = state.lock() else { return };
   if id == state.self_id {
     return;
@@ -476,9 +637,9 @@ fn txt_value(record: *const c_void, len: u16, key: &str) -> Option<String> {
 }
 
 /// IPv4 do host `.local` via mDNSResponder (`getaddrinfo` resolve `.local`).
-fn resolve_addresses(host: &str) -> Vec<String> {
+fn resolve_addresses(host: &str) -> Result<Vec<String>, i32> {
   let Ok(host) = CString::new(host) else {
-    return Vec::new();
+    return Err(-1);
   };
   let mut hints: libc::addrinfo = unsafe { std::mem::zeroed() };
   hints.ai_family = libc::AF_INET;
@@ -486,7 +647,7 @@ fn resolve_addresses(host: &str) -> Vec<String> {
   let mut result: *mut libc::addrinfo = ptr::null_mut();
   let code = unsafe { libc::getaddrinfo(host.as_ptr(), ptr::null(), &hints, &mut result) };
   if code != 0 || result.is_null() {
-    return Vec::new();
+    return Err(code);
   }
   let mut addresses = Vec::new();
   let mut current = result;
@@ -506,7 +667,7 @@ fn resolve_addresses(host: &str) -> Vec<String> {
     }
   }
   unsafe { libc::freeaddrinfo(result) };
-  addresses
+  Ok(addresses)
 }
 
 /// Intervalo do polling do snapshot.

@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use iroh::{Endpoint, EndpointAddr, EndpointId};
@@ -56,10 +56,15 @@ struct Running {
   endpoint_id: EndpointId,
   local: engine::LocalNode,
   pair_local: pair::PairLocal,
+  context: Arc<DialContext>,
   #[cfg(not(target_os = "ios"))]
   advertisement: Option<discovery::Advertisement>,
   #[cfg(target_os = "ios")]
   discovery: Option<discovery_ios::Discovery>,
+  /// Cresce a cada "Reiniciar descoberta"; os loops antigos saem ao ver a troca.
+  discovery_gen: Arc<AtomicU64>,
+  /// Falha ao subir a descoberta (o sync continua de pé para o pareamento manual).
+  discovery_error: Option<String>,
   alive: Arc<AtomicBool>,
   discovered: Arc<Mutex<BTreeMap<EndpointId, Discovered>>>,
   in_flight: Arc<Mutex<BTreeSet<EndpointId>>>,
@@ -120,6 +125,26 @@ pub struct SyncStatus {
   pub endpoint_id: Option<String>,
   pub peers: Vec<SyncPeerStatus>,
   pub pending_pairs: Vec<SyncPendingPair>,
+  pub discovery: SyncDiscoveryStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncDiscoveryStatus {
+  /// `off` | `starting` | `announcing` | `browsing` | `permission` | `error`.
+  pub state: String,
+  pub found: usize,
+  pub message: Option<String>,
+}
+
+impl SyncDiscoveryStatus {
+  fn off() -> Self {
+    Self {
+      state: "off".to_string(),
+      found: 0,
+      message: None,
+    }
+  }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -401,20 +426,30 @@ fn spawn_discovery(
   context: Arc<DialContext>,
   receiver: mdns_sd::Receiver<mdns_sd::ServiceEvent>,
   discovered: Arc<Mutex<BTreeMap<EndpointId, Discovered>>>,
+  generation: Arc<AtomicU64>,
+  my_generation: u64,
 ) {
   tauri::async_runtime::spawn(async move {
     // `Receiver::recv` é bloqueante: bombeia para o runtime async.
     let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
+    let thread_generation = generation.clone();
     std::thread::spawn(move || {
-      while let Ok(event) = receiver.recv() {
-        if events_tx.send(event).is_err() {
-          break;
+      while thread_generation.load(Ordering::Relaxed) == my_generation {
+        match receiver.recv() {
+          Ok(event) => {
+            if events_tx.send(event).is_err() {
+              break;
+            }
+          }
+          Err(_) => break,
         }
       }
     });
 
     let me = context.endpoint.id();
-    while context.alive.load(Ordering::Relaxed) {
+    while context.alive.load(Ordering::Relaxed)
+      && generation.load(Ordering::Relaxed) == my_generation
+    {
       let Some(event) = events_rx.recv().await else {
         break;
       };
@@ -456,10 +491,14 @@ fn spawn_discovery_ios(
   context: Arc<DialContext>,
   discovery: discovery_ios::Handle,
   discovered: Arc<Mutex<BTreeMap<EndpointId, Discovered>>>,
+  generation: Arc<AtomicU64>,
+  my_generation: u64,
 ) {
   tauri::async_runtime::spawn(async move {
     let me = context.endpoint.id();
-    while context.alive.load(Ordering::Relaxed) {
+    while context.alive.load(Ordering::Relaxed)
+      && generation.load(Ordering::Relaxed) == my_generation
+    {
       {
         let peers = discovery.snapshot();
         {
@@ -512,7 +551,7 @@ async fn status(app: &AppHandle, db: &str, state: &SyncState) -> Result<SyncStat
     })
     .collect();
   let guard = state.inner.lock().await;
-  let (endpoint_id, pending_pairs) = match guard.as_ref() {
+  let (endpoint_id, pending_pairs, discovery) = match guard.as_ref() {
     Some(running) => {
       let pending = running
         .pending
@@ -526,9 +565,10 @@ async fn status(app: &AppHandle, db: &str, state: &SyncState) -> Result<SyncStat
           sas: pending.sas.clone(),
         })
         .collect();
-      (Some(running.endpoint_id.to_string()), pending)
+      let discovery = discovery_status(running).await;
+      (Some(running.endpoint_id.to_string()), pending, discovery)
     }
-    None => (None, Vec::new()),
+    None => (None, Vec::new(), SyncDiscoveryStatus::off()),
   };
   Ok(SyncStatus {
     enabled,
@@ -536,7 +576,56 @@ async fn status(app: &AppHandle, db: &str, state: &SyncState) -> Result<SyncStat
     endpoint_id,
     peers,
     pending_pairs,
+    discovery,
   })
+}
+
+/// Fotografia da descoberta para a UI (Configurações › Sincronização).
+async fn discovery_status(running: &Running) -> SyncDiscoveryStatus {
+  #[cfg(target_os = "ios")]
+  {
+    if let Some(discovery) = running.discovery.as_ref() {
+      let report = discovery.report();
+      return SyncDiscoveryStatus {
+        state: report.state,
+        found: report.found,
+        message: report.message,
+      };
+    }
+    if running.discovery_error.is_some() {
+      if let Some(report) = discovery_ios::last_report() {
+        return SyncDiscoveryStatus {
+          state: report.state,
+          found: report.found,
+          message: report.message.or_else(|| running.discovery_error.clone()),
+        };
+      }
+    }
+    SyncDiscoveryStatus {
+      state: if running.discovery_error.is_some() {
+        "error".to_string()
+      } else {
+        "off".to_string()
+      },
+      found: 0,
+      message: running.discovery_error.clone(),
+    }
+  }
+  #[cfg(not(target_os = "ios"))]
+  {
+    let found = running.discovered.lock().await.len();
+    SyncDiscoveryStatus {
+      state: if running.advertisement.is_some() {
+        "browsing".to_string()
+      } else if running.discovery_error.is_some() {
+        "error".to_string()
+      } else {
+        "off".to_string()
+      },
+      found,
+      message: running.discovery_error.clone(),
+    }
+  }
 }
 
 /// Liga o endpoint, anuncia e passa a sincronizar com os pares pareados.
@@ -561,15 +650,28 @@ pub async fn sync_start(
   let name = format!("Atlas {}", endpoint_id.fmt_short());
 
   #[cfg(not(target_os = "ios"))]
-  let (advertisement, receiver) = discovery::Advertisement::start(&endpoint)?;
+  let (advertisement, receiver, discovery_error) =
+    match discovery::Advertisement::start(&endpoint) {
+      Ok((advertisement, receiver)) => (Some(advertisement), Some(receiver), None),
+      Err(error) => {
+        log::warn!("sync: descoberta indisponível: {error}");
+        (None, None, Some(error))
+      }
+    };
   #[cfg(target_os = "ios")]
-  let ios_discovery = {
+  let (ios_discovery, discovery_error) = {
     let port = endpoint
       .bound_sockets()
       .first()
       .map(std::net::SocketAddr::port)
       .ok_or_else(|| "endpoint sem socket UDP ligado".to_string())?;
-    discovery_ios::Discovery::start(&endpoint_id.to_string(), &name, port)?
+    match discovery_ios::Discovery::start(&endpoint_id.to_string(), &name, port) {
+      Ok(discovery) => (Some(discovery), None),
+      Err(error) => {
+        log::warn!("sync: descoberta indisponível: {error}");
+        (None, Some(error))
+      }
+    }
   };
 
   let pair_local = pair::PairLocal {
@@ -584,6 +686,7 @@ pub async fn sync_start(
   let pending = Arc::new(Mutex::new(BTreeMap::new()));
   let attempts = Arc::new(Mutex::new(HashMap::new()));
   let alive = Arc::new(AtomicBool::new(true));
+  let discovery_gen = Arc::new(AtomicU64::new(0));
 
   spawn_accept(
     app.clone(),
@@ -604,18 +707,38 @@ pub async fn sync_start(
     alive: alive.clone(),
   });
   #[cfg(not(target_os = "ios"))]
-  spawn_discovery(context, receiver, discovered.clone());
+  if let Some(receiver) = receiver {
+    spawn_discovery(
+      context.clone(),
+      receiver,
+      discovered.clone(),
+      discovery_gen.clone(),
+      0,
+    );
+  }
   #[cfg(target_os = "ios")]
-  spawn_discovery_ios(context, ios_discovery.handle(), discovered.clone());
+  if let Some(discovery) = ios_discovery.as_ref() {
+    spawn_discovery_ios(
+      context.clone(),
+      discovery.handle(),
+      discovered.clone(),
+      discovery_gen.clone(),
+      0,
+    );
+  }
 
   set_enabled(&pool, true).await?;
 
   let mut guard = state.inner.lock().await;
   if guard.is_some() {
     #[cfg(not(target_os = "ios"))]
-    advertisement.stop();
+    if let Some(advertisement) = advertisement {
+      advertisement.stop();
+    }
     #[cfg(target_os = "ios")]
-    ios_discovery.stop();
+    if let Some(discovery) = ios_discovery {
+      discovery.stop();
+    }
     endpoint.close().await;
     return Err("sync já estava rodando".to_string());
   }
@@ -624,10 +747,13 @@ pub async fn sync_start(
     endpoint_id,
     local,
     pair_local,
+    context,
     #[cfg(not(target_os = "ios"))]
-    advertisement: Some(advertisement),
+    advertisement,
     #[cfg(target_os = "ios")]
-    discovery: Some(ios_discovery),
+    discovery: ios_discovery,
+    discovery_gen,
+    discovery_error,
     alive,
     discovered,
     in_flight,
@@ -661,6 +787,78 @@ pub async fn sync_stop(
     running.endpoint.close().await;
   }
   set_enabled(&pool, false).await?;
+  status(&app, &db, &state).await
+}
+
+/// Reinicia só a descoberta (registro + browse), sem derrubar o endpoint nem os
+/// pares. Útil quando o iOS nega/atrasa a permissão de Rede Local.
+#[tauri::command]
+pub async fn sync_discovery_restart(
+  app: AppHandle,
+  state: State<'_, SyncState>,
+  db: String,
+) -> Result<SyncStatus, String> {
+  ensure_prod(&db)?;
+  {
+    let mut guard = state.inner.lock().await;
+    let Some(running) = guard.as_mut() else {
+      return Err("sync não está rodando".to_string());
+    };
+    let generation = running.discovery_gen.fetch_add(1, Ordering::Relaxed) + 1;
+    #[cfg(not(target_os = "ios"))]
+    {
+      if let Some(advertisement) = running.advertisement.take() {
+        advertisement.stop();
+      }
+      match discovery::Advertisement::start(&running.endpoint) {
+        Ok((advertisement, receiver)) => {
+          running.advertisement = Some(advertisement);
+          running.discovery_error = None;
+          spawn_discovery(
+            running.context.clone(),
+            receiver,
+            running.discovered.clone(),
+            running.discovery_gen.clone(),
+            generation,
+          );
+        }
+        Err(error) => {
+          log::warn!("sync: reiniciar descoberta: {error}");
+          running.discovery_error = Some(error);
+        }
+      }
+    }
+    #[cfg(target_os = "ios")]
+    {
+      if let Some(discovery) = running.discovery.take() {
+        discovery.stop();
+      }
+      let port = running
+        .endpoint
+        .bound_sockets()
+        .first()
+        .map(std::net::SocketAddr::port)
+        .unwrap_or(0);
+      let name = format!("Atlas {}", running.endpoint_id.fmt_short());
+      match discovery_ios::Discovery::start(&running.endpoint_id.to_string(), &name, port) {
+        Ok(discovery) => {
+          spawn_discovery_ios(
+            running.context.clone(),
+            discovery.handle(),
+            running.discovered.clone(),
+            running.discovery_gen.clone(),
+            generation,
+          );
+          running.discovery = Some(discovery);
+          running.discovery_error = None;
+        }
+        Err(error) => {
+          log::warn!("sync: reiniciar descoberta: {error}");
+          running.discovery_error = Some(error);
+        }
+      }
+    }
+  }
   status(&app, &db, &state).await
 }
 

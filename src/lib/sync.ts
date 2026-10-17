@@ -22,12 +22,20 @@ export interface SyncPendingPair {
 	sas: string;
 }
 
+export interface SyncDiscoveryStatus {
+	/** `off` | `starting` | `announcing` | `browsing` | `permission` | `error`. */
+	state: 'off' | 'starting' | 'announcing' | 'browsing' | 'permission' | 'error';
+	found: number;
+	message: string | null;
+}
+
 export interface SyncStatus {
 	enabled: boolean;
 	running: boolean;
 	endpointId: string | null;
 	peers: SyncPeerStatus[];
 	pendingPairs: SyncPendingPair[];
+	discovery: SyncDiscoveryStatus;
 }
 
 export interface SyncDiscovered {
@@ -74,6 +82,10 @@ export function syncStart(): Promise<SyncStatus> {
 
 export function syncStop(): Promise<SyncStatus> {
 	return invoke<SyncStatus>('sync_stop', { db: activeDbName() });
+}
+
+export function syncDiscoveryRestart(): Promise<SyncStatus> {
+	return invoke<SyncStatus>('sync_discovery_restart', { db: activeDbName() });
 }
 
 export function syncNow(): Promise<SyncStatus> {
