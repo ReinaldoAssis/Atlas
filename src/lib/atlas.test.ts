@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
+	booleanLabelOf,
 	createEmptySnapshot,
 	currentStreak,
 	dateOffset,
 	didMeetTarget,
 	experienceProgress,
+	HABIT_BOOLEAN_LABELS,
 	localDate,
 	money,
+	nextBooleanLog,
+	positiveValueOf,
 	weekStartDate,
 	xpNeededForLevel,
 	type Habit,
@@ -92,6 +96,39 @@ describe('didMeetTarget', () => {
 		const habit = dailyBooleanHabit({ metric: 'count', unit: 'ml', target: 2000 });
 		expect(didMeetTarget(habit, 1999)).toBe(false);
 		expect(didMeetTarget(habit, 2000)).toBe(true);
+	});
+});
+
+describe('sim/não com direção e rótulos', () => {
+	it('positiveValueOf assume 1 e respeita o 0', () => {
+		expect(positiveValueOf({})).toBe(1);
+		expect(positiveValueOf(null)).toBe(1);
+		expect(positiveValueOf({ positiveValue: 0 })).toBe(0);
+	});
+
+	it('didMeetTarget usa o estado positivo escolhido', () => {
+		const negative = dailyBooleanHabit({ positiveValue: 0 });
+		expect(didMeetTarget(negative, 0)).toBe(true);
+		expect(didMeetTarget(negative, 1)).toBe(false);
+	});
+
+	it('booleanLabelOf cai no padrão e aceita rótulos customizados', () => {
+		const plain = dailyBooleanHabit();
+		expect(booleanLabelOf(plain, 1, HABIT_BOOLEAN_LABELS)).toBe('Feito');
+		expect(booleanLabelOf(plain, 0, HABIT_BOOLEAN_LABELS)).toBe('Não feito');
+		const custom = dailyBooleanHabit({ positiveLabel: 'Bom', negativeLabel: 'Ruim' });
+		expect(booleanLabelOf(custom, 1, HABIT_BOOLEAN_LABELS)).toBe('Bom');
+		expect(booleanLabelOf(custom, 0, HABIT_BOOLEAN_LABELS)).toBe('Ruim');
+	});
+
+	it('nextBooleanLog cicla positivo → negativo → remove', () => {
+		expect(nextBooleanLog(false, 0, 1)).toBe(1);
+		expect(nextBooleanLog(true, 1, 1)).toBe(0);
+		expect(nextBooleanLog(true, 0, 1)).toBe('remove');
+		// Com o positivo valendo 0, o ciclo começa pelo 0.
+		expect(nextBooleanLog(false, 0, 0)).toBe(0);
+		expect(nextBooleanLog(true, 0, 0)).toBe(1);
+		expect(nextBooleanLog(true, 1, 0)).toBe('remove');
 	});
 });
 

@@ -2,12 +2,12 @@
 	import { onMount } from 'svelte';
 	import { isTauri } from '@tauri-apps/api/core';
 	import {
-		CalendarDays, Check, ChevronLeft,
-		Flame, FlaskConical, LayoutDashboard, Menu, NotebookPen, Plus, Route, Settings2, Target,
+		Archive, ArchiveRestore, CalendarDays, Check, ChevronLeft,
+		Flame, FlaskConical, LayoutDashboard, Menu, MoreHorizontal, NotebookPen, Pencil, Plus, Route, Settings2, Target,
 		Wallet, X, type LucideIcon
 	} from '@lucide/svelte';
 	import {
-		currentStreak, dateOffset, didMeetTarget, formatMinutes, id, localDate, money, weekStartDate, WEEK_MAX,
+		HABIT_BOOLEAN_LABELS, booleanLabelOf, currentStreak, dateOffset, didMeetTarget, formatMinutes, id, localDate, money, nextBooleanLog, positiveValueOf, weekStartDate, WEEK_MAX,
 		TIME_SLOT_START_HOUR, TIME_SLOT_COUNT, TIME_SLOT_MINUTES,
 		experienceProgress, type AppPreferences, type AtlasSnapshot, type Category, type Habit, type HabitLog,
 		type NavigationKey, type TimeBlock, type Tracker, type TrackerEntry, type Transaction
@@ -27,6 +27,7 @@ import { checkForUpdate, relaunchApp, updaterSupportedHere } from '#lib/updater'
 import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, restoreAttachments } from '#lib/notes-store';
 	import type { Note, NotesState } from '#lib/notes';
 	import { notesForBlock, type NoteRef } from '#lib/tempo-ref';
+	import { TimeBubble } from '#lib/bubble';
 	import { edgeRatio, isMilestone, nodeReached, type GraphState } from '#lib/graph';
 	import { reconcileGraph } from '#lib/graph-sources';
 	import GraphView from '#lib/components/graph/GraphView.svelte';
@@ -34,10 +35,12 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	import TrackersView from '#lib/components/habits/TrackersView.svelte';
 	import SettingsSheet from '#lib/components/settings/SettingsSheet.svelte';
 	import Button from '#lib/components/ui/Button.svelte';
+	import CardMenu from '#lib/components/ui/CardMenu.svelte';
 	import Chip from '#lib/components/ui/Chip.svelte';
 	import Field from '#lib/components/ui/Field.svelte';
 	import Segmented from '#lib/components/ui/Segmented.svelte';
 	import Sheet from '#lib/components/ui/Sheet.svelte';
+	import ValueSheet from '#lib/components/ui/ValueSheet.svelte';
 	import {
 		burstAt, centerOf, confetti, floatValue, playFeedback, playTone, popElement,
 		prefersReducedMotion, pulseHaptic, vibrate
@@ -92,7 +95,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let notesOpenId = $state('');
 	let notesOpenToken = $state(0);
 	/** Bolha de notas de um horário no planejador. */
-	let timeNoteBubble = $state<{ x: number; y: number; blockId: string } | null>(null);
+	let timeGridEl = $state<HTMLElement | null>(null);
+	let plannerBubble: TimeBubble | null = null;
 	let editingTransactionId = $state('');
 	let formError = $state('');
 	let wasPaused = $state(false);
@@ -376,7 +380,23 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	let transactionForm = $state({ type: 'expense' as 'income' | 'expense', amount: '', categoryId: '', date: localDate(), description: '' });
 	let amountInput = $state<HTMLInputElement | null>(null);
-	let habitForm = $state({ name: '', metric: 'boolean' as Habit['metric'], unit: '', target: '1', scheduledDays: [1, 2, 3, 4, 5] as number[], reminder: '' });
+	let habitForm = $state({
+		name: '',
+		metric: 'boolean' as Habit['metric'],
+		unit: '',
+		target: '1',
+		scheduledDays: [1, 2, 3, 4, 5] as number[],
+		reminder: '',
+		positiveLabel: HABIT_BOOLEAN_LABELS.positive,
+		negativeLabel: HABIT_BOOLEAN_LABELS.negative,
+		positiveValue: 1 as 0 | 1
+	});
+	/** Hábito em edição (vazio = criando). */
+	let editingHabitId = $state('');
+	/** Menu do card de hábito (segurar/botão direito/⋯). */
+	let habitMenu = $state<{ habit: Habit; x: number; y: number } | null>(null);
+	let habitPressTimer: ReturnType<typeof setTimeout> | undefined;
+	let habitPressOrigin = { x: 0, y: 0 };
 	let habitValues = $state<Record<string, string>>({});
 	let habitSheet = $state<Habit | null>(null);
 	let habitSheetValue = $state(0);
@@ -930,6 +950,30 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		}
 	}
 
+	/** Teclado do pad de lançamento (dígitos caem direto no valor). */
+	function onShellKeydown(event: KeyboardEvent) {
+		if (!financeEntry.open) return;
+		if (/^[0-9]$/.test(event.key)) {
+			event.preventDefault();
+			financeKey(event.key);
+			return;
+		}
+		if (event.key === 'Backspace') {
+			event.preventDefault();
+			financeKey('⌫');
+			return;
+		}
+		if (event.key === 'Enter') {
+			event.preventDefault();
+			void addFinanceTransaction();
+			return;
+		}
+		if (event.key === 'Escape') {
+			event.preventDefault();
+			financeEntry = { ...financeEntry, open: false };
+		}
+	}
+
 	/** Teclado do lançamento: dígitos caem no Valor quando o foco não está num campo. */
 	$effect(() => {
 		if (modal !== 'transaction') return;
@@ -1072,10 +1116,82 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		toastMessage(existingIndex >= 0 ? 'Lançamento atualizado.' : 'Lançamento salvo.');
 	}
 
-	function openHabit() {
+	function openHabit(habit?: Habit) {
 		formError = '';
-		habitForm = { name: '', metric: 'boolean', unit: '', target: '1', scheduledDays: [1, 2, 3, 4, 5], reminder: '' };
+		editingHabitId = habit?.id ?? '';
+		habitForm = habit
+			? {
+					name: habit.name,
+					metric: habit.metric,
+					unit: habit.unit,
+					target: String(habit.target),
+					scheduledDays: [...habit.scheduledDays],
+					reminder: habit.reminder ?? '',
+					positiveLabel: habit.positiveLabel?.trim() || HABIT_BOOLEAN_LABELS.positive,
+					negativeLabel: habit.negativeLabel?.trim() || HABIT_BOOLEAN_LABELS.negative,
+					positiveValue: positiveValueOf(habit)
+				}
+			: {
+					name: '',
+					metric: 'boolean',
+					unit: '',
+					target: '1',
+					scheduledDays: [1, 2, 3, 4, 5],
+					reminder: '',
+					positiveLabel: HABIT_BOOLEAN_LABELS.positive,
+					negativeLabel: HABIT_BOOLEAN_LABELS.negative,
+					positiveValue: 1
+				};
 		modal = 'habit';
+	}
+
+	/** Abre o menu do card de hábito (segurar no toque / botão direito / ⋯). */
+	function openHabitMenu(habit: Habit, x: number, y: number) {
+		habitMenu = { habit, x: Math.min(x, window.innerWidth - 200), y: Math.min(y, window.innerHeight - 170) };
+	}
+
+	function startHabitPress(event: PointerEvent, habit: Habit) {
+		if (event.button !== 0 || event.pointerType === 'mouse') return;
+		habitPressOrigin = { x: event.clientX, y: event.clientY };
+		clearTimeout(habitPressTimer);
+		habitPressTimer = setTimeout(() => openHabitMenu(habit, event.clientX, event.clientY), 460);
+	}
+
+	function cancelHabitPress() {
+		clearTimeout(habitPressTimer);
+	}
+
+	async function deleteHabit(habit: Habit) {
+		if (!snapshot) return;
+		const beforeHabits = snapshot.habits.map((item) => ({ ...item }));
+		const beforeLogs = snapshot.habitLogs.filter((item) => item.habitId === habit.id).map((item) => ({ ...item }));
+		const next = cloneSnapshot();
+		next.habits = next.habits.filter((item) => item.id !== habit.id);
+		next.habitLogs = next.habitLogs.filter((item) => item.habitId !== habit.id);
+		await commit(next);
+		toastMessage(`Hábito "${habit.name}" excluído.`, {
+			undo: () => {
+				const copy = cloneSnapshot();
+				copy.habits = beforeHabits;
+				copy.habitLogs = beforeLogs;
+				void commit(copy);
+			}
+		});
+	}
+
+	async function archiveHabit(habit: Habit, active: boolean) {
+		if (!snapshot) return;
+		const before = snapshot.habits.map((item) => ({ ...item }));
+		const next = cloneSnapshot();
+		next.habits = next.habits.map((item) => (item.id === habit.id ? { ...item, active } : item));
+		await commit(next);
+		toastMessage(active ? 'Hábito reativado.' : 'Hábito arquivado. O histórico fica guardado.', {
+			undo: () => {
+				const copy = cloneSnapshot();
+				copy.habits = before;
+				void commit(copy);
+			}
+		});
 	}
 
 	function toggleScheduledDay(day: number) {
@@ -1091,27 +1207,54 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			formError = 'Informe um nome, uma meta válida e pelo menos um dia.';
 			return;
 		}
-		const next = cloneSnapshot();
-		next.habits.unshift({
-			id: id(), name: habitForm.name.trim(), metric: habitForm.metric,
+		const labels =
+			habitForm.metric === 'boolean'
+				? {
+						positiveLabel: habitForm.positiveLabel.trim() || HABIT_BOOLEAN_LABELS.positive,
+						negativeLabel: habitForm.negativeLabel.trim() || HABIT_BOOLEAN_LABELS.negative,
+						positiveValue: habitForm.positiveValue
+					}
+				: {};
+		const fields = {
+			name: habitForm.name.trim(),
+			metric: habitForm.metric,
 			unit: habitForm.metric === 'duration' ? 'min' : habitForm.unit.trim(),
 			target: habitForm.metric === 'boolean' ? 1 : Number(habitForm.target),
-			scheduledDays: habitForm.scheduledDays, active: true,
-			bestStreak: 0, reminder: habitForm.reminder || undefined
-		});
-		await commit(next, true, true);
-		const savedHabit = next.habits[0];
+			scheduledDays: [...habitForm.scheduledDays],
+			reminder: habitForm.reminder || undefined,
+			...labels
+		};
+		const next = cloneSnapshot();
+		const existingIndex = editingHabitId ? next.habits.findIndex((item) => item.id === editingHabitId) : -1;
+		let savedHabit: Habit;
+		if (existingIndex >= 0) {
+			savedHabit = { ...next.habits[existingIndex], ...fields };
+			next.habits[existingIndex] = savedHabit;
+		} else {
+			savedHabit = { id: id(), active: true, bestStreak: 0, ...fields };
+			next.habits.unshift(savedHabit);
+		}
+		const isNew = existingIndex < 0;
+		await commit(next, isNew, isNew);
 		await scheduleHabitReminder(savedHabit);
 		modal = null;
-		toastMessage('Hábito criado.');
+		editingHabitId = '';
+		toastMessage(isNew ? 'Hábito criado.' : 'Hábito atualizado.');
 	}
 
 	function logHabit(habit: Habit) {
 		if (!snapshot) return;
 		const existing = snapshot.habitLogs.find((item) => item.habitId === habit.id && item.date === today);
 		if (habit.metric === 'boolean') {
-			void saveHabitLog(habit, existing?.completed ? 0 : 1, !existing);
-		} else {
+			const nextValue = nextBooleanLog(Boolean(existing), existing?.value ?? 0, positiveValueOf(habit));
+			if (nextValue === 'remove') {
+				void removeHabitLog(habit);
+				return;
+			}
+			void saveHabitLog(habit, nextValue, !existing);
+			return;
+		}
+		{
 			const input = document.querySelector<HTMLInputElement>(`[data-habit-input="${habit.id}"]`);
 			const value = Number(input?.value ?? habitValues[habit.id]);
 			if (!Number.isFinite(value) || value < 0) {
@@ -1120,6 +1263,23 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			}
 			void saveHabitLog(habit, value, !existing);
 		}
+	}
+
+	async function removeHabitLog(habit: Habit) {
+		if (!snapshot) return;
+		const existing = snapshot.habitLogs.find((item) => item.habitId === habit.id && item.date === today);
+		if (!existing) return;
+		const before = { ...existing };
+		const next = cloneSnapshot();
+		next.habitLogs = next.habitLogs.filter((item) => item.id !== existing.id);
+		await commit(next);
+		toastMessage('Registro removido.', {
+			undo: () => {
+				const copy = cloneSnapshot();
+				copy.habitLogs = [before, ...copy.habitLogs];
+				void commit(copy);
+			}
+		});
 	}
 
 	async function saveHabitLog(habit: Habit, value: number, created: boolean, date = today, coords?: [number, number]) {
@@ -1131,7 +1291,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const qualifies = didMeetTarget(habit, value);
 		const awardExperience = qualifies && !existingLog?.experienceAwarded;
 		const log: HabitLog = {
-			id: existingLog?.id ?? id(), habitId: habit.id, date, value, completed: value > 0,
+			id: existingLog?.id ?? id(), habitId: habit.id, date, value,
+			completed: habit.metric === 'boolean' ? qualifies : value > 0,
 			experienceAwarded: Boolean(existingLog?.experienceAwarded || awardExperience)
 		};
 		if (existingIndex >= 0) next.habitLogs[existingIndex] = log;
@@ -1144,11 +1305,11 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const sound = next.preferences.soundEnabled;
 		const reduced = prefersReducedMotion();
 		await commit(next, true, created);
-		playFeedback(value ? 'success' : 'tap', sound);
-		pulseHaptic(next.preferences.hapticsEnabled, value ? [12, 25, 18] : 8);
+		playFeedback(qualifies ? 'success' : 'tap', sound);
+		pulseHaptic(next.preferences.hapticsEnabled, qualifies ? [12, 25, 18] : 8);
 		const tile = document.querySelector<HTMLElement>(`[data-habit-id="${habit.id}"]`);
 		const [px, py] = coords ?? centerOf(tile);
-		if (value) popElement(tile);
+		if (qualifies) popElement(tile);
 		if (awardExperience) {
 			const done = prototypeTodayDone;
 			const scale = [523, 587, 659, 784, 880, 1047];
@@ -1170,7 +1331,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			[784, 988, 1175, 1568].forEach((frequency, index) => setTimeout(() => playTone(frequency, 0.25, 'triangle', 0.06, sound), 400 + index * 90));
 		}
 		modal = null;
-		if (!awardExperience && !reduced) toastMessage(value ? 'Registro feito.' : 'Registro atualizado.');
+		if (!awardExperience && !reduced) toastMessage(qualifies ? 'Registro feito.' : 'Registro atualizado.');
 	}
 
 	function openDashHabitPick() {
@@ -1268,37 +1429,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 	}
 
-	/* ---------- referências `tempo` das notas no planejador ---------- */
-	let blockBubbleTimer: ReturnType<typeof setTimeout> | undefined;
-
-	function scheduleHideBlockNotes() {
-		clearTimeout(blockBubbleTimer);
-		blockBubbleTimer = setTimeout(() => (timeNoteBubble = null), 180);
-	}
-
-	function onTimePointerOver(event: PointerEvent) {
-		const cell = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-tp-slot]');
-		const blockId = cell ? timeGridBlocks[Number(cell.dataset.tpDay)]?.[Number(cell.dataset.tpSlot)] ?? null : null;
-		if (!blockId || !timeBlockNotes.has(blockId)) {
-			if (timeNoteBubble) scheduleHideBlockNotes();
-			return;
-		}
-		if (timeNoteBubble?.blockId === blockId) {
-			clearTimeout(blockBubbleTimer);
-			return;
-		}
-		clearTimeout(blockBubbleTimer);
-		const rect = (cell as HTMLElement).getBoundingClientRect();
-		timeNoteBubble = {
-			x: Math.min(Math.max(rect.left + rect.width / 2, 130), window.innerWidth - 130),
-			y: rect.top,
-			blockId
-		};
-	}
-
-	function hideBlockNotes() {
-		clearTimeout(blockBubbleTimer);
-		timeNoteBubble = null;
+	/* ---------- bolha de notas do planejador (briefing do animador) ---------- */
+	function escapeText(value: string): string {
+		return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 	}
 
 	function noteExcerpt(body: string): string {
@@ -1310,11 +1443,60 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function openNoteFromPlanner(noteId: string) {
-		timeNoteBubble = null;
+		plannerBubble?.hide(true);
 		notesOpenId = noteId;
 		notesOpenToken += 1;
 		goTab('notes');
 	}
+
+	function hideBlockNotes() {
+		plannerBubble?.hide(true);
+	}
+
+	// Cria a bolha quando a grade do planejador está montada e liga o hover das células.
+	$effect(() => {
+		const grid = timeGridEl;
+		if (!grid) return;
+		let current: NoteRef[] = [];
+		const bubble = new TimeBubble({
+			interactive: true,
+			offset: 8,
+			sound: snapshot?.preferences.soundEnabled ?? true,
+			haptics: snapshot?.preferences.hapticsEnabled ?? true,
+			onRowClick: (index) => {
+				const item = current[index];
+				if (item) openNoteFromPlanner(item.note.id);
+			}
+		});
+		plannerBubble = bubble;
+		const onOver = (event: PointerEvent) => {
+			const cell = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-tp-block]');
+			const blockId = cell?.dataset.tpBlock ?? '';
+			const found = blockId ? timeBlockNotes.get(blockId) : undefined;
+			if (!cell || !blockId || !found?.length) {
+				if (bubble.isOpen) bubble.later();
+				return;
+			}
+			const block = snapshot?.timeBlocks.find((item) => item.id === blockId);
+			current = found;
+			const rows = found
+				.map(
+					(item, index) =>
+						`<button class="tbb-r" data-i="${index}"><div class="tbb-1">${escapeText(item.note.title || 'Sem título')}</div><div class="tbb-2">${escapeText(noteExcerpt(item.note.body))}</div></button>`
+				)
+				.join('');
+			bubble.show(cell, `<div class="tbb-lb">Notas neste horário</div>${rows}`, block ? currentCategory(block.categoryId)?.color ?? '#d4f25a' : '#d4f25a');
+		};
+		const onLeave = () => bubble.later();
+		grid.addEventListener('pointerover', onOver);
+		grid.addEventListener('pointerleave', onLeave);
+		return () => {
+			grid.removeEventListener('pointerover', onOver);
+			grid.removeEventListener('pointerleave', onLeave);
+			bubble.destroy();
+			plannerBubble = null;
+		};
+	});
 
 	function hmSlots(slots: number): string {
 		const hours = Math.floor(slots / 2);
@@ -2104,6 +2286,16 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	<meta name="description" content="Registre e consulte seus dados de finanças, hábitos e tempo em um espaço local e pessoal." />
 </svelte:head>
 
+<svelte:window
+	onpointermove={(event) => {
+		if (habitPressTimer === undefined) return;
+		if (Math.hypot(event.clientX - habitPressOrigin.x, event.clientY - habitPressOrigin.y) > 9) cancelHabitPress();
+	}}
+	onpointerup={cancelHabitPress}
+	onpointercancel={cancelHabitPress}
+	onkeydown={onShellKeydown}
+/>
+
 {#if !ready}
 	<div class="loading-screen"><div class="loading-mark">A</div><span>Preparando seu Atlas…</span></div>
 {:else if loadError}
@@ -2354,35 +2546,44 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 							</div>
 
 							<div class="habit-prototype-grid habit-prototype-habits">
-								<button class="habit-prototype-card habit-prototype-wide habit-prototype-empty" onclick={openHabit}>
+								<button class="habit-prototype-card habit-prototype-wide habit-prototype-empty" onclick={() => openHabit()}>
 									<Target size={20} /> {snapshot.habits.filter((habit) => habit.active).length ? 'Novo hábito' : 'Criar primeiro hábito'}
 								</button>
 								{#each snapshot.habits.filter((habit) => habit.active) as habit}
 									{#if habit.metric === 'weekly'}
 										{@const count = weeklyValue(habit)}
 										{@const complete = count >= habit.target}
-										<section class:done={complete} class="habit-prototype-card habit-prototype-wide habit-prototype-pips" data-habit-id={habit.id}>
-											<div class="habit-prototype-row"><b>{habit.name}</b><small>{count} de {habit.target} na semana</small></div>
-											<div class="habit-prototype-pip-track">
-												{#each Array.from({ length: WEEK_MAX }, (_, index) => index + 1) as step}
-													<button class="habit-prototype-pip" class:on={step <= count} class:goal={step === habit.target} aria-label={`${step} de ${WEEK_MAX} na semana`} aria-pressed={step <= count} onclick={() => setWeeklyValue(habit, count === step ? step - 1 : step)}></button>
-												{/each}
-											</div>
-										</section>
+										<div class="hcard habit-prototype-wide">
+											<section class:done={complete} class="habit-prototype-card habit-prototype-wide habit-prototype-pips" data-habit-id={habit.id}>
+												<div class="habit-prototype-row"><b>{habit.name}</b><small>{count} de {habit.target} na semana</small></div>
+												<div class="habit-prototype-pip-track">
+													{#each Array.from({ length: WEEK_MAX }, (_, index) => index + 1) as step}
+														<button class="habit-prototype-pip" class:on={step <= count} class:goal={step === habit.target} aria-label={`${step} de ${WEEK_MAX} na semana`} aria-pressed={step <= count} onclick={() => setWeeklyValue(habit, count === step ? step - 1 : step)}></button>
+													{/each}
+												</div>
+											</section>
+											<button class="hcard-more" aria-label={`Opções de ${habit.name}`} onclick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openHabitMenu(habit, rect.left, rect.bottom + 6); }}><MoreHorizontal size={16} /></button>
+										</div>
 									{:else}
 										{@const log = snapshot.habitLogs.find((item) => item.habitId === habit.id && item.date === today)}
 										{@const value = log?.value ?? 0}
-										{@const complete = didMeetTarget(habit, value)}
+										{@const complete = log ? didMeetTarget(habit, value) : false}
 										{@const progress = habit.metric === 'boolean' ? (complete ? 1 : 0) : Math.min(1, value / habit.target)}
-										{#if habit.metric === 'boolean'}
-											<button class:done={complete} class="habit-prototype-card habit-prototype-habit" data-habit-id={habit.id} style={`--habit-progress:${progress}`} onclick={() => logHabit(habit)}>
-												<b>{habit.name}</b><span><span class="habit-prototype-value">{complete ? 'Feito' : 'Hoje'}</span><br /><small>{complete ? 'Concluído' : 'Toque para registrar'}</small></span>{#if complete}<i class="habit-prototype-check"><Check size={15} /></i>{/if}
+										{@const label = habit.metric === 'boolean' ? (log ? booleanLabelOf(habit, value, HABIT_BOOLEAN_LABELS) : 'Hoje') : prototypeValue(habit, value)}
+										<div class="hcard">
+											<button
+												class:done={complete}
+												class="habit-prototype-card habit-prototype-habit"
+												data-habit-id={habit.id}
+												style={`--habit-progress:${progress}`}
+												onclick={() => (habit.metric === 'boolean' ? logHabit(habit) : openHabitSheet(habit))}
+												oncontextmenu={(event) => { event.preventDefault(); openHabitMenu(habit, event.clientX, event.clientY); }}
+												onpointerdown={(event) => startHabitPress(event, habit)}
+											>
+												<b>{habit.name}</b><span><span class="habit-prototype-value" class:idle={habit.metric === 'boolean' && !log}>{label}</span><br /><small>{habit.metric === 'boolean' ? (log ? (complete ? 'Concluído' : 'Registrado') : 'Toque para registrar') : `meta ${prototypeValue(habit, habit.target)}`}</small></span>{#if complete}<i class="habit-prototype-check"><Check size={15} /></i>{/if}
 											</button>
-										{:else}
-											<button class:done={complete} class="habit-prototype-card habit-prototype-habit" data-habit-id={habit.id} style={`--habit-progress:${progress}`} onclick={() => openHabitSheet(habit)}>
-												<b>{habit.name}</b><span><span class="habit-prototype-value">{prototypeValue(habit, value)}</span><br /><small>meta {prototypeValue(habit, habit.target)}</small></span>{#if complete}<i class="habit-prototype-check"><Check size={15} /></i>{/if}
-											</button>
-										{/if}
+											<button class="hcard-more" aria-label={`Opções de ${habit.name}`} onclick={(event) => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); openHabitMenu(habit, rect.left, rect.bottom + 6); }}><MoreHorizontal size={16} /></button>
+										</div>
 									{/if}
 								{/each}
 							</div>
@@ -2418,40 +2619,19 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 								<span class="tp-corner"></span>
 								{#each timeHeaderDays as header, index}<span class:td={index === timeTodayIndex} class="tp-h">{header.label}<b>{header.dayNumber}</b></span>{/each}
 							</div>
-							<div class="tp-grid" role="grid" tabindex="0" aria-label="Grade semanal de tempo" onpointerdown={beginTimePaint} onpointerover={onTimePointerOver} onpointerleave={scheduleHideBlockNotes} oncontextmenu={(event) => event.preventDefault()}>
+							<div class="tp-grid" role="grid" tabindex="0" aria-label="Grade semanal de tempo" bind:this={timeGridEl} onpointerdown={beginTimePaint} oncontextmenu={(event) => event.preventDefault()}>
 								{#each Array.from({ length: TIME_SLOT_COUNT }, (_, index) => index) as slot}
 									<span class="tp-rl">{slot % 2 === 0 ? `${String(TIME_SLOT_START_HOUR + slot / 2).padStart(2, '0')}:00` : ''}</span>
 									{#each Array.from({ length: 7 }, (_, index) => index) as day}
 										{@const cell = timeCellData(day, slot)}
 										{@const cellBlock = timeGridBlocks[day]?.[slot] ?? null}
 										{@const hasNotes = cellBlock ? timeBlockNotes.has(cellBlock) : false}
-										<div class:on={cell.categoryId} class:st={cell.isStart} class:en={cell.isEnd} class:hr={slot % 2 === 0} class:nt={hasNotes} class="tp-c" style={cell.categoryId ? `--cc:${cell.color}` : ''} data-tp-day={day} data-tp-slot={slot} aria-label={`${timeHeaderDays[day].label} ${slotToTime(slot)}${hasNotes ? ' · tem nota' : ''}`}>{cell.label}{#if hasNotes && cell.isStart}<i class="tp-note-dot" aria-hidden="true"></i>{/if}</div>
+										<div class:on={cell.categoryId} class:st={cell.isStart} class:en={cell.isEnd} class:hr={slot % 2 === 0} class:nt={hasNotes} class="tp-c" style={cell.categoryId ? `--cc:${cell.color}` : ''} data-tp-day={day} data-tp-slot={slot} data-tp-block={cellBlock ?? ''} aria-label={`${timeHeaderDays[day].label} ${slotToTime(slot)}${hasNotes ? ' · tem nota' : ''}`}>{cell.label}</div>
 									{/each}
 								{/each}
 								{#if timeNow}<div class="tp-now" style={`top:${timeNow.top}px;left:${timeNow.left}px;width:${timeNow.width}px`}></div>{/if}
 							</div>
 						</div>
-						{#if timeNoteBubble}
-							{@const bubbleNotes = timeBlockNotes.get(timeNoteBubble.blockId) ?? []}
-							<div
-								class="tp-note-bubble"
-								style={`left:${timeNoteBubble.x}px;top:${timeNoteBubble.y}px`}
-								role="dialog"
-								tabindex="-1"
-								aria-label="Notas neste horário"
-								onpointerdown={(event) => event.stopPropagation()}
-								onpointerenter={() => clearTimeout(blockBubbleTimer)}
-								onpointerleave={scheduleHideBlockNotes}
-							>
-								<span class="tp-nb-tip">Notas neste horário</span>
-								{#each bubbleNotes as item (item.note.id)}
-									<button onclick={() => openNoteFromPlanner(item.note.id)}>
-										<b>{item.note.title || 'Sem título'}</b>
-										<small>{noteExcerpt(item.note.body)}</small>
-									</button>
-								{/each}
-							</div>
-						{/if}
 					</section>
 				{:else if activeTab === 'notes'}
 					{#key notesVersion}
@@ -2520,17 +2700,41 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	{#if habitSheet}
 		{@const sheetHabit = habitSheet}
-		<div class="habit-prototype-overlay" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) habitSheet = null; }}>
-			<div class="habit-prototype-sheet" role="dialog" aria-modal="true" aria-label={`Registrar ${sheetHabit.name}`}>
-				<div class="habit-prototype-grip"></div>
-				<p>{sheetHabit.name}</p>
-				<div class:hit={habitSheetValue >= sheetHabit.target} class="habit-prototype-sheet-value">{prototypeValue(sheetHabit, habitSheetValue)}</div>
-				<small>Meta {prototypeValue(sheetHabit, sheetHabit.target)}</small>
-				<input aria-label={`Valor de ${sheetHabit.name}`} type="range" min="0" max={prototypeSheetMax(sheetHabit)} step={prototypeSheetStep(sheetHabit)} value={habitSheetValue} style={`--sheet-progress:${habitSheetValue / prototypeSheetMax(sheetHabit) * 100}%`} oninput={(event) => updateHabitSheetValue(Number(event.currentTarget.value))} />
-				<div class="habit-prototype-chips">{#each prototypePresets(sheetHabit) as preset}<button onclick={() => updateHabitSheetValue(sheetHabit.unit.toLowerCase() === 'ml' ? habitSheetValue + preset : preset)}>{sheetHabit.unit.toLowerCase() === 'ml' ? `+${prototypeValue(sheetHabit, preset)}` : prototypeValue(sheetHabit, preset)}</button>{/each}</div>
-				<button class="habit-prototype-save" onclick={saveHabitSheet}>Registrar</button>
-			</div>
-		</div>
+		<ValueSheet
+			title={sheetHabit.name}
+			value={habitSheetValue}
+			max={prototypeSheetMax(sheetHabit)}
+			step={prototypeSheetStep(sheetHabit)}
+			unit={sheetHabit.unit}
+			hint={`Meta ${prototypeValue(sheetHabit, sheetHabit.target)}`}
+			accentAt={sheetHabit.target}
+			saveLabel="Registrar"
+			presets={prototypePresets(sheetHabit).map((preset) => ({
+				value: preset,
+				label: sheetHabit.unit.toLowerCase() === 'ml' ? `+${prototypeValue(sheetHabit, preset)}` : prototypeValue(sheetHabit, preset),
+				additive: sheetHabit.unit.toLowerCase() === 'ml'
+			}))}
+			onchange={updateHabitSheetValue}
+			onsave={saveHabitSheet}
+			onclose={() => (habitSheet = null)}
+		/>
+	{/if}
+
+	{#if habitMenu}
+		<CardMenu
+			x={habitMenu.x}
+			y={habitMenu.y}
+			onclose={() => (habitMenu = null)}
+			items={[
+				{ label: 'Editar', icon: Pencil, action: () => openHabit(habitMenu!.habit) },
+				{
+					label: habitMenu.habit.active ? 'Arquivar' : 'Reativar',
+					icon: habitMenu.habit.active ? Archive : ArchiveRestore,
+					action: () => archiveHabit(habitMenu!.habit, !habitMenu!.habit.active)
+				},
+				{ label: 'Excluir', danger: true, action: () => deleteHabit(habitMenu!.habit) }
+			]}
+		/>
 	{/if}
 
 	{#if habitCelebration !== null}
@@ -2635,7 +2839,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					? 'Editar lançamento'
 					: 'Novo lançamento'
 				: modal === 'habit'
-					? 'Novo hábito'
+					? editingHabitId
+						? 'Editar hábito'
+						: 'Novo hábito'
 					: 'Pausa e descanso'}
 			closeLabel="Fechar"
 			onclose={() => (modal = null)}
@@ -2699,6 +2905,27 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 								{/if}
 							</Field>
 						</div>
+					{:else}
+						<div class="sheet-row">
+							<Field label="Rótulo do positivo">
+								<input bind:value={habitForm.positiveLabel} placeholder="Feito" maxlength="14" required />
+							</Field>
+							<Field label="Rótulo do negativo">
+								<input bind:value={habitForm.negativeLabel} placeholder="Não feito" maxlength="14" required />
+							</Field>
+						</div>
+						<div class="sheet-days">
+							<span class="sheet-days-label">Qual conta como positivo?</span>
+							<Segmented
+								label="Qual conta como positivo"
+								options={[
+									{ value: '1', label: habitForm.positiveLabel.trim() || HABIT_BOOLEAN_LABELS.positive },
+									{ value: '0', label: habitForm.negativeLabel.trim() || HABIT_BOOLEAN_LABELS.negative }
+								]}
+								value={String(habitForm.positiveValue)}
+								onchange={(value) => (habitForm.positiveValue = value === '0' ? 0 : 1)}
+							/>
+						</div>
 					{/if}
 					<div class="sheet-days">
 						<span class="sheet-days-label">Dias programados</span>
@@ -2717,7 +2944,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					</Field>
 					<div class="sheet-actions">
 						<Button variant="secondary" onclick={() => (modal = null)}>Cancelar</Button>
-						<Button type="submit"><Check size={16} /> Criar hábito</Button>
+						<Button type="submit"><Check size={16} /> {editingHabitId ? 'Salvar' : 'Criar hábito'}</Button>
 					</div>
 				</form>
 			{:else}

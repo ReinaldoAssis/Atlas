@@ -39,6 +39,13 @@ export interface Habit {
 	active: boolean;
 	reminder?: string;
 	bestStreak: number;
+	/**
+	 * Só para `metric: 'boolean'`: qual valor (0/1) conta como o positivo e os
+	 * rótulos mostrados. Ausentes = `1`, "Feito" e "Não feito".
+	 */
+	positiveValue?: 0 | 1;
+	positiveLabel?: string;
+	negativeLabel?: string;
 }
 
 export interface HabitLog {
@@ -71,6 +78,10 @@ export interface Tracker {
 	targetDirection: 'up' | 'down';
 	/** Perguntar a hora no lançamento rápido (senão usa a hora atual). */
 	askTime: boolean;
+	/** Só para `metric: 'boolean'` (ver `Habit`). Ausentes = `1`, "Sim" e "Não". */
+	positiveValue?: 0 | 1;
+	positiveLabel?: string;
+	negativeLabel?: string;
 	active: boolean;
 	createdAt: string;
 }
@@ -251,8 +262,33 @@ export function formatMinutes(minutes: number): string {
 }
 
 export function didMeetTarget(habit: Habit, value: number): boolean {
-	if (habit.metric === 'boolean') return value > 0;
+	if (habit.metric === 'boolean') return value === positiveValueOf(habit);
 	return value >= habit.target;
+}
+
+/** Valor (0/1) tratado como positivo num sim/não. Default: `1`. */
+export function positiveValueOf(source: { positiveValue?: 0 | 1 } | null | undefined): 0 | 1 {
+	return source?.positiveValue === 0 ? 0 : 1;
+}
+
+export const HABIT_BOOLEAN_LABELS = { positive: 'Feito', negative: 'Não feito' };
+export const TRACKER_BOOLEAN_LABELS = { positive: 'Sim', negative: 'Não' };
+
+/** Rótulo do estado lançado (`value`) num sim/não, com fallback por entidade. */
+export function booleanLabelOf(
+	source: { positiveValue?: 0 | 1; positiveLabel?: string; negativeLabel?: string },
+	value: number,
+	fallback: { positive: string; negative: string }
+): string {
+	return value === positiveValueOf(source)
+		? source.positiveLabel?.trim() || fallback.positive
+		: source.negativeLabel?.trim() || fallback.negative;
+}
+
+/** Próximo estado do ciclo do sim/não: positivo → negativo → remover. */
+export function nextBooleanLog(hasEntry: boolean, currentValue: number, positive: 0 | 1): 0 | 1 | 'remove' {
+	if (!hasEntry) return positive;
+	return currentValue === positive ? (positive === 1 ? 0 : 1) : 'remove';
 }
 
 export function currentStreak(
