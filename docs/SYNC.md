@@ -93,7 +93,7 @@ no device depois (mesmo fluxo de S7/S9).
 | **P1** | Metadados de sync (migração v6): `notes.updated_at` → epoch ms, `folders.updated_at`, `shared_settings`, `counters`, `sync_peers`/`sync_cursors`, ids determinísticos de log, HLC, gravação só da linha alterada, purga por par | ✅ |
 | **P2** | Engine: E0a (PoC Windows↔Windows) → endpoint iroh LAN, protocolo/cursor, LWW, evento pro front | ✅ **P2a–P2c** |
 | **P3** | Pareamento SAS + allowlist + store de pares | ✅ |
-| **P4** | Descoberta iOS (bridge Swift) + `project.yml`/`InfoPlist.strings` | — |
+| **P4** | Descoberta iOS (bridge Swift) + `project.yml`/`InfoPlist.strings` | ✅ (device pendente) |
 | **P5** | UI de Sincronização + backup/resumo do primeiro sync + rótulo de conflito | ✅ |
 | **P6** | Anexos (blobs) | fora do ciclo |
 
@@ -131,6 +131,27 @@ no device depois (mesmo fluxo de S7/S9).
   no CI, sem mDNS (addr direto de loopback).
 - Gotcha: `finish()` e `conn.close()` na mesma hora descarta o frame em voo — o
   acceptor espera o outro lado fechar antes de fechar a conexão.
+
+**P4 (descoberta no iOS) ✅** — `sync/discovery_ios.rs` + projeto Xcode:
+
+- O mDNS cru exigiria o entitlement multicast (negado pela Apple); a descoberta
+  usa o **DNS-SD C** (`DNSServiceRegister`/`Browse`/`Resolve`, que estão no
+  libSystem), sem plugin Swift e sem mudança de protocolo.
+- Uma thread por processo faz `poll` nos sockets do DNS-SD e chama
+  `DNSServiceProcessResult`; os callbacks atualizam um estado compartilhado.
+  TXT `id`/`v`, host resolvido com `getaddrinfo` (mDNSResponder entende
+  `.local`), porta do endpoint em ordem de rede.
+- O Rust lê o snapshot a cada 1 s e alimenta o mesmo mapa de descobertos do
+  desktop; `sync_start`/`sync_stop` ligam/desligam o registro e o browse.
+- `sync` e os commands passaram a compilar no iOS; `mdns-sd` ficou
+  desktop-only. iroh roda nos dois.
+- `project.yml`: `NSBonjourServices` (`_atlas-sync._udp`),
+  `NSLocalNetworkUsageDescription`, `InfoPlist.strings` pt-BR e os frameworks
+  `Network`/`SystemConfiguration` (iroh/netdev).
+- Verificado: `cargo check --target aarch64-apple-ios-sim` e
+  `npx tauri ios build --debug --target aarch64-sim` → `Atlas.app`.
+- **Device (pendente)**: prompt de Rede Local, descoberta real iPhone↔Windows,
+  SAS e edição nos dois sentidos (checklist em `docs/IOS-SIDELOAD.md`).
 
 **P5b (UI + boot + evento) ✅** — `src/lib/sync.ts` + Configurações + notas:
 

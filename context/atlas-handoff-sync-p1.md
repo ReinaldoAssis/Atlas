@@ -1,4 +1,4 @@
-# Handoff — Atlas · sync P2P (P1–P3 + P5)
+# Handoff — Atlas · sync P2P (P1–P5)
 
 > Para o próximo agente. **Não duplique specs/planos/PRs**: referencie por caminho.
 > Escopo: `docs/MVP.md` · UI: `docs/DESIGN.md` · plano: `docs/ROADMAP.md` (§7 = ordem das fatias) ·
@@ -16,7 +16,7 @@
 | **P3** | Pareamento SAS, allowlist e store de pares | ✅ |
 | **P5a** | Cópia de nota em conflito no merge (Rust) | ✅ |
 | **P5b** | UI de Sincronização, pareamento, backup do 1º sync, reload | ✅ |
-| **P4** | Descoberta iOS (Bonjour) | — (próximo) |
+| **P4** | Descoberta iOS (DNS-SD do sistema) | ✅ (simulador; device pendente) |
 
 Testes: **127** (`npm test`); Rust: **44** (`cargo test`, era 2 no começo do P2).
 CI: `frontend` (ubuntu+windows), `rust`, `windows-installer`, `release`.
@@ -36,6 +36,12 @@ CI: `frontend` (ubuntu+windows), `rust`, `windows-installer`, `release`.
   anúncios repetidos do mDNS.
 - Cargo: `iroh 1.3`/`mdns-sd 0.21`/`tokio` só desktop (`cfg(not(ios/android))`);
   `rust-version` 1.90 → **1.91** (MSRV do iroh).
+- **P4** (`discovery_ios.rs`): DNS-SD C (`dns_sd` no libSystem) numa thread com
+  `poll`/`DNSServiceProcessResult`; snapshot a cada 1 s alimenta o mesmo mapa de
+  descobertos. Sem plugin Swift: o `cargo build` do iOS linka antes do Xcode, e
+  o símbolo Swift quebrava o link. `project.yml` ganhou `NSBonjourServices`,
+  `NSLocalNetworkUsageDescription`, `InfoPlist.strings` pt-BR e
+  `Network`/`SystemConfiguration`. `sync`/commands compilam no iOS.
 - **P5b** (`src/lib/sync.ts` + Configurações): seção Sincronização, sub-sheet de
   pareamento com polling, sheet global do SAS, backup/resumo do 1º sync,
   auto-start no boot, reload no `atlas://sync-applied` (flush do editor) e chip
@@ -110,10 +116,11 @@ CI: `frontend` (ubuntu+windows), `rust`, `windows-installer`, `release`.
 
 ## Pendências (usuário)
 
-- **P4 (próximo)**: descoberta no iOS via Bonjour nativo (`NWBrowser`/
-  `NSNetService`), `NSBonjourServices` + `NSLocalNetworkUsageDescription` +
-  `InfoPlist.strings` (pt-BR), bridge Swift e reuso do mesmo protocolo. Hoje o
-  módulo `sync` é desktop-only; o P4 libera no iOS.
+- **Verificação no device (P4)**: instalar o `.ipa` via SideStore, abrir o sync,
+  aceitar o prompt de **Rede Local**, parear com o Windows/macOS por SAS e
+  editar nos dois sentidos. Se a descoberta não resolver, o fallback manual é
+  `ip:porta` na sub-sheet de pareamento (já existe).
+- **Próximo ciclo**: release/tag com o sync, e o P6 (anexos) ficou fora.
 - **Verificação manual do P5** (Mac): ligar o sync nas Configurações (primeiro
   sync → backup + resumo), parear dois app pelo SAS, editar dos dois lados e
   conferir: toast de atualização, rascunho preservado no editor aberto e chip

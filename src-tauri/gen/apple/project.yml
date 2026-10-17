@@ -64,6 +64,10 @@ targets:
         # Arquivos › Atlas, servindo de escape manual se o picker falhar.
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
+        # Sync P2P: Bonjour do sistema (plugin Swift) + permissão de Rede Local.
+        NSBonjourServices:
+          - _atlas-sync._udp
+        NSLocalNetworkUsageDescription: "O Atlas encontra seus aparelhos na mesma rede Wi-Fi para sincronizar."
     entitlements:
       path: app_iOS/app_iOS.entitlements
     scheme:
@@ -90,6 +94,9 @@ targets:
       - sdk: Security.framework
       - sdk: UIKit.framework
       - sdk: WebKit.framework
+      # iroh (sync P2P): sockets/Network e leitura de interfaces.
+      - sdk: Network.framework
+      - sdk: SystemConfiguration.framework
     preBuildScripts:
       - script: |
           npm run -- tauri ios xcode-script -v --platform "${PLATFORM_DISPLAY_NAME:?}" --sdk-root "${SDKROOT:?}" --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration "${CONFIGURATION:?}" ${FORCE_COLOR} ${ARCHS:?}
