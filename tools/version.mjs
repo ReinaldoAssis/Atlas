@@ -58,7 +58,7 @@ function setVersion(version) {
 	writeFileSync(PATHS.cargo, cargo);
 
 	const lock = readFileSync(PATHS.lock, 'utf8').replace(
-		/(\[\[package\]\]\nname = "app"\nversion = )"[^"]*"/,
+		/(\[\[package\]\]\r?\nname = "app"\r?\nversion = )"[^"]*"/,
 		`$1"${version}"`
 	);
 	writeFileSync(PATHS.lock, lock);
@@ -94,7 +94,7 @@ function checkVersion(expected) {
 		errors.push(`Cargo.toml ${cargoVersion ?? '?'} != VERSION ${version}`);
 	}
 	const lock = readFileSync(PATHS.lock, 'utf8');
-	const lockVersion = /\[\[package\]\]\nname = "app"\nversion = "([^"]*)"/.exec(lock)?.[1];
+	const lockVersion = /\[\[package\]\]\r?\nname = "app"\r?\nversion = "([^"]*)"/.exec(lock)?.[1];
 	if (lockVersion !== version) {
 		errors.push(`Cargo.lock ${lockVersion ?? '?'} != VERSION ${version}`);
 	}
