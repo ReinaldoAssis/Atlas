@@ -34,6 +34,7 @@
 		timeBlocks = [],
 		open,
 		initialMode,
+		flushToken = 0,
 		sound,
 		typingSound,
 		haptics,
@@ -56,6 +57,8 @@
 		sound: boolean;
 		typingSound: boolean;
 		haptics: boolean;
+		/** Muda quando o pai precisa que o rascunho seja gravado antes do reload. */
+		flushToken?: number;
 		backlinks: Note[];
 		onpatch: (patch: Partial<Note>) => void;
 		onpin: (element?: Element | null) => void;
@@ -110,6 +113,13 @@
 		}
 		if (dirty) commit();
 	}
+
+	let handledFlush = $state(untrack(() => flushToken));
+	$effect(() => {
+		if (flushToken === handledFlush) return;
+		handledFlush = flushToken;
+		flush();
+	});
 
 	function markChange() {
 		dirty = true;

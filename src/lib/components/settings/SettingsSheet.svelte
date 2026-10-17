@@ -1,10 +1,11 @@
 <script lang="ts">
-	import { Bell, CircleDollarSign, FlaskConical, Keyboard, Volume2, Vibrate, ArrowDownRight, ArrowUpRight, Plus, Flame, RefreshCw } from '@lucide/svelte';
+	import { Bell, CircleDollarSign, FlaskConical, Keyboard, Volume2, Vibrate, ArrowDownRight, ArrowUpRight, Plus, Flame, RefreshCw, Wifi, Link2, Smartphone } from '@lucide/svelte';
 	import type { AtlasSnapshot, Category } from '#lib/atlas';
 	import { m } from '#lib/paraglide/messages.js';
 	import Segmented from '#lib/components/ui/Segmented.svelte';
 	import Sheet from '#lib/components/ui/Sheet.svelte';
 	import Toggle from '#lib/components/ui/Toggle.svelte';
+	import { lastSyncLabel, type SyncPeerStatus, type SyncStatus } from '#lib/sync';
 
 	/**
 	 * Configurações seguindo `docs/DESIGN.md` §4: sheet com tiles, sem
@@ -14,6 +15,9 @@
 	let {
 		snapshot,
 		testMode,
+		syncAvailable,
+		sync,
+		syncBusy,
 		updaterAvailable,
 		updaterBusy,
 		updaterStatus,
@@ -27,10 +31,17 @@
 		onpause,
 		onexport,
 		onimport,
-		oncheckupdates
+		oncheckupdates,
+		onsynctoggle,
+		onsyncnow,
+		onpair,
+		onunpair
 	}: {
 		snapshot: AtlasSnapshot;
 		testMode: boolean;
+		syncAvailable: boolean;
+		sync: SyncStatus | null;
+		syncBusy: boolean;
 		updaterAvailable: boolean;
 		updaterBusy: boolean;
 		updaterStatus: string;
@@ -48,6 +59,10 @@
 		onexport: () => void;
 		onimport: () => void;
 		oncheckupdates: () => void;
+		onsynctoggle: (enabled: boolean) => void;
+		onsyncnow: () => void;
+		onpair: () => void;
+		onunpair: (peer: SyncPeerStatus) => void;
 	} = $props();
 
 	/** Paleta de categorias do guia (`docs/DESIGN.md` §2). */
@@ -156,6 +171,59 @@
 				</div>
 			</div>
 		</section>
+
+		{#if syncAvailable}
+			<section>
+				<h3>{m.sync_title()}</h3>
+				<div class="tile">
+					<div class="row">
+						<span class="lead"><Wifi size={17} /></span>
+						<span class="text">
+							<strong>{m.sync_enable()}</strong>
+							<small>{sync?.running ? m.sync_running() : m.sync_paused()}</small>
+						</span>
+						<Toggle
+							label={m.sync_enable()}
+							checked={Boolean(sync?.enabled)}
+							disabled={syncBusy}
+							onchange={onsynctoggle}
+						/>
+					</div>
+					{#if sync?.running}
+						{#each sync.peers as peer (peer.endpointId)}
+							<div class="row">
+								<span class="lead"><Smartphone size={17} /></span>
+								<span class="text">
+									<strong>{peer.name}</strong>
+									<small>{lastSyncLabel(peer.lastSyncAt)}</small>
+								</span>
+								<button
+									type="button"
+									class="btn compact"
+									disabled={syncBusy}
+									onclick={() => onunpair(peer)}
+								>
+									{m.sync_unpair()}
+								</button>
+							</div>
+						{/each}
+						<div class="actions">
+							<button type="button" class="btn" disabled={syncBusy} onclick={onsyncnow}>
+								<RefreshCw size={16} />
+								{m.sync_now()}
+							</button>
+							<button type="button" class="btn" disabled={syncBusy} onclick={onpair}>
+								<Link2 size={16} />
+								{m.sync_pair()}
+							</button>
+						</div>
+						{#if sync.peers.length === 0}
+							<p class="footnote">{m.sync_no_peers()}</p>
+						{/if}
+					{/if}
+				</div>
+			</section>
+		{/if}
 
 		<section>
 			<h3>{m.settings_backup_title()}</h3>

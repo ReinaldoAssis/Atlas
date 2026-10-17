@@ -7,6 +7,9 @@ function setup(overrides: Record<string, unknown> = {}) {
 	const props = {
 		snapshot: demoSnapshot(),
 		testMode: false,
+		syncAvailable: false,
+		sync: null,
+		syncBusy: false,
 		updaterAvailable: true,
 		updaterBusy: false,
 		updaterStatus: '',
@@ -21,6 +24,10 @@ function setup(overrides: Record<string, unknown> = {}) {
 		onexport: vi.fn(),
 		onimport: vi.fn(),
 		oncheckupdates: vi.fn(),
+		onsynctoggle: vi.fn(),
+		onsyncnow: vi.fn(),
+		onpair: vi.fn(),
+		onunpair: vi.fn(),
 		...overrides
 	};
 	render(SettingsSheet, { props });
@@ -34,6 +41,15 @@ describe('SettingsSheet', () => {
 		expect(screen.getByText('Modo de teste')).toBeTruthy();
 		expect(screen.getByText('Backup local')).toBeTruthy();
 		expect(screen.queryByText('ATLAS · SEU ESPAÇO')).toBeNull();
+	});
+
+	it('mostra a seção de sincronização quando o app tem suporte', () => {
+		setup({
+			syncAvailable: true,
+			sync: { enabled: false, running: false, endpointId: null, peers: [], pendingPairs: [] }
+		});
+		expect(screen.getByText('Sincronização')).toBeTruthy();
+		expect(screen.getByRole('switch', { name: 'Sincronizar aparelhos' })).toBeTruthy();
 	});
 
 	it('inverte o interruptor de som e avisa o pai', async () => {

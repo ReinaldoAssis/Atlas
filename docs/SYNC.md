@@ -94,7 +94,7 @@ no device depois (mesmo fluxo de S7/S9).
 | **P2** | Engine: E0a (PoC Windows↔Windows) → endpoint iroh LAN, protocolo/cursor, LWW, evento pro front | ✅ **P2a–P2c** |
 | **P3** | Pareamento SAS + allowlist + store de pares | ✅ |
 | **P4** | Descoberta iOS (bridge Swift) + `project.yml`/`InfoPlist.strings` | — |
-| **P5** | UI de Sincronização + backup/resumo do primeiro sync + rótulo de conflito | 🟡 P5a ✅; P5b pendente |
+| **P5** | UI de Sincronização + backup/resumo do primeiro sync + rótulo de conflito | ✅ |
 | **P6** | Anexos (blobs) | fora do ciclo |
 
 ### Estado do P2 (em andamento)
@@ -131,6 +131,31 @@ no device depois (mesmo fluxo de S7/S9).
   no CI, sem mDNS (addr direto de loopback).
 - Gotcha: `finish()` e `conn.close()` na mesma hora descarta o frame em voo — o
   acceptor espera o outro lado fechar antes de fechar a conexão.
+
+**P5b (UI + boot + evento) ✅** — `src/lib/sync.ts` + Configurações + notas:
+
+- `src/lib/sync.ts`: wrappers dos commands (`sync_status/start/stop/now`,
+  `sync_discovered`, `sync_pair_begin/confirm`, `sync_unpair`) e dos eventos
+  (`atlas://sync-applied`, `sync-pair-request`, `sync-paired`).
+- Seção **Sincronização** em Configurações (Paraglide): toggle, estado
+  ("Procurando…"/"Desligado"), pares com "sincronizado há X", **Sincronizar
+  agora**, **Parear** e **Desemparelhar** (confirmação). Sem indicador no shell.
+- Sub-sheet de pareamento: lista de descobertos com polling de 2 s, "Pareado"
+  para quem já está na allowlist e **Parear por endereço** (EndpointID +
+  `ip:porta`) para o caminho manual.
+- Sheet global do SAS (6 dígitos) para pedidos que chegam; o app nunca confirma
+  sozinho.
+- Primeiro sync: antes de ligar, grava `backups/atlas-antes-do-sync-<ts>.zip`
+  (`exportBackupV2`) e mostra o resumo do que vai se juntar. Só quando nenhum
+  par tem `last_sync_at > 0`.
+- `sync_enabled` ligado → `sync_start` no boot (aceite do S10).
+- `atlas://sync-applied`: o shell recarrega o snapshot, pede ao `NotesView` para
+  reler as notas (o editor grava o rascunho primeiro — a fila de escritas é
+  aguardada) e mostra "Atualizado de outro dispositivo".
+- Chip "Conflito" na lista de notas quando o payload tem `conflictOf`.
+- Modo de teste: seção escondida e `sync_stop` ao ligar o modo.
+- Testes: 127 no Vitest (rótulo relativo, SAS sheet, seção de sync); nada de
+  Rust mudou.
 
 **P5a (conflito de nota) ✅** — `store.rs`/`session.rs`:
 

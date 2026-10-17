@@ -24,6 +24,24 @@
 	import { describeBackup, summarizeBackup } from '#lib/backup';
 import { readTestMode, writeTestMode } from '#lib/test-mode';
 import { checkForUpdate, relaunchApp, updaterSupportedHere } from '#lib/updater';
+	import { m } from '#lib/paraglide/messages.js';
+	import {
+		onPairRequest,
+		onPaired,
+		onSyncApplied,
+		shortId,
+		syncDiscovered,
+		syncNow,
+		syncPairBegin,
+		syncPairConfirm,
+		syncStart,
+		syncStatus,
+		syncStop,
+		syncSupported,
+		syncUnpair,
+		type SyncDiscovered,
+		type SyncStatus
+	} from '#lib/sync';
 import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, restoreAttachments } from '#lib/notes-store';
 	import type { Note, NotesState } from '#lib/notes';
 	import { notesForBlock, type NoteRef } from '#lib/tempo-ref';
@@ -34,6 +52,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	import NotesView from '#lib/components/notes/NotesView.svelte';
 	import TrackersView from '#lib/components/habits/TrackersView.svelte';
 	import SettingsSheet from '#lib/components/settings/SettingsSheet.svelte';
+	import SyncIntroSheet from '#lib/components/settings/SyncIntroSheet.svelte';
+	import SyncPairSheet from '#lib/components/settings/SyncPairSheet.svelte';
+	import SyncSasSheet from '#lib/components/settings/SyncSasSheet.svelte';
 	import Button from '#lib/components/ui/Button.svelte';
 	import CardMenu from '#lib/components/ui/CardMenu.svelte';
 	import Chip from '#lib/components/ui/Chip.svelte';
@@ -73,6 +94,16 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let habitView = $state<'habits' | 'trackers'>('habits');
 	let notesState = $state<NotesState>({ notes: [], folders: [] });
 	let notesVersion = $state(0);
+	/** Pede ao NotesView para reler do banco (merge de outro aparelho). */
+	let notesReloadToken = $state(0);
+	let syncAvailable = $state(false);
+	let sync = $state<SyncStatus | null>(null);
+	let syncBusy = $state(false);
+	let pairOpen = $state(false);
+	let pairDevices = $state<SyncDiscovered[]>([]);
+	let pairTimer: ReturnType<typeof setInterval> | undefined;
+	let sasPrompt = $state<{ peer: string; name: string; sas: string } | null>(null);
+	let syncIntro = $state<{ summary: string; path: string | null } | null>(null);
 	let period = $state<Period>('week');
 	let customStart = $state(dateOffset(localDate(), -6));
 	let customEnd = $state(localDate());
@@ -445,6 +476,24 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			}
 		};
 		void initialize();
+		const unlisteners: Array<() => void> = [];
+		if (syncSupported()) {
+			void (async () => {
+				try {
+					unlisteners.push(
+						await onSyncApplied(async () => {
+							notesReloadToken += 1;
+							snapshot = await loadSnapshot();
+							toastMessage(m.sync_updated());
+						})
+					);
+					unlisteners.push(await onPairRequest((payload) => (sasPrompt = payload)));
+					unlisteners.push(await onPaired(() => void refreshSync()));
+				} catch {
+					/* build sem sync (iOS até o P4) */
+				}
+			})();
+		}
 		try {
 			sidebarCollapsed = localStorage.getItem('atlas-sidebar-collapsed') === '1';
 		} catch {
@@ -478,6 +527,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			}
 		}, 30_000);
 		return () => {
+			for (const off of unlisteners) off();
+			if (pairTimer) clearInterval(pairTimer);
 			if (interval) clearInterval(interval);
 			window.removeEventListener('pointermove', onPointerMove);
 			window.removeEventListener('pointerup', onPointerUp);
@@ -557,11 +608,174 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			// As notas são necessárias no planejador (referências `tempo`).
 			notesState = await loadNotes();
 			await syncIOSReminders(loaded);
+			await initializeSync();
 		} catch (error) {
 			console.error(error);
 			const detail = error instanceof Error ? error.message : String(error);
 			loadError = `Não foi possível abrir os dados locais. (${detail})`;
 			ready = true;
+		}
+	}
+
+	/* ---------- sync (P5) ---------- */
+	async function initializeSync() {
+		if (!syncSupported() || testModeActive) {
+			syncAvailable = false;
+			sync = null;
+			return;
+		}
+		try {
+			sync = await syncStatus();
+			syncAvailable = true;
+			// Aceite do S10: ligado volta sozinho ao abrir o app.
+			if (sync.enabled && !sync.running) sync = await syncStart();
+		} catch {
+			// iOS até o P4 (comando ausente) ou banco falhando: some a seção.
+			syncAvailable = false;
+		}
+	}
+
+	async function refreshSync() {
+		if (!syncSupported()) return;
+		try {
+			sync = await syncStatus();
+			syncAvailable = true;
+		} catch {
+			sync = null;
+		}
+	}
+
+	async function startSync() {
+		syncBusy = true;
+		try {
+			sync = await syncStart();
+		} catch (error) {
+			toastMessage(m.sync_error(), { warning: true });
+			console.error(error);
+		} finally {
+			syncBusy = false;
+		}
+	}
+
+	async function setSyncEnabled(enabled: boolean) {
+		if (!enabled) {
+			syncBusy = true;
+			try {
+				sync = await syncStop();
+			} catch (error) {
+				console.error(error);
+			} finally {
+				syncBusy = false;
+			}
+			return;
+		}
+		try {
+			const current = await syncStatus();
+			const firstSync = current.peers.every((peer) => peer.lastSyncAt === 0);
+			if (firstSync && snapshot) {
+				// Primeiro sync: backup automático + resumo antes de conectar.
+				const bytes = await currentBackupBytes();
+				const path = await writeSafetyCopy(
+					bytes,
+					`atlas-antes-do-sync-${Date.now()}.zip`
+				).catch(() => null);
+				const summary = describeBackup(
+					summarizeBackup({ snapshot, notes: notesState.notes, folders: notesState.folders })
+				);
+				syncIntro = { summary, path };
+				return;
+			}
+		} catch (error) {
+			console.error(error);
+		}
+		await startSync();
+	}
+
+	async function confirmSyncIntro() {
+		syncIntro = null;
+		await startSync();
+	}
+
+	async function refreshPairDevices() {
+		if (!pairOpen) return;
+		try {
+			pairDevices = await syncDiscovered();
+		} catch (error) {
+			console.error(error);
+		}
+	}
+
+	async function openPairing() {
+		pairDevices = [];
+		pairOpen = true;
+		if (pairTimer) clearInterval(pairTimer);
+		await refreshPairDevices();
+		pairTimer = setInterval(() => void refreshPairDevices(), 2000);
+	}
+
+	function closePairing() {
+		pairOpen = false;
+		if (pairTimer) {
+			clearInterval(pairTimer);
+			pairTimer = undefined;
+		}
+	}
+
+	async function pairWith(peer: string, address?: string) {
+		syncBusy = true;
+		try {
+			const started = await syncPairBegin(peer, address);
+			const name = pairDevices.find((device) => device.endpointId === peer)?.name ?? shortId(peer);
+			closePairing();
+			sasPrompt = { peer, name, sas: started.sas };
+		} catch (error) {
+			toastMessage(String(error), { warning: true });
+		} finally {
+			syncBusy = false;
+		}
+	}
+
+	async function confirmSas(accept: boolean) {
+		const prompt = sasPrompt;
+		if (!prompt) return;
+		sasPrompt = null;
+		syncBusy = true;
+		try {
+			await syncPairConfirm(prompt.peer, accept);
+			if (accept) toastMessage(m.sync_paired());
+		} catch (error) {
+			toastMessage(String(error), { warning: true });
+		} finally {
+			syncBusy = false;
+			await refreshSync();
+		}
+	}
+
+	async function unpair(peer: SyncStatus['peers'][number]) {
+		const confirmed = await askConfirm({
+			title: m.sync_unpair(),
+			message: m.sync_unpair_confirm({ name: peer.name }),
+			confirmLabel: m.sync_unpair()
+		});
+		if (!confirmed) return;
+		syncBusy = true;
+		try {
+			sync = await syncUnpair(peer.endpointId);
+		} catch (error) {
+			toastMessage(String(error), { warning: true });
+		} finally {
+			syncBusy = false;
+		}
+	}
+
+	async function runSyncNow() {
+		syncBusy = true;
+		try {
+			sync = await syncNow();
+		} catch (error) {
+			toastMessage(String(error), { warning: true });
+		} finally {
+			syncBusy = false;
 		}
 	}
 
@@ -1832,6 +2046,12 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	 * recarrega tudo. Os dados reais nunca são tocados.
 	 */
 	async function toggleTestMode(enabled: boolean) {
+		if (enabled && syncSupported()) {
+			await syncStop().catch(() => null);
+			sync = null;
+			syncAvailable = false;
+			closePairing();
+		}
 		const hasData = Boolean(
 			snapshot && (snapshot.transactions.length || snapshot.habits.length || snapshot.timeBlocks.length)
 		);
@@ -2643,6 +2863,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 							timeBlocks={snapshot.timeBlocks}
 							openNoteId={notesOpenId}
 							openNoteToken={notesOpenToken}
+							reloadToken={notesReloadToken}
 							onchange={(state) => (notesState = state)}
 							oncreate={onNoteCreated}
 							ontoast={toastMessage}
@@ -2964,10 +3185,13 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			{/if}
 		</Sheet>
 	{/if}
-	{#if modal === 'settings' && snapshot}
+	{#if modal === 'settings' && snapshot && !pairOpen}
 		<SettingsSheet
 			{snapshot}
 			testMode={testModeActive}
+			{syncAvailable}
+			{sync}
+			{syncBusy}
 			{updaterAvailable}
 			{updaterBusy}
 			{updaterStatus}
@@ -2982,6 +3206,37 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			onexport={exportData}
 			onimport={importData}
 			oncheckupdates={checkAppUpdate}
+			onsynctoggle={setSyncEnabled}
+			onsyncnow={runSyncNow}
+			onpair={openPairing}
+			onunpair={unpair}
+		/>
+	{/if}
+	{#if modal === 'settings' && snapshot && pairOpen}
+		<SyncPairSheet
+			devices={pairDevices}
+			busy={syncBusy}
+			onconnect={pairWith}
+			onrefresh={() => void refreshPairDevices()}
+			onclose={closePairing}
+		/>
+	{/if}
+	{#if sasPrompt}
+		<SyncSasSheet
+			peerName={sasPrompt.name}
+			sas={sasPrompt.sas}
+			busy={syncBusy}
+			onconfirm={() => void confirmSas(true)}
+			oncancel={() => void confirmSas(false)}
+		/>
+	{/if}
+	{#if syncIntro}
+		<SyncIntroSheet
+			summary={syncIntro.summary}
+			backupPath={syncIntro.path}
+			busy={syncBusy}
+			onconfirm={confirmSyncIntro}
+			oncancel={() => (syncIntro = null)}
 		/>
 	{/if}
 	{#if dialog}
