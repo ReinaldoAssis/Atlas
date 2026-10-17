@@ -13,6 +13,7 @@
 		"tauri": "tauri",
 		"tauri:dev": "tauri dev",
 		"tauri:build": "tauri build",
+		"build:macos": "bash tools/build-macos.sh",
 		"ipa": "tauri ios build --no-sign --target aarch64",
 		"prepare": "svelte-kit sync && paraglide-js compile --project ./project.inlang || echo ''",
 		"i18n:compile": "paraglide-js compile --project ./project.inlang",

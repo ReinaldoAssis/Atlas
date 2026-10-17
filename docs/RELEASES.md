@@ -40,6 +40,34 @@ git push origin v0.2.0
 Acompanhe em **Actions › Release**. Ao terminar, o release está em
 `Releases` e o app passa a ver a versão nova.
 
+## macOS (build local)
+
+O updater e o workflow de release são **só do Windows**: não existe job macOS no
+CI. O `.dmg` do macOS sai da máquina Apple Silicon, com a mesma versão da tag:
+
+```bash
+tools/build-macos.sh --version 0.3.0
+# .app: src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Atlas.app
+# .dmg: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Atlas_0.3.0_aarch64.dmg
+```
+
+Depois de o workflow `Release` criar o release da tag, anexe o `.dmg`:
+
+```bash
+gh release upload v0.3.0 \
+  src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Atlas_0.3.0_aarch64.dmg
+```
+
+- **arm64 só** (Apple Silicon). Universal exigiria `rustup target add x86_64-apple-darwin`
+  e `--target universal-apple-darwin`.
+- Build **sem assinatura**: em outra máquina o Gatekeeper bloqueia; libere com
+  `xattr -dr com.apple.quarantine /Applications/Atlas.app`.
+- O macOS **não** entra no `latest.json` (updater é Windows-only); atualizar no
+  Mac é baixar o `.dmg` novo e arrastar por cima.
+- O script usa `npm run build` (via `tauri build`) e a versão passada em
+  `--version` só para nomear/versionar o bundle — `tauri.conf.json` continua em
+  `0.1.0`.
+
 ## Chaves de assinatura
 
 - **Pública**: `tauri.conf.json` → `plugins.updater.pubkey` (pode ser publicada).
