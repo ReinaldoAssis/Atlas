@@ -1,4 +1,4 @@
-# Handoff — Atlas · sync P2P (P1 + P2a)
+# Handoff — Atlas · sync P2P (P1 + P2a + P2b)
 
 > Para o próximo agente. **Não duplique specs/planos/PRs**: referencie por caminho.
 > Escopo: `docs/MVP.md` · UI: `docs/DESIGN.md` · plano: `docs/ROADMAP.md` (§7 = ordem das fatias) ·
@@ -11,12 +11,12 @@
 |---|---|---|
 | **P1** | Metadados de sync (migração **v6** + HLC + gravação só da linha alterada + purga por par) | ✅ |
 | **P2a** | PoC E0a: identidade Ed25519, endpoint iroh LAN, DNS-SD, hello | ✅ (macOS + CI) |
-| **P2b** | Protocolo por cursor + merge LWW + testes de convergência | — |
+| **P2b** | Protocolo por cursor + merge LWW + testes de convergência | ✅ |
 | **P2c** | Commands (`start/stop/now/status`) + evento `atlas://sync-applied` + allowlist | — |
 | P3–P5 | Pareamento SAS, descoberta iOS (Bonjour), UI de Sincronização | — (ver `docs/SYNC.md` §4) |
 
-Testes: **121** (`npm test`); Rust: **15** (`cargo test`, era 2). CI: `frontend`
-(ubuntu+windows), `rust`, `windows-installer`, `release`.
+Testes: **121** (`npm test`); Rust: **31** (`cargo test`, era 2 no começo do P2).
+CI: `frontend` (ubuntu+windows), `rust`, `windows-installer`, `release`.
 
 ## P2a — o que entrou (`src-tauri/src/sync/`)
 
@@ -33,6 +33,11 @@ Testes: **121** (`npm test`); Rust: **15** (`cargo test`, era 2). CI: `frontend`
   anúncios repetidos do mDNS.
 - Cargo: `iroh 1.3`/`mdns-sd 0.21`/`tokio` só desktop (`cfg(not(ios/android))`);
   `rust-version` 1.90 → **1.91** (MSRV do iroh).
+- **P2b** (`store.rs`/`session.rs`): delta por origem × cursor, merge LWW
+  payload-agnóstico com schema lido de `PRAGMA table_info`, cursores +
+  `last_sync_at` só no fim, `hlc_last` sobe com o maior carimbo recebido.
+  `updated_at >= cursor` de propósito (um salvamento carimba várias linhas com
+  o mesmo stamp; `>` pularia as que sobraram).
 
 ## O que P1 mudou (o porquê em `docs/SYNC.md` §3)
 
@@ -84,8 +89,9 @@ Testes: **121** (`npm test`); Rust: **15** (`cargo test`, era 2). CI: `frontend`
 
 ## Pendências (usuário)
 
-- **P2b (próximo)**: delta por `(owner, cursor)` + merge LWW no Rust + testes de
-  convergência/lápide/idempotência. Depois **P2c**: commands + evento.
+- **P2c (próximo)**: commands `sync_start`/`sync_stop`/`sync_now`/`sync_status`,
+  allowlist de `sync_peers`, evento `atlas://sync-applied` e `nextWriteStamp`
+  relendo `hlc_last` do banco.
 - **Windows (P2c em diante)**: aceitar o prompt do Firewall (UDP de entrada) e
   rodar o `sync_poc` em duas máquinas Windows quando houver par disponível.
 - iPhone (S9) e Windows (S7/S8b): checklists em `docs/IOS-SIDELOAD.md` e

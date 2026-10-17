@@ -91,13 +91,31 @@ no device depois (mesmo fluxo de S7/S9).
 | Fatia | Conteúdo | Estado |
 |---|---|---|
 | **P1** | Metadados de sync (migração v6): `notes.updated_at` → epoch ms, `folders.updated_at`, `shared_settings`, `counters`, `sync_peers`/`sync_cursors`, ids determinísticos de log, HLC, gravação só da linha alterada, purga por par | ✅ |
-| **P2** | Engine: E0a (PoC Windows↔Windows) → endpoint iroh LAN, protocolo/cursor, LWW, evento pro front | 🟡 **P2a ✅**; P2b/P2c pendentes |
+| **P2** | Engine: E0a (PoC Windows↔Windows) → endpoint iroh LAN, protocolo/cursor, LWW, evento pro front | 🟡 **P2a + P2b ✅**; P2c pendente |
 | **P3** | Pareamento SAS + allowlist + store de pares | — |
 | **P4** | Descoberta iOS (bridge Swift) + `project.yml`/`InfoPlist.strings` | — |
 | **P5** | UI de Sincronização + backup/resumo do primeiro sync + rótulo de conflito | — |
 | **P6** | Anexos (blobs) | fora do ciclo |
 
 ### Estado do P2 (em andamento)
+
+**P2b (engine) ✅** — `sync/store.rs` + `sync/session.rs`:
+
+- Colunas e chave saem de `PRAGMA table_info` (nada de lista paralela); tabela
+  fora de `SYNC_TABLES` ou coluna desconhecida aborta o lote.
+- Delta por **origem × cursor** (`updated_at >= cursor`, justificado abaixo);
+  linhas do próprio par não voltam.
+- Merge LWW por linha (`should_apply`): maior `updated_at`; empate → menor
+  `device_id`; linha sem `device_id` conta como `legacy` (perde empate).
+- Sessão em dois turnos na mesma conexão; cursores e `last_sync_at` só no fim,
+  então sessão cortada reenvia e o merge idempotente resolve.
+- `hlc_last` sobe para o maior carimbo recebido; `last_sync_at =
+  max(agora, maior recebido)` (corte seguro da purga).
+- Detalhe do `>=`: um salvamento carimba várias linhas com o mesmo `updated_at`;
+  com `>` o cursor pularia as que ficaram fora do lote. Reenviar o carimbo do
+  cursor é barato e o LWW descarta.
+- Testes Rust (31 no total): convergência nos dois sentidos, re-sync idempotente,
+  LWW, empate, lápide, linha `legacy`, cursor, stats/HLC, recusa de schema.
 
 **P2a (PoC E0a) ✅** — `src-tauri/src/sync/`:
 
@@ -114,8 +132,9 @@ no device depois (mesmo fluxo de S7/S9).
 - Gotcha: `finish()` e `conn.close()` na mesma hora descarta o frame em voo — o
   acceptor espera o outro lado fechar antes de fechar a conexão.
 
-**P2b** (próximo): delta por `(owner, cursor)`, merge LWW no Rust, testes de
-convergência/lápide/idempotência. **P2c**: commands + evento `atlas://sync-applied`.
+**P2c** (próximo): commands `sync_start`/`sync_stop`/`sync_now`/`sync_status`,
+allowlist de `sync_peers`, evento `atlas://sync-applied` e `nextWriteStamp`
+relendo `hlc_last` do banco.
 
 ## 5. Verificação manual (só o usuário)
 

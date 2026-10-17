@@ -14,7 +14,7 @@
 //! aceita. Cada lado loga o `device_id` do par — se aparecer nos dois, E0a
 //! passou. No Windows, aceite o prompt do Firewall (UDP de entrada).
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use app_lib::sync::{discovery, engine, identity};
@@ -73,10 +73,7 @@ async fn main() {
   let key = identity::load_or_create(&args.identity).expect("identidade");
   let endpoint = engine::bind(key).await.expect("endpoint iroh");
   let me = endpoint.id();
-  let local = engine::LocalNode {
-    schema: args.schema,
-    device_id: args.device_id.clone(),
-  };
+  let local = engine::LocalNode::new(args.schema, args.device_id.clone());
 
   let (_advertisement, receiver) = discovery::Advertisement::start(&endpoint).expect("anúncio DNS-SD");
   println!("[poc] endpoint {me}");
@@ -91,11 +88,14 @@ async fn main() {
     let local = local.clone();
     async move {
       loop {
-        match engine::accept(&endpoint, &local).await {
-          Ok(Some((remote, hello))) => println!(
-            "[poc] hello de {remote} (device_id={}, schema={}, proto={})",
-            hello.device_id, hello.schema, hello.proto
-          ),
+        match engine::accept(&endpoint, &local, &BTreeMap::new()).await {
+          Ok(Some(session)) => {
+            println!(
+              "[poc] hello de {} (device_id={}, schema={}, proto={})",
+              session.remote, session.hello.device_id, session.hello.schema, session.hello.proto
+            );
+            session.close().await;
+          }
           Ok(None) => break,
           // Timeout é rotina: rearma o accept.
           Err(error) if error.contains("timeout no hello") => continue,
@@ -139,10 +139,13 @@ async fn main() {
     let local = local.clone();
     tokio::spawn(async move {
       match engine::dial(&endpoint, peer.clone(), &local).await {
-        Ok(hello) => println!(
-          "[poc] hello de {} (device_id={}, schema={}, proto={})",
-          peer.id, hello.device_id, hello.schema, hello.proto
-        ),
+        Ok(session) => {
+          println!(
+            "[poc] hello de {} (device_id={}, schema={}, proto={})",
+            peer.id, session.hello.device_id, session.hello.schema, session.hello.proto
+          );
+          session.close().await;
+        }
         Err(error) => eprintln!("[poc] dial para {} falhou: {error}", peer.id),
       }
     });
