@@ -1,4 +1,4 @@
-# Handoff — Atlas · P1 do sync P2P (metadados de sync)
+# Handoff — Atlas · sync P2P (P1 + P2a)
 
 > Para o próximo agente. **Não duplique specs/planos/PRs**: referencie por caminho.
 > Escopo: `docs/MVP.md` · UI: `docs/DESIGN.md` · plano: `docs/ROADMAP.md` (§7 = ordem das fatias) ·
@@ -10,10 +10,29 @@
 | Fatia | O que é | Estado |
 |---|---|---|
 | **P1** | Metadados de sync (migração **v6** + HLC + gravação só da linha alterada + purga por par) | ✅ |
-| P2–P5 | Engine iroh, pareamento SAS, descoberta iOS (Bonjour), UI de Sincronização | — (ver `docs/SYNC.md` §4) |
+| **P2a** | PoC E0a: identidade Ed25519, endpoint iroh LAN, DNS-SD, hello | ✅ (macOS + CI) |
+| **P2b** | Protocolo por cursor + merge LWW + testes de convergência | — |
+| **P2c** | Commands (`start/stop/now/status`) + evento `atlas://sync-applied` + allowlist | — |
+| P3–P5 | Pareamento SAS, descoberta iOS (Bonjour), UI de Sincronização | — (ver `docs/SYNC.md` §4) |
 
-Testes: **121** (`npm test`, era 99). Rust: 2 (`cargo test`) — **nada em Rust mudou** nesta fatia.
-CI: `frontend` (ubuntu+windows), `rust`, `windows-installer`, `release`.
+Testes: **121** (`npm test`); Rust: **15** (`cargo test`, era 2). CI: `frontend`
+(ubuntu+windows), `rust`, `windows-installer`, `release`.
+
+## P2a — o que entrou (`src-tauri/src/sync/`)
+
+- `identity.rs`: chave em `<appdata>/atlas-identity.key` (32 bytes, 0600, arquivo
+  temporário + rename). Arquivo inválido **não** é sobrescrito.
+- `engine.rs`: `Endpoint::builder(presets::Minimal)` = sem relay, sem DNS da n0;
+  ALPN `atlas/sync/1`; `dial`/`accept` trocam `hello` (proto + schema + device_id
+  + cursores) e recusam incompatibilidade com `Refuse` explícito.
+- `discovery.rs`: `_atlas-sync._udp.local.`, instância `Atlas <short>`, TXT
+  `id=<EndpointID>`/`v=1`, endereços por `addr_auto`; `parse_resolved` ignora
+  anúncio sem TXT `id`.
+- `protocol.rs`: frame `u32` BE + JSON, teto 4 MiB.
+- `examples/sync_poc.rs`: PoC de dois terminais; ID menor disca; dedupe de
+  anúncios repetidos do mDNS.
+- Cargo: `iroh 1.3`/`mdns-sd 0.21`/`tokio` só desktop (`cfg(not(ios/android))`);
+  `rust-version` 1.90 → **1.91** (MSRV do iroh).
 
 ## O que P1 mudou (o porquê em `docs/SYNC.md` §3)
 
@@ -42,6 +61,12 @@ CI: `frontend` (ubuntu+windows), `rust`, `windows-installer`, `release`.
 
 ## Gotchas que economizam tempo
 
+- Em iroh, `send.finish()` seguido de `conn.close()` descarta o frame que ainda
+  não saiu (o outro lado lê `connection lost`). No acceptor, espere
+  `conn.closed()` (com timeout) antes de fechar — inclui o caminho de `Refuse`.
+- `Endpoint::bound_sockets()` devolve `0.0.0.0:<porta>` (bind padrão): para
+  anunciar, use `ServiceInfo::enable_addr_auto()`; para dialar em teste, troque
+  o IP não especificado por `127.0.0.1`.
 - `db_batch` (Rust) faz bind **como string** (`Vec<String>`): número vira texto e a afinidade `INTEGER`
   da coluna converte sozinha. Parâmetros continuam `string[]` em `BatchStatement` — não "conserte" isso
   sem mexer no Rust.
@@ -59,10 +84,12 @@ CI: `frontend` (ubuntu+windows), `rust`, `windows-installer`, `release`.
 
 ## Pendências (usuário)
 
-- **P2 (próxima fatia)**: primeiro commit é o PoC **E0a** — dois endpoints iroh no Windows (dois SQLite
-  temporários) achando um ao outro com DNS-SD + troca de "hello". Sem UI.
-- iPhone (S9) e Windows (S7/S8b): checklists em `docs/IOS-SIDELOAD.md` e `docs/WINDOWS-INSTALLER.md`
-  (a verificação do firewall só existe a partir de P2).
+- **P2b (próximo)**: delta por `(owner, cursor)` + merge LWW no Rust + testes de
+  convergência/lápide/idempotência. Depois **P2c**: commands + evento.
+- **Windows (P2c em diante)**: aceitar o prompt do Firewall (UDP de entrada) e
+  rodar o `sync_poc` em duas máquinas Windows quando houver par disponível.
+- iPhone (S9) e Windows (S7/S8b): checklists em `docs/IOS-SIDELOAD.md` e
+  `docs/WINDOWS-INSTALLER.md`.
 
 ## Comunicação
 

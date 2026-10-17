@@ -2,6 +2,10 @@ use serde::Deserialize;
 use tauri::Manager;
 use tauri_plugin_sql::{DbInstances, DbPool};
 
+// Sync P2P (S10/P2) só no desktop até o bridge Bonjour do iOS (P4).
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod sync;
+
 #[derive(Deserialize)]
 pub struct BatchStatement {
   pub sql: String,
