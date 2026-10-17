@@ -54,4 +54,14 @@ describe('buildSnapshotStatements', () => {
 			expect(typeof JSON.parse(payload!).id, table).toBe('string');
 		}
 	});
+
+	it('a meta do dia viaja em shared_settings', () => {
+		const snapshot = { ...createEmptySnapshot(), dailyGoal: 5 };
+		const statements = buildSnapshotStatements(snapshot, 'dev-1', 1);
+		const row = statements.find(
+			(statement) => statement.sql.includes('INTO shared_settings') && statement.params.includes('dailyGoal')
+		);
+		expect(row).toBeTruthy();
+		expect(row!.params).toContain('5');
+	});
 });

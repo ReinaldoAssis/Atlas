@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { untrack, type Snippet } from 'svelte';
+	import DurationField from './DurationField.svelte';
 
 	/**
 	 * Kit Atlas — sheet de valor (hábito e tracker de número/tempo).
@@ -16,6 +17,7 @@
 		min = 0,
 		unit = '',
 		hint = '',
+		duration = false,
 		caption,
 		accentAt = null,
 		saveLabel = 'Salvar',
@@ -33,6 +35,8 @@
 		min?: number;
 		unit?: string;
 		hint?: string;
+		/** Usa a máscara HH:MM no número grande (valor segue em minutos). */
+		duration?: boolean;
 		caption?: (value: number) => string;
 		accentAt?: number | null;
 		saveLabel?: string;
@@ -73,6 +77,12 @@
 	}
 
 	function commit() {
+		if (duration) {
+			const final = clamp(value);
+			onchange(final);
+			onsave(final);
+			return;
+		}
 		const final = normalizeDraft();
 		onsave(final);
 	}
@@ -99,22 +109,31 @@
 		<div class="habit-prototype-grip"></div>
 		<p>{title}</p>
 		<div class="vs-value">
-			<input
-				class="vs-input"
-				class:hit
-				inputmode="decimal"
-				aria-label={title}
-				value={draft}
-				oninput={onDraft}
-				onblur={normalizeDraft}
-				onkeydown={(event) => {
-					if (event.key === 'Enter') {
-						event.preventDefault();
-						commit();
-					}
-				}}
-			/>
-			{#if unit}<span class="vs-unit">{unit}</span>{/if}
+			{#if duration}
+				<DurationField
+					class={`vs-input${hit ? ' hit' : ''}`}
+					value={value}
+					ariaLabel={title}
+					onchange={(minutes) => onchange(clamp(minutes ?? 0))}
+				/>
+			{:else}
+				<input
+					class="vs-input"
+					class:hit
+					inputmode="decimal"
+					aria-label={title}
+					value={draft}
+					oninput={onDraft}
+					onblur={normalizeDraft}
+					onkeydown={(event) => {
+						if (event.key === 'Enter') {
+							event.preventDefault();
+							commit();
+						}
+					}}
+				/>
+			{/if}
+			{#if unit && !duration}<span class="vs-unit">{unit}</span>{/if}
 		</div>
 		{#if caption}<div class="vs-caption">{caption(value)}</div>{/if}
 		{#if hint}<small class="vs-hint">{hint}</small>{/if}

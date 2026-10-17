@@ -71,6 +71,7 @@ no device depois (mesmo fluxo de S7/S9).
 | Modo de teste | sync **desligado** (banco e `device_id` próprios; juntar fixture no real seria corrupção) |
 | XP | **contador por aparelho** (`counters`); o total exibido é a soma — dois aparelhos ganhando XP não se sobrescrevem |
 | Life Force / finance | singleton com **LWW** (`shared_settings`): `value` decai e satura localmente, então "incremento perdido" é ruído de gamificação, não dado |
+| Meta do dia | `dailyGoal` em `shared_settings` (LWW): mesma meta nos aparelhos; 1–12, padrão 3. Conta hábitos de hoje, incluindo `weekly` |
 | `habit_logs` | id **determinístico** `hlog:<habitId>:<date>` (há `UNIQUE(habit_id, occurred_on)`; id aleatório colide no merge) |
 | Nota em conflito | LWW na nota + **cópia** marcada com `conflictOf`/`conflictedAt` no payload e rótulo na UI (i18n-safe), na mesma pasta |
 

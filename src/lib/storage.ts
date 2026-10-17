@@ -5,6 +5,7 @@ import {
 	createEmptySnapshot,
 	defaultCategories,
 	id as newId,
+	normalizeDailyGoal,
 	type AtlasSnapshot,
 	type Category,
 	type ExperienceState,
@@ -402,6 +403,7 @@ function readPreview(): AtlasSnapshot {
 			experience: { ...defaults.experience, ...stored.experience },
 			lifeForce: { ...defaults.lifeForce, ...stored.lifeForce },
 			finance: { ...defaults.finance, ...stored.finance },
+			dailyGoal: normalizeDailyGoal(stored.dailyGoal ?? defaults.dailyGoal),
 			graph: normalizeGraph(stored.graph ?? defaults.graph)
 		} as AtlasSnapshot;
 		snapshot.graph = reconcileGraph(snapshot.graph, snapshot);
@@ -521,6 +523,7 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	// (instalações antigas, banco de teste recém-criado).
 	const lifeForce = { ...defaults.lifeForce, ...(sharedMap.lifeForce ?? settingsMap.lifeForce ?? {}) } as LifeForceState;
 	const finance = { ...defaults.finance, ...(sharedMap.finance ?? settingsMap.finance ?? {}) } as FinanceState;
+	const dailyGoal = normalizeDailyGoal(sharedMap.dailyGoal ?? settingsMap.dailyGoal ?? defaults.dailyGoal);
 	const totalXp = Object.values(knownCounters[XP_COUNTER_KEY] ?? {}).reduce((sum, value) => sum + value, 0);
 	const experience = { totalXp } as ExperienceState;
 	const preferences = { ...defaults.preferences, ...(settingsMap.preferences ?? {}) };
@@ -556,6 +559,7 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 		lifeForce,
 		experience,
 		finance,
+		dailyGoal,
 		preferences,
 		graph
 	};
@@ -780,6 +784,7 @@ function normalizeImportedSnapshot(snapshot: AtlasSnapshot): AtlasSnapshot {
 		experience: { ...defaults.experience, ...snapshot.experience },
 		lifeForce: { ...defaults.lifeForce, ...snapshot.lifeForce },
 		finance: { ...defaults.finance, ...snapshot.finance },
+		dailyGoal: normalizeDailyGoal(snapshot.dailyGoal ?? defaults.dailyGoal),
 		graph: normalizeGraph(snapshot.graph ?? defaults.graph)
 	} as AtlasSnapshot;
 	merged.graph = reconcileGraph(merged.graph, merged);
