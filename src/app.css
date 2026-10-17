@@ -769,6 +769,7 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .nt-row .sn { color: var(--nt-mu); font-size: 13px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nt-row .mt { display: flex; gap: 8px; align-items: center; margin-top: 6px; font-size: 12px; color: var(--nt-mu); flex-wrap: wrap; }
 .nt-row .mt span.t { color: var(--cc); }
+.nt-row .mt span.t.conflict { color: var(--flame); font-weight: 600; }
 .nt-pin { position: absolute; right: 6px; top: 6px; width: 38px; height: 38px; border-radius: 8px; text-align: center; line-height: 38px; font-size: 18px; color: var(--nt-mu); z-index: 2; }
 .nt-pin.on { color: var(--acc); }
 .nt-row mark { background: var(--accd); color: var(--acc); border-radius: 3px; padding: 0 1px; }

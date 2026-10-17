@@ -6,7 +6,7 @@
 </script>
 
 <script lang="ts">
-	import { onMount, tick } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import { RotateCcw, Trash2 } from '@lucide/svelte';
 	import {
 		allTags,
@@ -43,6 +43,7 @@
 		upsertNote
 	} from '#lib/notes-store';
 	import { burstAt, centerOf, playTone, prefersReducedMotion, pulseHaptic } from '#lib/feedback';
+	import { m } from '#lib/paraglide/messages.js';
 	import FolderIcon from './FolderIcon.svelte';
 	import NoteEditor from './NoteEditor.svelte';
 
@@ -54,6 +55,7 @@
 		timeBlocks = [],
 		openNoteId = '',
 		openNoteToken = 0,
+		reloadToken = 0,
 		onchange,
 		oncreate,
 		ontoast
@@ -65,6 +67,8 @@
 		timeBlocks?: TimeBlock[];
 		openNoteId?: string;
 		openNoteToken?: number;
+		/** Muda quando o merge de outro aparelho trouxe dados: relê sem perder rascunho. */
+		reloadToken?: number;
 		onchange: (state: NotesState) => void;
 		oncreate: (note: Note) => void;
 		ontoast: (message: string, options?: { warning?: boolean; undo?: () => void }) => void;
@@ -88,6 +92,11 @@
 
 	let notes = $state<Note[]>([]);
 	let folders = $state<NoteFolder[]>([]);
+	/** Fila de gravações para o reload esperar o flush do editor. */
+	let writes: Promise<void> = Promise.resolve();
+	/** Sinaliza ao editor aberto que ele deve gravar o rascunho antes do reload. */
+	let flushToken = $state(0);
+	let handledReload = $state(untrack(() => reloadToken));
 	let ready = $state(false);
 	let trashedView = $state(false);
 	let currentFolder = $state<string | null>(null);
@@ -240,6 +249,35 @@
 		})();
 	});
 
+	// Sync de outro aparelho: o shell incrementa `reloadToken`. O editor aberto
+	// grava o rascunho primeiro (LWW mantém a edição local), só então relemos.
+	$effect(() => {
+		void ready; // espera a carga inicial
+		if (!ready || reloadToken === handledReload) return;
+		handledReload = reloadToken;
+		void reloadFromDisk();
+	});
+
+	async function reloadFromDisk() {
+		flushToken += 1;
+		await tick();
+		await writes;
+		try {
+			const loaded = await loadNotes();
+			notes = loaded.notes;
+			folders = loaded.folders;
+			publish();
+			if (editorOpen && editorNote) {
+				const still = notes.find((note) => note.id === editorNote?.id);
+				if (still) editorNote = still;
+				else await closeEditor();
+			}
+			bump();
+		} catch (error) {
+			console.error(error);
+		}
+	}
+
 	/* ---------- navegação ---------- */
 	function openFolder(id: string | null) {
 		trashedView = false;
@@ -288,7 +326,7 @@
 
 	/* ---------- notas ---------- */
 	function persist(note: Note) {
-		void upsertNote(note);
+		writes = writes.then(() => upsertNote(note)).catch((error) => console.error(error));
 	}
 
 	function patchNote(note: Note, patch: Partial<Note>) {
@@ -810,6 +848,9 @@
 								{#if searching && note.folderId}
 									<span>{folderPath(folders, note.folderId).map((f) => f.name).join(' › ')}</span>
 								{/if}
+								{#if note.conflictOf}
+									<span class="t conflict">{m.notes_conflict()}</span>
+								{/if}
 								{#each note.tags as tag (tag)}
 									<span class="t" style={`--cc:${tagColor(tag)}`}>#{tag}</span>
 								{/each}
@@ -848,6 +889,7 @@
 			{timeBlocks}
 			open={editorIn}
 			initialMode={editorMode}
+			{flushToken}
 			{sound}
 			{typingSound}
 			{haptics}

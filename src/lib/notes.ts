@@ -17,6 +17,9 @@ export interface Note {
 	updatedAt: string;
 	/** Quando a nota foi para a lixeira (ISO) ou null se ativa. */
 	trashedAt: string | null;
+	/** Cópia criada pelo merge quando esta versão perdeu o LWW. */
+	conflictOf?: string;
+	conflictedAt?: string;
 }
 
 export interface NoteFolder {
