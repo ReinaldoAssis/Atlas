@@ -193,6 +193,27 @@
 	.vs-input.hit {
 		color: var(--hp-accent, #d4f25a);
 	}
+	/* DurationField vive no próprio componente: o CSS scoped não o alcança. */
+	.vs-value :global(.vs-input) {
+		width: min(260px, 100%);
+		border: 0;
+		background: none;
+		color: var(--hp-text, #ecefe6);
+		font: inherit;
+		font-size: 64px;
+		font-weight: 800;
+		letter-spacing: -0.05em;
+		line-height: 1.1;
+		text-align: center;
+		transition: color 0.2s;
+	}
+	.vs-value :global(.vs-input:focus) {
+		outline: none;
+		color: var(--hp-accent, #d4f25a);
+	}
+	.vs-value :global(.vs-input.hit) {
+		color: var(--hp-accent, #d4f25a);
+	}
 	.vs-unit {
 		color: var(--hp-muted, #8d968a);
 		font-size: 20px;
