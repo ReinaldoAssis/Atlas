@@ -50,25 +50,31 @@ async fn db_batch(
 }
 
 /// Torna panic visível no iOS (stderr não aparece no console do device).
+///
+/// Escreve em `tmp/atlas-panic.log` dentro do sandbox, além do stderr. Não usar
+/// `NSLog` daqui: ele espera `NSString` e uma C string derruba o processo.
 fn install_panic_hook() {
   std::panic::set_hook(Box::new(|info| {
     let message = format!("Atlas panic: {info}");
-    #[cfg(target_os = "ios")]
-    {
-      unsafe extern "C" {
-        fn NSLog(format: *const std::ffi::c_char, ...);
-      }
-      if let Ok(text) = std::ffi::CString::new(message.clone()) {
-        unsafe { NSLog(c"%s".as_ptr(), text.as_ptr()) };
-      }
-    }
     eprintln!("{message}");
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+      .create(true)
+      .append(true)
+      .open(std::env::temp_dir().join("atlas-panic.log"))
+    {
+      use std::io::Write;
+      let _ = writeln!(file, "{message}");
+    }
   }));
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   install_panic_hook();
+  // O `tauri://` do iOS serve os assets com reqwest, que exige um provider
+  // rustls instalado (senão panic em `default_rustls_crypto_provider`). O iroh
+  // já compila o ring; instalar aqui resolve para os dois.
+  let _ = rustls::crypto::ring::default_provider().install_default();
   let builder = tauri::Builder::default();
 
   // Updater (S8) e relaunch só no desktop: as crates estão sob o mesmo cfg no
