@@ -91,11 +91,31 @@ no device depois (mesmo fluxo de S7/S9).
 | Fatia | Conteúdo | Estado |
 |---|---|---|
 | **P1** | Metadados de sync (migração v6): `notes.updated_at` → epoch ms, `folders.updated_at`, `shared_settings`, `counters`, `sync_peers`/`sync_cursors`, ids determinísticos de log, HLC, gravação só da linha alterada, purga por par | ✅ |
-| **P2** | Engine: E0a (PoC Windows↔Windows) → endpoint iroh LAN, protocolo/cursor, LWW, evento pro front | — |
+| **P2** | Engine: E0a (PoC Windows↔Windows) → endpoint iroh LAN, protocolo/cursor, LWW, evento pro front | 🟡 **P2a ✅**; P2b/P2c pendentes |
 | **P3** | Pareamento SAS + allowlist + store de pares | — |
 | **P4** | Descoberta iOS (bridge Swift) + `project.yml`/`InfoPlist.strings` | — |
 | **P5** | UI de Sincronização + backup/resumo do primeiro sync + rótulo de conflito | — |
 | **P6** | Anexos (blobs) | fora do ciclo |
+
+### Estado do P2 (em andamento)
+
+**P2a (PoC E0a) ✅** — `src-tauri/src/sync/`:
+
+- `identity.rs`: Ed25519 em `atlas-identity.key` (0600, gravação atômica); arquivo
+  corrompido é erro, nunca gira a identidade sozinho.
+- `engine.rs`: endpoint com `presets::Minimal` (sem relay, sem DNS/Pkarr da n0) e
+  ALPN `atlas/sync/1`; `dial`/`accept` trocam `hello` e recusam proto/schema.
+- `discovery.rs`: anúncio DNS-SD `_atlas-sync._udp.local.` com `id=<EndpointID>`
+  no TXT; endereços via `addr_auto` (o endpoint liga em `0.0.0.0`).
+- `protocol.rs`: framing `u32` big-endian + JSON, teto de 4 MiB.
+- `examples/sync_poc.rs`: dois terminais se acham e trocam hello; ID menor disca.
+  Verificado no **macOS** (dois processos); teste de convergência do hello roda
+  no CI, sem mDNS (addr direto de loopback).
+- Gotcha: `finish()` e `conn.close()` na mesma hora descarta o frame em voo — o
+  acceptor espera o outro lado fechar antes de fechar a conexão.
+
+**P2b** (próximo): delta por `(owner, cursor)`, merge LWW no Rust, testes de
+convergência/lápide/idempotência. **P2c**: commands + evento `atlas://sync-applied`.
 
 ## 5. Verificação manual (só o usuário)
 
