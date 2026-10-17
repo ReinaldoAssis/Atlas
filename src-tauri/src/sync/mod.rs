@@ -6,6 +6,7 @@
 //!
 //! Decisões e protocolo: `docs/SYNC.md` §3.
 
+pub mod commands;
 pub mod discovery;
 pub mod engine;
 pub mod identity;

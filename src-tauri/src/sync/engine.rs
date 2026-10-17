@@ -5,7 +5,7 @@
 //! (proto + schema + cursores) e devolve a sessão já aberta para o protocolo
 //! de delta (`session.rs`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use iroh::endpoint::{Connection, RecvStream, SendStream, presets};
@@ -106,7 +106,7 @@ pub async fn dial(endpoint: &Endpoint, peer: EndpointAddr, local: &LocalNode) ->
       .connect(peer, protocol::ALPN)
       .await
       .map_err(|error| format!("conexão: {error}"))?;
-    let (send, recv, remote, hello) = exchange(&conn, local.hello(), Role::Dialer).await?;
+    let (send, recv, remote, hello) = exchange(&conn, local.hello(), Role::Dialer, None).await?;
     Ok(Session {
       conn,
       send,
@@ -128,6 +128,9 @@ pub async fn accept(
   endpoint: &Endpoint,
   local: &LocalNode,
   cursors_by_peer: &BTreeMap<String, Vec<Cursor>>,
+  // `None` = aceitar qualquer par (só o PoC manual usa; o app sempre passa a
+  // allowlist de `sync_peers`).
+  allowlist: Option<&BTreeSet<String>>,
 ) -> Result<Option<Session>, String> {
   timeout(HELLO_TIMEOUT, async {
     let Some(incoming) = endpoint.accept().await else {
@@ -149,7 +152,7 @@ pub async fn accept(
     let remote = conn.remote_id();
     let mut hello = local.hello();
     hello.cursors = cursors_by_peer.get(&remote.to_string()).cloned().unwrap_or_default();
-    let (send, recv, _, hello) = exchange(&conn, hello, Role::Acceptor).await?;
+    let (send, recv, _, hello) = exchange(&conn, hello, Role::Acceptor, allowlist).await?;
     Ok(Some(Session {
       conn,
       send,
@@ -167,10 +170,14 @@ pub async fn accept(
 ///
 /// Devolve os streams já prontos para a sessão (o `finish` fica para o fim do
 /// delta, não aqui).
+///
+/// `allowlist` só é usada pelo acceptor: ele confere o par **antes** de
+/// responder o hello (nada de metadado para desconhecido).
 async fn exchange(
   conn: &Connection,
   local: Hello,
   role: Role,
+  allowlist: Option<&BTreeSet<String>>,
 ) -> Result<(SendStream, RecvStream, EndpointId, Hello), String> {
   let (mut send, mut recv) = match role {
     Role::Acceptor => conn.accept_bi().await.map_err(|error| format!("stream: {error}"))?,
@@ -192,13 +199,21 @@ async fn exchange(
         Message::Refuse { reason } => return Err(format!("par recusou: {reason}")),
         other => return Err(format!("mensagem inesperada no hello: {other:?}")),
       };
-      match protocol::check_hello(&hello, local.schema) {
-        Ok(()) => protocol::write_message(&mut send, &Message::Hello(local.clone())).await?,
-        Err(reason) => {
-          protocol::write_message(&mut send, &Message::Refuse { reason: reason.to_string() }).await?;
+      let trusted = allowlist
+        .map(|set| set.contains(&conn.remote_id().to_string()))
+        .unwrap_or(true);
+      let refusal = match protocol::check_hello(&hello, local.schema) {
+        Ok(()) if trusted => None,
+        Ok(()) => Some(format!("par fora da allowlist: {}", conn.remote_id())),
+        Err(reason) => Some(reason.to_string()),
+      };
+      match refusal {
+        None => protocol::write_message(&mut send, &Message::Hello(local.clone())).await?,
+        Some(reason) => {
+          protocol::write_message(&mut send, &Message::Refuse { reason: reason.clone() }).await?;
           let _ = send.finish();
           let _ = timeout(CLOSE_GRACE, conn.closed()).await;
-          return Err(reason.to_string());
+          return Err(reason);
         }
       }
       hello
@@ -234,6 +249,10 @@ mod tests {
     LocalNode::new(schema, device_id)
   }
 
+  fn allow(id: EndpointId) -> BTreeSet<String> {
+    BTreeSet::from([id.to_string()])
+  }
+
   async fn bind_pair() -> (Endpoint, Endpoint) {
     let a = bind(SecretKey::generate()).await.unwrap();
     let b = bind(SecretKey::generate()).await.unwrap();
@@ -246,7 +265,8 @@ mod tests {
 
     let server = {
       let b = b.clone();
-      tokio::spawn(async move { accept(&b, &node("dev-b", 6), &BTreeMap::new()).await })
+      let trusted = allow(a.id());
+      tokio::spawn(async move { accept(&b, &node("dev-b", 6), &BTreeMap::new(), Some(&trusted)).await })
     };
     let local = node("dev-a", 6);
     let peer_addr = loopback(&b);
@@ -279,7 +299,8 @@ mod tests {
 
     let server = {
       let b = b.clone();
-      tokio::spawn(async move { accept(&b, &node("dev-b", 6), &cursors).await })
+      let trusted = allow(a.id());
+      tokio::spawn(async move { accept(&b, &node("dev-b", 6), &cursors, Some(&trusted)).await })
     };
     let local = node("dev-a", 6);
     let peer_addr = loopback(&b);
@@ -305,7 +326,8 @@ mod tests {
 
     let server = {
       let b = b.clone();
-      tokio::spawn(async move { accept(&b, &node("dev-b", 6), &BTreeMap::new()).await })
+      let trusted = allow(a.id());
+      tokio::spawn(async move { accept(&b, &node("dev-b", 6), &BTreeMap::new(), Some(&trusted)).await })
     };
     let local = node("dev-a", 7);
     let peer_addr = loopback(&b);
@@ -317,6 +339,28 @@ mod tests {
     assert!(error.contains("schema"), "erro inesperado: {error}");
     // O acceptor também recusa: ele compara antes de responder.
     assert!(accepted.unwrap().is_err(), "acceptor deveria recusar schema 7");
+
+    a.close().await;
+    b.close().await;
+  }
+
+  #[tokio::test]
+  async fn unpaired_peer_is_refused_before_the_hello() {
+    let (a, b) = bind_pair().await;
+    let trusted = BTreeSet::new();
+    let server = {
+      let b = b.clone();
+      tokio::spawn(async move { accept(&b, &node("dev-b", 6), &BTreeMap::new(), Some(&trusted)).await })
+    };
+    let local = node("dev-a", 6);
+    let peer_addr = loopback(&b);
+    let (dialed, accepted) = tokio::join!(dial(&a, peer_addr, &local), server);
+    let error = match dialed {
+      Ok(_) => panic!("dial deveria ser recusado sem pareamento"),
+      Err(error) => error,
+    };
+    assert!(error.contains("allowlist"), "erro inesperado: {error}");
+    assert!(accepted.unwrap().is_err());
 
     a.close().await;
     b.close().await;

@@ -91,7 +91,7 @@ no device depois (mesmo fluxo de S7/S9).
 | Fatia | Conteúdo | Estado |
 |---|---|---|
 | **P1** | Metadados de sync (migração v6): `notes.updated_at` → epoch ms, `folders.updated_at`, `shared_settings`, `counters`, `sync_peers`/`sync_cursors`, ids determinísticos de log, HLC, gravação só da linha alterada, purga por par | ✅ |
-| **P2** | Engine: E0a (PoC Windows↔Windows) → endpoint iroh LAN, protocolo/cursor, LWW, evento pro front | 🟡 **P2a + P2b ✅**; P2c pendente |
+| **P2** | Engine: E0a (PoC Windows↔Windows) → endpoint iroh LAN, protocolo/cursor, LWW, evento pro front | ✅ **P2a–P2c** |
 | **P3** | Pareamento SAS + allowlist + store de pares | — |
 | **P4** | Descoberta iOS (bridge Swift) + `project.yml`/`InfoPlist.strings` | — |
 | **P5** | UI de Sincronização + backup/resumo do primeiro sync + rótulo de conflito | — |
@@ -132,9 +132,26 @@ no device depois (mesmo fluxo de S7/S9).
 - Gotcha: `finish()` e `conn.close()` na mesma hora descarta o frame em voo — o
   acceptor espera o outro lado fechar antes de fechar a conexão.
 
-**P2c** (próximo): commands `sync_start`/`sync_stop`/`sync_now`/`sync_status`,
-allowlist de `sync_peers`, evento `atlas://sync-applied` e `nextWriteStamp`
-relendo `hlc_last` do banco.
+**P2c (wiring) ✅** — `sync/commands.rs` + `lib.rs`:
+
+- Commands: `sync_start`, `sync_stop`, `sync_now`, `sync_status` e
+  `sync_cursors` (diagnóstico). Só desktop, como o resto do módulo.
+- Opt-in em `app_settings.sync_enabled` (ausente = desligado); `sync_start`
+  liga a flag, `sync_stop` desliga preservando pares/cursores. O banco de teste
+  (`sqlite:atlas.test.db`) **recusa** `sync_start`/`sync_now`.
+- Allowlist = `sync_peers`, checada **antes** de responder o hello (par
+  desconhecido recebe `Refuse` e não vê metadado). `sync_now` só disca pares já
+  descobertos com EndpointID maior (o menor inicia).
+- Evento `atlas://sync-applied` `{peer, applied, skipped, at}` quando algo foi
+  aplicado ou ignorado; o front recarrega no P5.
+- Loop de descoberta com dedupe e cooldown de 30 s por par; accept e mDNS param
+  quando o endpoint fecha (`sync_stop`).
+- `nextWriteStamp` no front agora **relê** `hlc_last` a cada gravação: o merge
+  no Rust sobe o carimbo por fora do cache do JS.
+- Verificação manual (macOS) via console do WebView: `sync_start`, pareamento
+  inserido em `sync_peers`, `sync_status`, edição nos dois bancos.
+- Windows: prompt do Firewall (UDP de entrada) documentado em
+  `docs/WINDOWS-INSTALLER.md`.
 
 ## 5. Verificação manual (só o usuário)
 

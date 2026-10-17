@@ -88,7 +88,7 @@ async fn main() {
     let local = local.clone();
     async move {
       loop {
-        match engine::accept(&endpoint, &local, &BTreeMap::new()).await {
+        match engine::accept(&endpoint, &local, &BTreeMap::new(), None).await {
           Ok(Some(session)) => {
             println!(
               "[poc] hello de {} (device_id={}, schema={}, proto={})",

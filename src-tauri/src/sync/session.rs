@@ -21,6 +21,8 @@ use super::store::{self, ApplyStats};
 /// Resumo de uma sessão (vai pro log e, em P2c, pro evento do front).
 #[derive(Debug, Clone, Default)]
 pub struct SessionReport {
+  /// EndpointID do par (vai no evento/status).
+  pub peer: String,
   pub applied: usize,
   pub skipped: usize,
   pub sent: usize,
@@ -48,8 +50,13 @@ pub async fn dial(
   local: &LocalNode,
   pool: &SqlitePool,
 ) -> Result<SessionReport, String> {
+  let peer_id = peer.id.to_string();
+  let allowlist = store::allowlist(pool).await?;
+  if !allowlist.contains(&peer_id) {
+    return Err(format!("par fora da allowlist: {peer_id}"));
+  }
   let mut local = local.clone();
-  local.cursors = store::cursors_for(pool, &peer.id.to_string()).await?;
+  local.cursors = store::cursors_for(pool, &peer_id).await?;
   let session = engine::dial(endpoint, peer, &local).await?;
   run(session, pool).await
 }
@@ -61,7 +68,8 @@ pub async fn accept(
   pool: &SqlitePool,
 ) -> Result<Option<SessionReport>, String> {
   let cursors = store::cursors_by_peer(pool).await?;
-  let Some(session) = engine::accept(endpoint, local, &cursors).await? else {
+  let allowlist = store::allowlist(pool).await?;
+  let Some(session) = engine::accept(endpoint, local, &cursors, Some(&allowlist)).await? else {
     return Ok(None);
   };
   run(session, pool).await.map(Some)
@@ -90,6 +98,7 @@ async fn run(mut session: Session, pool: &SqlitePool) -> Result<SessionReport, S
   session.close().await;
 
   Ok(SessionReport {
+    peer: peer_id,
     applied: stats.applied,
     skipped: stats.skipped,
     sent,
