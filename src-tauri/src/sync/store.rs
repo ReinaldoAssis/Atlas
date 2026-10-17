@@ -592,11 +592,19 @@ pub async fn apply_rows(
       // este par (carimbo estritamente acima do cursor). Reenvio do mesmo
       // carimbo não duplica a cópia.
       let concurrent = options.own_cursors.get(row.owner()).copied().unwrap_or(0);
+      // Mesma linha voltando (mesmo carimbo e mesma origem): não é conflito.
+      // Sem isto, re-parear zera os cursores, o delta completo traz de volta
+      // tudo que já está aqui e cada nota vira uma cópia de conflito.
+      let same_row = local.as_ref().is_some_and(|local| {
+        local.updated_at == updated_at
+          && origin(local.device_id.as_deref()) == origin(incoming_device)
+      });
       let both_live = local.as_ref().map(|local| local.deleted_at.is_none()).unwrap_or(false)
         && !is_deleted(&row.cols);
       if options.note_conflicts
         && schema.name == "notes"
         && both_live
+        && !same_row
         && updated_at > concurrent
       {
         if let Some(copy) = conflict_copy(row, schema, options) {

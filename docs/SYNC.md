@@ -213,13 +213,18 @@ no device depois (mesmo fluxo de S7/S9).
 - Carimbo da cópia = `max(agora, maior carimbo desta origem, hlc_last) + 1`:
   abaixo do que o par já viu, ele nunca puxaria a cópia (cursor por origem).
 - Reenvio do mesmo carimbo (`>= cursor`) não duplica; lápide não gera cópia.
+  Linha idêntica voltando (mesmo carimbo **e** mesma origem) também não: sem
+  isso, re-parear (cursores apagados) refaz o delta completo e duplica toda
+  nota já sincronizada.
 - `ApplyStats.conflicts` alimenta o log/evento. Limitação conhecida: um relay
   por terceiro pode gerar uma cópia a mais (preferimos duplicar a perder dado).
 
 **P3 (pareamento) ✅** — `sync/pair.rs` + commands:
 
 - ALPN próprio `atlas/pair/1`: é o único caminho que atende um par fora da
-  allowlist, e só até os dois lados confirmarem.
+  allowlist, e só até os dois lados confirmarem. O endpoint (`engine::bind`)
+  anuncia os dois ALPNs; sem isso o iroh aborta o handshake do pareamento com
+  `no_application_protocol` (alert 120).
 - Fluxo: `PairRequest{proto, device_id, name, nonce}` →
   `PairResponse{device_id, name, nonce}` → cada lado exibe o SAS e envia
   `PairDecision{accept}`. Quem discou lê primeiro e fecha; o acceptor lê a
