@@ -27,6 +27,8 @@ function setup(overrides: Record<string, unknown> = {}) {
 		onsynctoggle: vi.fn(),
 		onsyncnow: vi.fn(),
 		onsyncdiscoveryrestart: vi.fn(),
+		onsyncauto: vi.fn(),
+		onsyncinterval: vi.fn(),
 		onpair: vi.fn(),
 		onunpair: vi.fn(),
 		...overrides
@@ -47,7 +49,7 @@ describe('SettingsSheet', () => {
 	it('mostra a seção de sincronização quando o app tem suporte', () => {
 		setup({
 			syncAvailable: true,
-			sync: { enabled: false, running: false, endpointId: null, peers: [], pendingPairs: [], discovery: { state: 'off', found: 0, message: null } }
+			sync: { enabled: false, running: false, endpointId: null, peers: [], pendingPairs: [], autoSync: true, intervalSecs: 2, discovery: { state: 'off', found: 0, message: null } }
 		});
 		expect(screen.getByText('Sincronização')).toBeTruthy();
 		expect(screen.getByRole('switch', { name: 'Sincronizar aparelhos' })).toBeTruthy();
@@ -62,6 +64,8 @@ describe('SettingsSheet', () => {
 				endpointId: 'abc',
 				peers: [],
 				pendingPairs: [],
+				autoSync: true,
+				intervalSecs: 2,
 				discovery: { state: 'browsing', found: 2, message: null }
 			}
 		});
@@ -69,6 +73,31 @@ describe('SettingsSheet', () => {
 		expect(screen.getByText('2 na rede')).toBeTruthy();
 		await fireEvent.click(screen.getByRole('button', { name: 'Reiniciar' }));
 		expect(props.onsyncdiscoveryrestart).toHaveBeenCalledTimes(1);
+	});
+
+	it('configura o auto-sync na seção Avançado', async () => {
+		const props = setup({
+			syncAvailable: true,
+			sync: {
+				enabled: true,
+				running: true,
+				endpointId: 'abc',
+				peers: [],
+				pendingPairs: [],
+				autoSync: true,
+				intervalSecs: 2,
+				discovery: { state: 'browsing', found: 0, message: null }
+			}
+		});
+		expect(screen.getByText('Avançado')).toBeTruthy();
+		await fireEvent.click(
+			screen.getByRole('switch', { name: 'Sincronizar automaticamente' })
+		);
+		expect(props.onsyncauto).toHaveBeenCalledWith(false);
+		const input = screen.getByLabelText('Intervalo') as HTMLInputElement;
+		expect(input.value).toBe('2');
+		await fireEvent.change(input, { target: { value: '5' } });
+		expect(props.onsyncinterval).toHaveBeenCalledWith(5);
 	});
 
 	it('explica a permissão de Rede Local negada', () => {
@@ -80,6 +109,8 @@ describe('SettingsSheet', () => {
 				endpointId: 'abc',
 				peers: [],
 				pendingPairs: [],
+				autoSync: true,
+				intervalSecs: 2,
 				discovery: {
 					state: 'permission',
 					found: 0,

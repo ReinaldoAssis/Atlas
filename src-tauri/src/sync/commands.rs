@@ -41,6 +41,14 @@ const ENABLED_KEY: &str = "sync_enabled";
 /// Não martelar um par que acabou de falhar (mDNS reanuncia o tempo todo).
 const DIAL_COOLDOWN: Duration = Duration::from_secs(30);
 
+/// Auto-sync (Configurações › Avançado). O padrão são 2 s; o piso evita rajada
+/// de handshakes e o teto impede um intervalo acidentalmente enorme.
+const AUTO_KEY: &str = "sync_auto";
+const INTERVAL_KEY: &str = "sync_interval";
+const DEFAULT_INTERVAL_SECS: u64 = 2;
+const MIN_INTERVAL_SECS: u64 = 1;
+const MAX_INTERVAL_SECS: u64 = 300;
+
 /// Quanto tempo o SAS fica válido para confirmação.
 pub const PAIR_TTL: Duration = Duration::from_secs(120);
 /// Tentativas de pareamento por par antes de um descanso.
@@ -69,8 +77,35 @@ struct Running {
   discovered: Arc<Mutex<BTreeMap<EndpointId, Discovered>>>,
   in_flight: Arc<Mutex<BTreeSet<EndpointId>>>,
   last_attempt: Arc<Mutex<HashMap<EndpointId, Instant>>>,
+  /// Ritmo do auto-sync; o loop lê os atomics a cada volta.
+  auto: Arc<AutoSync>,
   pending: Arc<Mutex<BTreeMap<EndpointId, PendingPair>>>,
   attempts: Arc<Mutex<HashMap<EndpointId, PairAttempt>>>,
+}
+
+struct AutoSync {
+  enabled: AtomicBool,
+  interval_ms: AtomicU64,
+  /// Acorda o loop quando o toggle/intervalo muda ou o sync para.
+  wake: tokio::sync::Notify,
+}
+
+impl AutoSync {
+  fn new(enabled: bool, interval_secs: u64) -> Self {
+    Self {
+      enabled: AtomicBool::new(enabled),
+      interval_ms: AtomicU64::new(interval_secs.max(MIN_INTERVAL_SECS) * 1000),
+      wake: tokio::sync::Notify::new(),
+    }
+  }
+
+  fn set(&self, enabled: bool, interval_secs: u64) {
+    self.enabled.store(enabled, Ordering::Relaxed);
+    self
+      .interval_ms
+      .store(interval_secs.max(MIN_INTERVAL_SECS) * 1000, Ordering::Relaxed);
+    self.wake.notify_one();
+  }
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +160,9 @@ pub struct SyncStatus {
   pub endpoint_id: Option<String>,
   pub peers: Vec<SyncPeerStatus>,
   pub pending_pairs: Vec<SyncPendingPair>,
+  /// Auto-sync enquanto o app está aberto (Configurações › Avançado).
+  pub auto_sync: bool,
+  pub interval_secs: u64,
   pub discovery: SyncDiscoveryStatus,
 }
 
@@ -220,13 +258,44 @@ async fn is_enabled(pool: &SqlitePool) -> Result<bool, String> {
 }
 
 async fn set_enabled(pool: &SqlitePool, value: bool) -> Result<(), String> {
+  write_setting(pool, ENABLED_KEY, &value).await
+}
+
+async fn write_setting<T: serde::Serialize>(pool: &SqlitePool, key: &str, value: &T) -> Result<(), String> {
   sqlx::query("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)")
-    .bind(ENABLED_KEY)
-    .bind(serde_json::to_string(&value).map_err(|error| error.to_string())?)
+    .bind(key)
+    .bind(serde_json::to_string(value).map_err(|error| error.to_string())?)
     .execute(pool)
     .await
-    .map_err(|error| format!("app_settings.{ENABLED_KEY}: {error}"))?;
+    .map_err(|error| format!("app_settings.{key}: {error}"))?;
   Ok(())
+}
+
+/// Auto-sync ligado por padrão quando a chave ainda não existe.
+async fn is_auto(pool: &SqlitePool) -> Result<bool, String> {
+  Ok(read_setting(pool, AUTO_KEY)
+    .await?
+    .and_then(|value| serde_json::from_str::<bool>(&value).ok())
+    .unwrap_or(true))
+}
+
+/// Intervalo em segundos, sempre dentro da faixa aceita pela UI.
+async fn auto_interval(pool: &SqlitePool) -> Result<u64, String> {
+  let value = read_setting(pool, INTERVAL_KEY)
+    .await?
+    .and_then(|value| serde_json::from_str::<u64>(&value).ok())
+    .unwrap_or(DEFAULT_INTERVAL_SECS);
+  Ok(value.clamp(MIN_INTERVAL_SECS, MAX_INTERVAL_SECS))
+}
+
+async fn set_auto(pool: &SqlitePool, enabled: bool, interval_secs: u64) -> Result<(), String> {
+  write_setting(pool, AUTO_KEY, &enabled).await?;
+  write_setting(
+    pool,
+    INTERVAL_KEY,
+    &interval_secs.clamp(MIN_INTERVAL_SECS, MAX_INTERVAL_SECS),
+  )
+  .await
 }
 
 async fn device_id(pool: &SqlitePool) -> Result<String, String> {
@@ -238,7 +307,9 @@ async fn device_id(pool: &SqlitePool) -> Result<String, String> {
 }
 
 fn emit_report(app: &AppHandle, report: &session::SessionReport) {
-  if report.applied == 0 && report.skipped == 0 {
+  // `skipped` sozinho é o reenvio do cursor (acontece a cada auto-sync); só
+  // avisa a UI quando algo mudou de fato.
+  if report.applied == 0 && report.conflicts == 0 {
     return;
   }
   let payload = SyncApplied {
@@ -263,11 +334,11 @@ struct DialContext {
 }
 
 /// Dispara uma sessão contra `peer`, respeitando cooldown e sessão em andamento.
-async fn start_dial(context: &DialContext, peer: EndpointAddr) {
+async fn start_dial(context: &DialContext, peer: EndpointAddr, cooldown: Duration) {
   {
     let mut attempts = context.last_attempt.lock().await;
     if let Some(last) = attempts.get(&peer.id) {
-      if last.elapsed() < DIAL_COOLDOWN {
+      if last.elapsed() < cooldown {
         return;
       }
     }
@@ -284,13 +355,23 @@ async fn start_dial(context: &DialContext, peer: EndpointAddr) {
   tauri::async_runtime::spawn(async move {
     match session::dial(&endpoint, peer.clone(), &local, &pool).await {
       Ok(report) => {
-        log::info!(
-          "sync: sessão com {} — enviadas {}, aplicadas {}, ignoradas {}",
-          report.peer,
-          report.sent,
-          report.applied,
-          report.skipped
-        );
+        // Auto-sync roda a cada poucos segundos: só o que mudou vira log info.
+        if report.applied > 0 || report.conflicts > 0 {
+          log::info!(
+            "sync: sessão com {} — enviadas {}, aplicadas {}, ignoradas {}",
+            report.peer,
+            report.sent,
+            report.applied,
+            report.skipped
+          );
+        } else {
+          log::debug!(
+            "sync: sessão ociosa com {} — enviadas {}, ignoradas {}",
+            report.peer,
+            report.sent,
+            report.skipped
+          );
+        }
         emit_report(&app, &report);
       }
       Err(error) => log::warn!("sync: dial para {} falhou: {error}", peer.id),
@@ -332,12 +413,20 @@ fn spawn_accept(
               tauri::async_runtime::spawn(async move {
                 match session::run(session, &pool).await {
                   Ok(report) => {
-                    log::info!(
-                      "sync: sessão com {} — aplicadas {}, ignoradas {}",
-                      report.peer,
-                      report.applied,
-                      report.skipped
-                    );
+                    if report.applied > 0 || report.conflicts > 0 {
+                      log::info!(
+                        "sync: sessão com {} — aplicadas {}, ignoradas {}",
+                        report.peer,
+                        report.applied,
+                        report.skipped
+                      );
+                    } else {
+                      log::debug!(
+                        "sync: sessão ociosa com {} — ignoradas {}",
+                        report.peer,
+                        report.skipped
+                      );
+                    }
                     emit_report(&app, &report);
                   }
                   Err(error) => log::warn!("sync: sessão falhou: {error}"),
@@ -426,6 +515,7 @@ fn spawn_discovery(
   context: Arc<DialContext>,
   receiver: mdns_sd::Receiver<mdns_sd::ServiceEvent>,
   discovered: Arc<Mutex<BTreeMap<EndpointId, Discovered>>>,
+  auto: Arc<AutoSync>,
   generation: Arc<AtomicU64>,
   my_generation: u64,
 ) {
@@ -480,7 +570,10 @@ fn spawn_discovery(
       if !allowlist.contains(&peer.addr.id.to_string()) {
         continue;
       }
-      start_dial(&context, peer.addr).await;
+      if !auto.enabled.load(Ordering::Relaxed) {
+        continue;
+      }
+      start_dial(&context, peer.addr, DIAL_COOLDOWN).await;
     }
   });
 }
@@ -491,6 +584,7 @@ fn spawn_discovery_ios(
   context: Arc<DialContext>,
   discovery: discovery_ios::Handle,
   discovered: Arc<Mutex<BTreeMap<EndpointId, Discovered>>>,
+  auto: Arc<AutoSync>,
   generation: Arc<AtomicU64>,
   my_generation: u64,
 ) {
@@ -529,7 +623,10 @@ fn spawn_discovery_ios(
             if !allowlist.contains(&id.to_string()) {
               continue;
             }
-            start_dial(&context, addr).await;
+            if !auto.enabled.load(Ordering::Relaxed) {
+              continue;
+            }
+            start_dial(&context, addr, DIAL_COOLDOWN).await;
           }
         }
       }
@@ -538,9 +635,59 @@ fn spawn_discovery_ios(
   });
 }
 
+/// Auto-sync: a cada intervalo, disca os pares pareados que estão descobertos.
+///
+/// Só o EndpointID menor disca (mesma regra da descoberta), então os dois lados
+/// não abrem sessão ao mesmo tempo. `in_flight`/`last_attempt` do `start_dial`
+/// evitam sobreposição quando a sessão anterior ainda não terminou.
+fn spawn_auto(
+  context: Arc<DialContext>,
+  auto: Arc<AutoSync>,
+  discovered: Arc<Mutex<BTreeMap<EndpointId, Discovered>>>,
+) {
+  tauri::async_runtime::spawn(async move {
+    loop {
+      if !context.alive.load(Ordering::Relaxed) {
+        break;
+      }
+      let enabled = auto.enabled.load(Ordering::Relaxed);
+      let wait = if enabled {
+        Duration::from_millis(auto.interval_ms.load(Ordering::Relaxed).max(MIN_INTERVAL_SECS * 1000))
+      } else {
+        // Desligado: acorda só no toggle, na troca de intervalo ou no stop.
+        Duration::from_secs(60)
+      };
+      tokio::select! {
+        _ = tokio::time::sleep(wait) => {}
+        _ = auto.wake.notified() => {}
+      }
+      if !context.alive.load(Ordering::Relaxed) {
+        break;
+      }
+      if !auto.enabled.load(Ordering::Relaxed) {
+        continue;
+      }
+      let me = context.endpoint.id();
+      let allowlist = store::allowlist(&context.pool).await.unwrap_or_default();
+      let peers: Vec<EndpointAddr> = discovered
+        .lock()
+        .await
+        .values()
+        .filter(|entry| entry.addr.id < me && allowlist.contains(&entry.addr.id.to_string()))
+        .map(|entry| entry.addr.clone())
+        .collect();
+      for peer in peers {
+        start_dial(&context, peer, Duration::ZERO).await;
+      }
+    }
+  });
+}
+
 async fn status(app: &AppHandle, db: &str, state: &SyncState) -> Result<SyncStatus, String> {
   let pool = pool(app, db).await?;
   let enabled = is_enabled(&pool).await?;
+  let auto_sync = is_auto(&pool).await?;
+  let interval_secs = auto_interval(&pool).await?;
   let peers = store::peers(&pool)
     .await?
     .into_iter()
@@ -576,6 +723,8 @@ async fn status(app: &AppHandle, db: &str, state: &SyncState) -> Result<SyncStat
     endpoint_id,
     peers,
     pending_pairs,
+    auto_sync,
+    interval_secs,
     discovery,
   })
 }
@@ -642,6 +791,8 @@ pub async fn sync_start(
   let pool = pool(&app, &db).await?;
   let schema = store::schema_version(&pool).await?;
   let device_id = device_id(&pool).await?;
+  let auto_enabled = is_auto(&pool).await?;
+  let auto_secs = auto_interval(&pool).await?;
   let app_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
   let key = identity::load_or_create(&identity::identity_path(&app_dir))
     .map_err(|error| format!("identidade do sync: {error}"))?;
@@ -687,6 +838,7 @@ pub async fn sync_start(
   let attempts = Arc::new(Mutex::new(HashMap::new()));
   let alive = Arc::new(AtomicBool::new(true));
   let discovery_gen = Arc::new(AtomicU64::new(0));
+  let auto = Arc::new(AutoSync::new(auto_enabled, auto_secs));
 
   spawn_accept(
     app.clone(),
@@ -706,12 +858,14 @@ pub async fn sync_start(
     last_attempt: last_attempt.clone(),
     alive: alive.clone(),
   });
+  spawn_auto(context.clone(), auto.clone(), discovered.clone());
   #[cfg(not(target_os = "ios"))]
   if let Some(receiver) = receiver {
     spawn_discovery(
       context.clone(),
       receiver,
       discovered.clone(),
+      auto.clone(),
       discovery_gen.clone(),
       0,
     );
@@ -722,6 +876,7 @@ pub async fn sync_start(
       context.clone(),
       discovery.handle(),
       discovered.clone(),
+      auto.clone(),
       discovery_gen.clone(),
       0,
     );
@@ -731,6 +886,8 @@ pub async fn sync_start(
 
   let mut guard = state.inner.lock().await;
   if guard.is_some() {
+    alive.store(false, Ordering::Relaxed);
+    auto.wake.notify_one();
     #[cfg(not(target_os = "ios"))]
     if let Some(advertisement) = advertisement {
       advertisement.stop();
@@ -758,6 +915,7 @@ pub async fn sync_start(
     discovered,
     in_flight,
     last_attempt,
+    auto,
     pending,
     attempts,
   });
@@ -776,6 +934,7 @@ pub async fn sync_stop(
   let running = { state.inner.lock().await.take() };
   if let Some(mut running) = running {
     running.alive.store(false, Ordering::Relaxed);
+    running.auto.wake.notify_one();
     #[cfg(not(target_os = "ios"))]
     if let Some(advertisement) = running.advertisement.take() {
       advertisement.stop();
@@ -818,6 +977,7 @@ pub async fn sync_discovery_restart(
             running.context.clone(),
             receiver,
             running.discovered.clone(),
+            running.auto.clone(),
             running.discovery_gen.clone(),
             generation,
           );
@@ -846,6 +1006,7 @@ pub async fn sync_discovery_restart(
             running.context.clone(),
             discovery.handle(),
             running.discovered.clone(),
+            running.auto.clone(),
             running.discovery_gen.clone(),
             generation,
           );
@@ -903,7 +1064,7 @@ pub async fn sync_now(
   };
   for peer in peers {
     if peer.id > context.endpoint.id() && allowlist.contains(&peer.id.to_string()) {
-      start_dial(&context, peer).await;
+      start_dial(&context, peer, Duration::ZERO).await;
     }
   }
   status(&app, &db, &state).await
@@ -1000,7 +1161,7 @@ pub async fn sync_pair_begin(
       .ok_or_else(|| "par não descoberto: informe ip:porta".to_string())?,
   };
 
-  let conn = tokio::time::timeout(pair::TIMEOUT, endpoint.connect(target, pair::ALPN))
+  let conn = tokio::time::timeout(pair::TIMEOUT, endpoint.connect(target.clone(), pair::ALPN))
     .await
     .map_err(|_| "timeout ao conectar para parear".to_string())?
     .map_err(|error| format!("conexão de pareamento: {error}"))?;
@@ -1039,6 +1200,15 @@ pub async fn sync_pair_begin(
     pending_for_session.lock().await.remove(&peer_id);
     match result {
       Ok(outcome) => {
+        // Guarda o endereço usado no pareamento: o auto-sync continua
+        // alcançando o par mesmo se o anúncio mDNS sumir por um instante.
+        discovered.lock().await.insert(
+          peer_id,
+          Discovered {
+            name: outcome.peer_name.clone(),
+            addr: target,
+          },
+        );
         match store::add_peer(&pool_for_session, &peer_id.to_string(), &outcome.peer_name, now_ms()).await {
           Ok(()) => {
             attempts.lock().await.remove(&peer_id);
@@ -1126,6 +1296,28 @@ pub async fn sync_cursors(app: AppHandle, db: String, peer: String) -> Result<Ve
   store::cursors_for(&pool, &peer).await
 }
 
+/// Liga/desliga o auto-sync e ajusta o intervalo em segundos.
+#[tauri::command]
+pub async fn sync_set_auto(
+  app: AppHandle,
+  state: State<'_, SyncState>,
+  db: String,
+  enabled: bool,
+  interval_secs: u64,
+) -> Result<SyncStatus, String> {
+  ensure_prod(&db)?;
+  let interval = interval_secs.clamp(MIN_INTERVAL_SECS, MAX_INTERVAL_SECS);
+  let pool = pool(&app, &db).await?;
+  set_auto(&pool, enabled, interval).await?;
+  {
+    let guard = state.inner.lock().await;
+    if let Some(running) = guard.as_ref() {
+      running.auto.set(enabled, interval);
+    }
+  }
+  status(&app, &db, &state).await
+}
+
 #[tauri::command]
 pub async fn sync_status(
   app: AppHandle,
@@ -1168,6 +1360,18 @@ mod tests {
     assert!(is_enabled(&pool).await.unwrap());
     set_enabled(&pool, false).await.unwrap();
     assert!(!is_enabled(&pool).await.unwrap());
+  }
+
+  #[tokio::test]
+  async fn auto_defaults_on_and_interval_is_clamped() {
+    let pool = pool().await;
+    assert!(is_auto(&pool).await.unwrap(), "auto-sync ausente = ligado");
+    assert_eq!(auto_interval(&pool).await.unwrap(), DEFAULT_INTERVAL_SECS);
+    set_auto(&pool, false, 0).await.unwrap();
+    assert!(!is_auto(&pool).await.unwrap());
+    assert_eq!(auto_interval(&pool).await.unwrap(), MIN_INTERVAL_SECS);
+    set_auto(&pool, true, 10_000).await.unwrap();
+    assert_eq!(auto_interval(&pool).await.unwrap(), MAX_INTERVAL_SECS);
   }
 
   #[tokio::test]

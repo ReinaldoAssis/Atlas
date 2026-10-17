@@ -38,6 +38,7 @@ import { checkForUpdate, relaunchApp, updaterSupportedHere } from '#lib/updater'
 		syncStart,
 		syncStatus,
 		syncStop,
+		syncSetAuto,
 		syncSupported,
 		syncUnpair,
 		type SyncDiscovered,
@@ -715,6 +716,21 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		syncBusy = true;
 		try {
 			sync = await syncDiscoveryRestart();
+		} catch (error) {
+			toastMessage(m.sync_error(), { warning: true });
+			console.error(error);
+		} finally {
+			syncBusy = false;
+		}
+	}
+
+	/** Configurações › Avançado: toggle e intervalo do auto-sync. */
+	async function updateSyncAuto(patch: { autoSync?: boolean; intervalSecs?: number }) {
+		const enabled = patch.autoSync ?? sync?.autoSync ?? true;
+		const intervalSecs = patch.intervalSecs ?? sync?.intervalSecs ?? 2;
+		syncBusy = true;
+		try {
+			sync = await syncSetAuto(enabled, intervalSecs);
 		} catch (error) {
 			toastMessage(m.sync_error(), { warning: true });
 			console.error(error);
@@ -3618,6 +3634,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			onsynctoggle={setSyncEnabled}
 			onsyncnow={runSyncNow}
 			onsyncdiscoveryrestart={() => void restartSyncDiscovery()}
+			onsyncauto={(enabled) => void updateSyncAuto({ autoSync: enabled })}
+			onsyncinterval={(secs) => void updateSyncAuto({ intervalSecs: secs })}
 			onpair={openPairing}
 			onunpair={unpair}
 		/>
