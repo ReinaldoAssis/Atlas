@@ -42,18 +42,25 @@ type RegisterReply = extern "C" fn(
   *const c_char,
   *mut c_void,
 );
+/// ABI de `DNSServiceBrowseReply`: `interfaceIndex` vem **antes** do
+/// `errorCode`. Sem ele todos os argumentos deslocam uma casa (o índice é lido
+/// como erro e o nome vira o erro), e nenhum evento é processado.
 type BrowseReply = extern "C" fn(
   ServiceRef,
   ServiceFlags,
+  u32,
   ServiceError,
   *const c_char,
   *const c_char,
   *const c_char,
   *mut c_void,
 );
+/// ABI de `DNSServiceResolveReply`: mesma ordem do browse, com `interfaceIndex`
+/// logo depois de `flags`.
 type ResolveReply = extern "C" fn(
   ServiceRef,
   ServiceFlags,
+  u32,
   ServiceError,
   *const c_char,
   *const c_char,
@@ -117,6 +124,27 @@ struct PendingService {
   name: String,
   regtype: String,
   domain: String,
+  /// Interface que o browse reportou; o resolve precisa consultar a mesma.
+  interface_index: u32,
+}
+
+/// Tipo do `DNSServiceRef` no `poll`: register/browse são permanentes, resolve
+/// entrega um resultado e é descartado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefKind {
+  Register,
+  Browse,
+  Resolve,
+}
+
+impl RefKind {
+  fn label(self) -> &'static str {
+    match self {
+      Self::Register => "register",
+      Self::Browse => "browse",
+      Self::Resolve => "resolve",
+    }
+  }
 }
 
 #[derive(Debug, Default)]
@@ -168,11 +196,15 @@ fn describe_error(code: ServiceError) -> String {
   }
 }
 
-fn record_error(state: &Shared, code: ServiceError) {
+fn record_error(state: &Shared, call_site: &str, code: ServiceError) {
+  record_error_detail(state, call_site, code, "");
+}
+
+fn record_error_detail(state: &Shared, call_site: &str, code: ServiceError, hint: &str) {
   if code == NO_ERROR {
     return;
   }
-  let message = describe_error(code);
+  let message = format!("{call_site}: {}{hint}", describe_error(code));
   log::warn!("descoberta iOS: {message}");
   if let Ok(mut state) = state.lock() {
     state.last_error = Some(DiscoveryError { code, message });
@@ -366,7 +398,7 @@ fn poll_loop(
     )
   };
   if error != NO_ERROR || register.is_null() {
-    record_error(&state, error);
+    record_error(&state, "register", error);
     let _ = ready.send(Err(format!("descoberta iOS: {}", describe_error(error))));
     return;
   }
@@ -388,7 +420,7 @@ fn poll_loop(
   };
   if error != NO_ERROR || browse.is_null() {
     unsafe { DNSServiceRefDeallocate(register) };
-    record_error(&state, error);
+    record_error(&state, "browse", error);
     let _ = ready.send(Err(format!("descoberta iOS: {}", describe_error(error))));
     return;
   }
@@ -396,8 +428,9 @@ fn poll_loop(
     state.browsing = true;
   }
   let _ = ready.send(Ok(()));
-  let mut refs: Vec<(ServiceRef, bool)> = vec![(register, false), (browse, false)];
-  while state.lock().map(|state| state.alive).unwrap_or(false) {
+  let mut refs: Vec<(ServiceRef, RefKind)> =
+    vec![(register, RefKind::Register), (browse, RefKind::Browse)];
+  'poll: while state.lock().map(|state| state.alive).unwrap_or(false) {
     // Resolves pedidos pelos callbacks de browse.
     let pending = state
       .lock()
@@ -405,7 +438,7 @@ fn poll_loop(
       .unwrap_or_default();
     for service in pending {
       if let Some(reference) = start_resolve(&service, &state) {
-        refs.push((reference, true));
+        refs.push((reference, RefKind::Resolve));
       }
     }
     if refs.is_empty() {
@@ -421,10 +454,11 @@ fn poll_loop(
       .collect();
     let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, POLL_TIMEOUT_MS) };
     if ready < 0 {
-      record_error_message(
-        &state,
-        format!("poll falhou: {}", std::io::Error::last_os_error()),
-      );
+      let error = std::io::Error::last_os_error();
+      // EINTR é sinal, não falha: repetir sem sujar o log.
+      if error.kind() != std::io::ErrorKind::Interrupted {
+        record_error_message(&state, format!("poll falhou: {error}"));
+      }
       continue;
     }
     if ready == 0 {
@@ -437,12 +471,39 @@ fn poll_loop(
         index += 1;
         continue;
       }
-      let (reference, is_resolve) = refs[index];
+      let (reference, kind) = refs[index];
       let code = unsafe { DNSServiceProcessResult(reference) };
       if code != NO_ERROR {
-        record_error(&state, code);
+        // O stub do mDNSResponder zera o `ProcessReply` depois de uma falha de
+        // leitura: o fd continua "legível" e cada poll devolve o mesmo erro.
+        // Sem desalocar, o loop gira em falso para sempre e enche o log.
+        unsafe { DNSServiceRefDeallocate(reference) };
+        refs.remove(index);
+        fds.remove(index);
+        match kind {
+          RefKind::Resolve => {
+            record_error(&state, "resolve", code);
+            continue;
+          }
+          RefKind::Register | RefKind::Browse => {
+            record_error_detail(
+              &state,
+              kind.label(),
+              code,
+              " Descoberta interrompida; reinicie a descoberta.",
+            );
+            if let Ok(mut state) = state.lock() {
+              match kind {
+                RefKind::Register => state.registered = false,
+                RefKind::Browse => state.browsing = false,
+                RefKind::Resolve => {}
+              }
+            }
+            break 'poll;
+          }
+        }
       }
-      if is_resolve {
+      if kind == RefKind::Resolve {
         // O resolve entrega um único resultado.
         unsafe { DNSServiceRefDeallocate(reference) };
         refs.remove(index);
@@ -466,7 +527,7 @@ fn start_resolve(service: &PendingService, state: &Shared) -> Option<ServiceRef>
     DNSServiceResolve(
       &mut reference,
       0,
-      0,
+      service.interface_index,
       name.as_ptr(),
       regtype.as_ptr(),
       domain.as_ptr(),
@@ -475,7 +536,7 @@ fn start_resolve(service: &PendingService, state: &Shared) -> Option<ServiceRef>
     )
   };
   if error != NO_ERROR {
-    record_error(state, error);
+    record_error(state, "resolve", error);
     return None;
   }
   (!reference.is_null()).then_some(reference)
@@ -492,7 +553,7 @@ extern "C" fn on_register(
 ) {
   if error != NO_ERROR {
     if let Some(state) = shared() {
-      record_error(&state, error);
+      record_error(&state, "register", error);
     }
     return;
   }
@@ -506,6 +567,7 @@ extern "C" fn on_register(
 extern "C" fn on_browse(
   _reference: ServiceRef,
   flags: ServiceFlags,
+  interface_index: u32,
   error: ServiceError,
   name: *const c_char,
   regtype: *const c_char,
@@ -515,25 +577,24 @@ extern "C" fn on_browse(
   if error != NO_ERROR || name.is_null() || regtype.is_null() || domain.is_null() {
     if error != NO_ERROR {
       if let Some(state) = shared() {
-        record_error(&state, error);
+        record_error(&state, "browse", error);
       }
     }
     return;
   }
-  let name = unsafe { CStr::from_ptr(name) }.to_string_lossy().to_string();
+  let name = unescape(&unsafe { CStr::from_ptr(name) }.to_string_lossy());
   let regtype = unsafe { CStr::from_ptr(regtype) }.to_string_lossy().to_string();
   let domain = unsafe { CStr::from_ptr(domain) }.to_string_lossy().to_string();
   let Some(state) = shared() else { return };
   clear_error(&state);
-  if let Ok(mut state) = state.lock() {
-    state.browsing = true;
-  }
   let Ok(mut state) = state.lock() else { return };
+  state.browsing = true;
   if flags & FLAG_ADD != 0 {
     state.pending.push(PendingService {
       name,
       regtype,
       domain,
+      interface_index,
     });
   } else {
     state.peers.retain(|_, peer| peer.name != name);
@@ -543,6 +604,7 @@ extern "C" fn on_browse(
 extern "C" fn on_resolve(
   _reference: ServiceRef,
   _flags: ServiceFlags,
+  _interface_index: u32,
   error: ServiceError,
   fullname: *const c_char,
   host: *const c_char,
@@ -554,13 +616,13 @@ extern "C" fn on_resolve(
   if error != NO_ERROR || fullname.is_null() || host.is_null() {
     if error != NO_ERROR {
       if let Some(state) = shared() {
-        record_error(&state, error);
+        record_error(&state, "resolve", error);
       }
     }
     return;
   }
   let full = unsafe { CStr::from_ptr(fullname) }.to_string_lossy().to_string();
-  let instance = full.split('.').next().unwrap_or_default().to_string();
+  let instance = unescape(instance_label(&full));
   let host = unsafe { CStr::from_ptr(host) }.to_string_lossy().to_string();
   let port = u16::from_be(port);
   let id = txt_value(txt_record, txt_len, "id").unwrap_or_default();
@@ -596,6 +658,43 @@ extern "C" fn on_resolve(
       port,
     },
   );
+}
+
+/// Primeiro label do `fullname` (até o primeiro `.` não escapado).
+fn instance_label(fullname: &str) -> &str {
+  let bytes = fullname.as_bytes();
+  let mut index = 0;
+  while index < bytes.len() {
+    match bytes[index] {
+      b'\\' => index += 2,
+      b'.' => return &fullname[..index],
+      _ => index += 1,
+    }
+  }
+  fullname
+}
+
+/// Desfaz os escapes `\DDD` que o DNS-SD usa nos labels (ex.: `\032` = espaço).
+fn unescape(value: &str) -> String {
+  let raw = value.as_bytes();
+  let mut bytes = Vec::with_capacity(raw.len());
+  let mut index = 0;
+  while index < raw.len() {
+    if raw[index] == b'\\' && index + 3 < raw.len() {
+      let digits = &raw[index + 1..index + 4];
+      if digits.iter().all(u8::is_ascii_digit) {
+        let text = std::str::from_utf8(digits).unwrap_or_default();
+        if let Ok(code) = text.parse::<u8>() {
+          bytes.push(code);
+          index += 4;
+          continue;
+        }
+      }
+    }
+    bytes.push(raw[index]);
+    index += 1;
+  }
+  String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// TXT do DNS-SD: sequência de `<tamanho><chave=valor>`.

@@ -90,10 +90,15 @@ enum Role {
 }
 
 /// Liga o endpoint com a identidade local, sem relay e sem descoberta externa.
+///
+/// O endpoint precisa anunciar **os dois** ALPNs: o iroh recusa no handshake
+/// TLS (`no_application_protocol`, alert 120) qualquer conexão cujo ALPN não
+/// esteja nesta lista. O pareamento usa `pair::ALPN`, e quem roteia é o loop
+/// de `accept_raw`.
 pub async fn bind(secret_key: SecretKey) -> Result<Endpoint, String> {
   Endpoint::builder(presets::Minimal)
     .secret_key(secret_key)
-    .alpns(vec![protocol::ALPN.to_vec()])
+    .alpns(vec![protocol::ALPN.to_vec(), super::pair::ALPN.to_vec()])
     .bind()
     .await
     .map_err(|error| format!("endpoint: {error}"))
