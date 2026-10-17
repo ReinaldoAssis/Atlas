@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { Bell, CircleDollarSign, FlaskConical, Keyboard, Volume2, Vibrate, ArrowDownRight, ArrowUpRight, Plus, Flame, RefreshCw, Wifi, Link2, Smartphone } from '@lucide/svelte';
 	import type { AtlasSnapshot, Category } from '#lib/atlas';
 	import { m } from '#lib/paraglide/messages.js';
@@ -73,6 +74,18 @@
 	let categoryName = $state('');
 	let categoryModule = $state<'finance' | 'time'>('finance');
 	let categoryColor = $state(PALETTE[0]);
+	let appVersion = $state('');
+
+	onMount(() => {
+		void (async () => {
+			try {
+				const { getVersion } = await import('@tauri-apps/api/app');
+				appVersion = await getVersion();
+			} catch {
+				appVersion = 'web';
+			}
+		})();
+	});
 
 	const modules = $derived([
 		{ value: 'finance', label: m.settings_module_finance() },
@@ -365,6 +378,10 @@
 			<Flame size={16} />
 			{m.settings_pause()}
 		</button>
+
+		<p class="version" aria-label="Versão do app">
+			Atlas {appVersion || '—'} · {__ATLAS_COMMIT__}
+		</p>
 	</div>
 </Sheet>
 
@@ -577,6 +594,13 @@
 		font-size: 14px;
 		font-weight: 600;
 		cursor: pointer;
+	}
+	.version {
+		margin: 2px 0 0;
+		color: var(--mu);
+		font-size: 11px;
+		text-align: center;
+		letter-spacing: 0.02em;
 	}
 	@media (prefers-reduced-motion: reduce) {
 		.swatch {

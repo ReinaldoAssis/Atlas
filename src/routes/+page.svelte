@@ -52,6 +52,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	import GraphView from '#lib/components/graph/GraphView.svelte';
 	import NotesView from '#lib/components/notes/NotesView.svelte';
 	import TrackersView from '#lib/components/habits/TrackersView.svelte';
+	import PlannerNotesSheet from '#lib/components/time/PlannerNotesSheet.svelte';
+	import PlannerNoteSheet from '#lib/components/time/PlannerNoteSheet.svelte';
 	import SettingsSheet from '#lib/components/settings/SettingsSheet.svelte';
 	import SyncIntroSheet from '#lib/components/settings/SyncIntroSheet.svelte';
 	import SyncPairSheet from '#lib/components/settings/SyncPairSheet.svelte';
@@ -141,15 +143,15 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	/** Bolha de notas de um horário no planejador. */
 	let timeGridEl = $state<HTMLElement | null>(null);
 	let plannerBubble: TimeBubble | null = null;
-	/** Dwell do toque no planejador: bolha presa até tocar fora/rolar. */
-	let plannerBubblePinned = false;
 	let plannerBubbleCurrent: NoteRef[] = [];
-	let dwellTimer: ReturnType<typeof setTimeout> | undefined;
-	let dwellBlockId = '';
-	let dwellCell: { day: number; slot: number } | null = null;
-	let dwellNoteRefs: NoteRef[] = [];
-	let dwellAnchor: HTMLElement | null = null;
-	let dwellRing: SVGSVGElement | null = null;
+	/** Auto-dwell: tela parada por 1,5 s abre o dialog das notas visíveis. */
+	let autoDwellTimer: ReturnType<typeof setTimeout> | undefined;
+	let autoDwellRings: SVGSVGElement[] = [];
+	let autoDwellAllowed = true;
+	let autoDwellUnlockAt = 0;
+	let plannerNotesOpen = $state(false);
+	let plannerNotesItems = $state<{ note: Note; label: string; color: string }[]>([]);
+	let plannerNoteOpen = $state<Note | null>(null);
 	let editingTransactionId = $state('');
 	let formError = $state('');
 	let wasPaused = $state(false);
@@ -1775,8 +1777,6 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function openNoteFromPlanner(noteId: string) {
-		plannerBubblePinned = false;
-		plannerBubble?.setPinned(false);
 		plannerBubble?.hide(true);
 		notesOpenId = noteId;
 		notesOpenToken += 1;
@@ -1784,8 +1784,6 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function hideBlockNotes() {
-		plannerBubblePinned = false;
-		plannerBubble?.setPinned(false);
 		plannerBubble?.hide(true);
 	}
 
@@ -1833,21 +1831,61 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		return new DOMRect(left, top, right - left, bottom - top);
 	}
 
-	/** Só abre a nota se o centro do bloco estiver na faixa central da tela. */
-	function dwellBlockInFocus(blockId: string): boolean {
-		const rect = dwellBlockRect(blockId);
-		if (!rect || !rect.height) return false;
-		const center = rect.top + rect.height / 2;
-		return center >= window.innerHeight * 0.4 && center <= window.innerHeight * 0.6;
+	/** Blocos com nota que estão visíveis na tela neste momento. */
+	function visibleNoteBlocks(): string[] {
+		const grid = timeGridEl;
+		if (!grid) return [];
+		const ids = new Set<string>();
+		for (const cell of grid.querySelectorAll<HTMLElement>('[data-tp-block]')) {
+			const id = cell.dataset.tpBlock;
+			if (!id || !timeBlockNotes.get(id)?.length) continue;
+			const rect = cell.getBoundingClientRect();
+			if (
+				rect.bottom <= 0 ||
+				rect.top >= window.innerHeight ||
+				rect.right <= 0 ||
+				rect.left >= window.innerWidth
+			) {
+				continue;
+			}
+			ids.add(id);
+		}
+		return [...ids];
 	}
 
-	function clearDwellRing() {
-		dwellRing?.remove();
-		dwellRing = null;
+	/** Agrega as notas de todos os blocos visíveis, sem repetir a mesma nota. */
+	function plannerNoteItems(blockIds: string[]): { note: Note; label: string; color: string }[] {
+		const rows: { note: Note; label: string; color: string; startAt: string }[] = [];
+		for (const blockId of blockIds) {
+			const block = snapshot?.timeBlocks.find((item) => item.id === blockId);
+			const label = block ? `${shortDay(block.startAt.slice(0, 10))} ${block.startAt.slice(11, 16)}` : '';
+			for (const ref of timeBlockNotes.get(blockId) ?? []) {
+				const note = notesState.notes.find((item) => item.id === ref.note.id) ?? (ref.note as Note);
+				rows.push({
+					note,
+					label,
+					color: plannerBlockTint(blockId),
+					startAt: block?.startAt ?? ''
+				});
+			}
+		}
+		rows.sort((a, b) => a.startAt.localeCompare(b.startAt));
+		const seen = new Set<string>();
+		return rows
+			.filter((row) => {
+				if (seen.has(row.note.id)) return false;
+				seen.add(row.note.id);
+				return true;
+			})
+			.map(({ note, label, color }) => ({ note, label, color }));
 	}
 
-	function showDwellRing(blockId: string) {
-		clearDwellRing();
+	function clearDwellRings() {
+		for (const ring of autoDwellRings) ring.remove();
+		autoDwellRings = [];
+	}
+
+	function addDwellRing(blockId: string) {
 		const rect = dwellBlockRect(blockId);
 		if (!rect) return;
 		const margin = 3;
@@ -1877,7 +1915,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		outline.style.stroke = plannerBlockTint(blockId);
 		svg.appendChild(outline);
 		document.body.appendChild(svg);
-		dwellRing = svg;
+		autoDwellRings.push(svg);
 		if (prefersReducedMotion()) return;
 		requestAnimationFrame(() => {
 			outline.style.transition = 'stroke-dashoffset 1.5s linear';
@@ -1885,54 +1923,142 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		});
 	}
 
-	function clearDwell() {
-		if (dwellTimer) clearTimeout(dwellTimer);
-		dwellTimer = undefined;
-		clearDwellRing();
-		dwellBlockId = '';
-		dwellCell = null;
-		dwellNoteRefs = [];
-		dwellAnchor = null;
+	function showDwellRings(blockIds: string[]) {
+		clearDwellRings();
+		for (const blockId of blockIds) addDwellRing(blockId);
 	}
 
-	function startDwell(
-		anchor: HTMLElement,
-		blockId: string,
-		notes: NoteRef[],
-		cell: { day: number; slot: number }
-	) {
-		clearDwell();
-		dwellBlockId = blockId;
-		dwellNoteRefs = notes;
-		dwellCell = cell;
-		dwellAnchor = anchor;
-		showDwellRing(blockId);
-		dwellTimer = setTimeout(() => {
-			const refs = dwellNoteRefs.slice();
-			const tintId = dwellBlockId;
-			const target = dwellAnchor;
-			clearDwell();
-			pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 10);
-			playTone(660, 0.08, 'sine', 0.04, snapshot?.preferences.soundEnabled ?? true);
-			if (refs.length === 1) {
-				openNoteFromPlanner(refs[0].note.id);
+	function cancelAutoDwell() {
+		if (autoDwellTimer) clearTimeout(autoDwellTimer);
+		autoDwellTimer = undefined;
+		clearDwellRings();
+	}
+
+	function autoDwellEligible(): boolean {
+		if (activeTab !== 'time' || !timeGridEl) return false;
+		if (modal || habitSheet || timeSummaryOpen || timeCategorySheet.open) return false;
+		if (plannerNotesOpen || plannerNoteOpen) return false;
+		return window.matchMedia('(hover: none)').matches;
+	}
+
+	/** Agenda a abertura automática depois de 1,5 s sem toque/scroll. */
+	function scheduleAutoDwell() {
+		cancelAutoDwell();
+		if (!autoDwellAllowed || Date.now() < autoDwellUnlockAt || !autoDwellEligible()) return;
+		const blocks = visibleNoteBlocks();
+		if (!blocks.length) return;
+		showDwellRings(blocks);
+		autoDwellTimer = setTimeout(() => {
+			autoDwellTimer = undefined;
+			if (!autoDwellAllowed || !autoDwellEligible()) {
+				cancelAutoDwell();
 				return;
 			}
-			if (!target) return;
-			plannerBubblePinned = true;
-			plannerBubble?.setPinned(true);
-			showPlannerBubble(target, refs, tintId);
+			const current = visibleNoteBlocks();
+			const items = plannerNoteItems(current.length ? current : blocks);
+			cancelAutoDwell();
+			if (!items.length) return;
+			plannerNotesItems = items;
+			plannerNotesOpen = true;
+			autoDwellAllowed = false;
+			pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 10);
+			playTone(660, 0.08, 'sine', 0.04, snapshot?.preferences.soundEnabled ?? true);
 		}, 1500);
 	}
 
-	// Cria a bolha quando a grade do planejador está montada e liga o hover das células.
+	function openPlannerNote(note: Note) {
+		plannerNoteOpen = note;
+		cancelAutoDwell();
+	}
+
+	function closePlannerNotes() {
+		plannerNotesOpen = false;
+		plannerNoteOpen = null;
+		autoDwellAllowed = false;
+		autoDwellUnlockAt = Date.now() + 500;
+		cancelAutoDwell();
+	}
+
+	function closePlannerNote() {
+		plannerNoteOpen = null;
+		autoDwellAllowed = false;
+		autoDwellUnlockAt = Date.now() + 500;
+	}
+
+	// Abre o dialog das notas quando a tela do planejador fica parada.
+	$effect(() => {
+		const grid = timeGridEl;
+		if (activeTab !== 'time' || !grid) {
+			cancelAutoDwell();
+			return;
+		}
+		autoDwellAllowed = true;
+		autoDwellUnlockAt = 0;
+		let scrollTimer: ReturnType<typeof setTimeout> | undefined;
+		let wheelTimer: ReturnType<typeof setTimeout> | undefined;
+		const onPointerDown = () => {
+			if (Date.now() < autoDwellUnlockAt) return;
+			// Toque cancela a espera; o hold segue pintando.
+			autoDwellAllowed = true;
+			cancelAutoDwell();
+		};
+		const onPointerUp = () => {
+			if (Date.now() < autoDwellUnlockAt) return;
+			autoDwellAllowed = true;
+			scheduleAutoDwell();
+		};
+		const onScroll = () => {
+			cancelAutoDwell();
+			autoDwellAllowed = true;
+			if (scrollTimer) clearTimeout(scrollTimer);
+			if (Date.now() >= autoDwellUnlockAt) {
+				scrollTimer = setTimeout(() => scheduleAutoDwell(), 220);
+			}
+		};
+		const onWheel = () => {
+			cancelAutoDwell();
+			autoDwellAllowed = true;
+			if (wheelTimer) clearTimeout(wheelTimer);
+			if (Date.now() >= autoDwellUnlockAt) {
+				wheelTimer = setTimeout(() => scheduleAutoDwell(), 220);
+			}
+		};
+		const start = setTimeout(() => {
+			autoDwellAllowed = true;
+			scheduleAutoDwell();
+		}, 250);
+		window.addEventListener('pointerdown', onPointerDown, true);
+		window.addEventListener('pointerup', onPointerUp, true);
+		window.addEventListener('pointercancel', onPointerUp, true);
+		window.addEventListener('scroll', onScroll, true);
+		window.addEventListener('wheel', onWheel, { passive: true });
+		return () => {
+			clearTimeout(start);
+			if (scrollTimer) clearTimeout(scrollTimer);
+			if (wheelTimer) clearTimeout(wheelTimer);
+			window.removeEventListener('pointerdown', onPointerDown, true);
+			window.removeEventListener('pointerup', onPointerUp, true);
+			window.removeEventListener('pointercancel', onPointerUp, true);
+			window.removeEventListener('scroll', onScroll, true);
+			window.removeEventListener('wheel', onWheel);
+			cancelAutoDwell();
+		};
+	});
+
+	// Qualquer sheet aberto suspende o auto-dwell.
+	$effect(() => {
+		if (modal || habitSheet || timeSummaryOpen || timeCategorySheet.open || plannerNotesOpen || plannerNoteOpen) {
+			cancelAutoDwell();
+		}
+	});
+
+	// Cria a bolha de hover do planejador (desktop).
 	$effect(() => {
 		const grid = timeGridEl;
 		if (!grid) return;
 		const bubble = new TimeBubble({
 			interactive: true,
 			offset: 8,
-			touch: true,
 			sound: snapshot?.preferences.soundEnabled ?? true,
 			haptics: snapshot?.preferences.hapticsEnabled ?? true,
 			onRowClick: (index) => {
@@ -1942,7 +2068,6 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		});
 		plannerBubble = bubble;
 		const onOver = (event: PointerEvent) => {
-			if (plannerBubblePinned) return;
 			const cell = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-tp-block]');
 			const blockId = cell?.dataset.tpBlock ?? '';
 			const found = blockId ? timeBlockNotes.get(blockId) : undefined;
@@ -1952,31 +2077,14 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			}
 			showPlannerBubble(cell, found, blockId);
 		};
-		const onLeave = () => {
-			if (!plannerBubblePinned) bubble.later();
-		};
-		const onDocPointerDown = (event: PointerEvent) => {
-			if (!plannerBubblePinned) return;
-			const target = event.target as HTMLElement | null;
-			if (target?.closest('.tbb')) return;
-			hideBlockNotes();
-		};
-		const onWindowScroll = () => {
-			clearDwell();
-			if (plannerBubblePinned) hideBlockNotes();
-		};
+		const onLeave = () => bubble.later();
 		grid.addEventListener('pointerover', onOver);
 		grid.addEventListener('pointerleave', onLeave);
-		document.addEventListener('pointerdown', onDocPointerDown, true);
-		window.addEventListener('scroll', onWindowScroll, { passive: true });
 		return () => {
 			grid.removeEventListener('pointerover', onOver);
 			grid.removeEventListener('pointerleave', onLeave);
-			document.removeEventListener('pointerdown', onDocPointerDown, true);
-			window.removeEventListener('scroll', onWindowScroll);
 			bubble.destroy();
 			plannerBubble = null;
-			plannerBubblePinned = false;
 		};
 	});
 
@@ -2038,7 +2146,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function handleTimeScroll() {
-		clearDwell();
+		cancelAutoDwell();
 		hideBlockNotes();
 		if (!timeScroll) return;
 		timeVisibleStart = Math.round(timeScroll.scrollLeft / timeColumnWidth);
@@ -2138,22 +2246,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const cell = timeCellFromEvent(event);
 		if (!cell) return;
 		timePaintStart = [event.clientX, event.clientY];
-		const anchor = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-tp-block]');
-		const blockId = anchor?.dataset.tpBlock ?? '';
-		const notes = blockId ? timeBlockNotes.get(blockId) : undefined;
-		if (
-			event.pointerType !== 'mouse' &&
-			timeSelected !== 'x' &&
-			anchor &&
-			blockId &&
-			notes?.length &&
-			dwellBlockInFocus(blockId)
-		) {
-			// Segurar no centro abre a nota; o arrasto vira pintura em `continueTimePaint`.
-			startDwell(anchor, blockId, notes, cell);
-			return;
-		}
-		clearDwell();
+		cancelAutoDwell();
 		if (event.pointerType === 'mouse') {
 			startTimePaint(cell);
 			return;
@@ -2169,14 +2262,6 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function continueTimePaint(event: PointerEvent) {
-		if (dwellBlockId) {
-			if (Math.hypot(event.clientX - timePaintStart[0], event.clientY - timePaintStart[1]) > 8) {
-				const cell = timeCellFromEvent(event) ?? dwellCell;
-				clearDwell();
-				if (cell) startTimePaint(cell);
-			}
-			return;
-		}
 		if (timePaintPending) {
 			if (Math.hypot(event.clientX - timePaintStart[0], event.clientY - timePaintStart[1]) > 8) {
 				if (timePaintTimer) clearTimeout(timePaintTimer);
@@ -2196,12 +2281,6 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	async function finishTimePaint(event?: PointerEvent) {
-		if (dwellBlockId) {
-			const cell = dwellCell;
-			clearDwell();
-			// Soltar antes dos 1,5 s: toque simples pinta a célula, como hoje.
-			if (event?.type === 'pointerup' && cell) startTimePaint(cell);
-		}
 		if (timePaintTimer) {
 			clearTimeout(timePaintTimer);
 			timePaintTimer = null;
@@ -3239,6 +3318,18 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			<span><FlaskConical size={15} /> Modo de teste</span>
 			<button type="button" onclick={() => toggleTestMode(false)}>Desativar</button>
 		</div>
+	{/if}
+
+	{#if plannerNotesOpen}
+		<PlannerNotesSheet
+			items={plannerNotesItems}
+			onopen={openPlannerNote}
+			onclose={closePlannerNotes}
+		/>
+	{/if}
+
+	{#if plannerNoteOpen}
+		<PlannerNoteSheet note={plannerNoteOpen} onclose={closePlannerNote} />
 	{/if}
 
 	{#if habitSheet}
