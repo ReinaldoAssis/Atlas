@@ -122,7 +122,8 @@ no device depois (mesmo fluxo de S7/S9).
 - `identity.rs`: Ed25519 em `atlas-identity.key` (0600, gravação atômica); arquivo
   corrompido é erro, nunca gira a identidade sozinho.
 - `engine.rs`: endpoint com `presets::Minimal` (sem relay, sem DNS/Pkarr da n0) e
-  ALPN `atlas/sync/1`; `dial`/`accept` trocam `hello` e recusam proto/schema.
+  ALPNs `atlas/sync/1` **e** `atlas/pair/1` (o acceptor roteia pelo ALPN
+  negociado); `dial`/`accept` trocam `hello` e recusam proto/schema.
 - `discovery.rs`: anúncio DNS-SD `_atlas-sync._udp.local.` com `id=<EndpointID>`
   no TXT; endereços via `addr_auto` (o endpoint liga em `0.0.0.0`).
 - `protocol.rs`: framing `u32` big-endian + JSON, teto de 4 MiB.
@@ -160,6 +161,21 @@ no device depois (mesmo fluxo de S7/S9).
   reinicia só ela (`sync_discovery_restart`, sem derrubar o endpoint) e abre
   Ajustes quando a permissão foi negada. Falha de descoberta não impede mais o
   `sync_start`: o pareamento manual por `ip:porta` continua disponível.
+- **Correção do pareamento (erro 120)**: `engine::bind` anunciava só
+  `atlas/sync/1`; o iroh recusa no handshake TLS qualquer ALPN fora da lista,
+  então o acceptor abortava `atlas/pair/1` (`error 120`). O endpoint agora
+  anuncia os dois e um teste usa `engine::bind` como acceptor + dial de
+  pareamento.
+- **Correção da descoberta no iOS**: as assinaturas de `DNSServiceBrowseReply` e
+  `DNSServiceResolveReply` omitiam `interfaceIndex` (3º parâmetro), deslocando
+  todos os argumentos — o índice era lido como erro e nenhum evento entrava.
+  O índice do browse agora vai para o `DNSServiceResolve`, e nomes com escapes
+  DNS-SD (`\032`) são decodificados.
+- **Loop que não gira em falso**: erro em `DNSServiceProcessResult` desaloca e
+  remove o ref; para register/browse a descoberta para com mensagem por *call
+  site* (`register`/`browse`/`resolve`) em vez de repetir `BadReference` para
+  sempre; `EINTR` do `poll` é ignorado. `tools/dnssd-probe.sh` roda o mesmo
+  módulo no macOS (valida ABI + resolve sem instalar no iPhone).
 
 **P5b (UI + boot + evento) ✅** — `src/lib/sync.ts` + Configurações + notas:
 
@@ -197,13 +213,18 @@ no device depois (mesmo fluxo de S7/S9).
 - Carimbo da cópia = `max(agora, maior carimbo desta origem, hlc_last) + 1`:
   abaixo do que o par já viu, ele nunca puxaria a cópia (cursor por origem).
 - Reenvio do mesmo carimbo (`>= cursor`) não duplica; lápide não gera cópia.
+  Linha idêntica voltando (mesmo carimbo **e** mesma origem) também não: sem
+  isso, re-parear (cursores apagados) refaz o delta completo e duplica toda
+  nota já sincronizada.
 - `ApplyStats.conflicts` alimenta o log/evento. Limitação conhecida: um relay
   por terceiro pode gerar uma cópia a mais (preferimos duplicar a perder dado).
 
 **P3 (pareamento) ✅** — `sync/pair.rs` + commands:
 
 - ALPN próprio `atlas/pair/1`: é o único caminho que atende um par fora da
-  allowlist, e só até os dois lados confirmarem.
+  allowlist, e só até os dois lados confirmarem. O endpoint (`engine::bind`)
+  anuncia os dois ALPNs; sem isso o iroh aborta o handshake do pareamento com
+  `no_application_protocol` (alert 120).
 - Fluxo: `PairRequest{proto, device_id, name, nonce}` →
   `PairResponse{device_id, name, nonce}` → cada lado exibe o SAS e envia
   `PairDecision{accept}`. Quem discou lê primeiro e fecha; o acceptor lê a

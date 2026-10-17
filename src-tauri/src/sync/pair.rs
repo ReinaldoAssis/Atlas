@@ -307,6 +307,35 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn the_app_endpoint_accepts_the_pairing_alpn() {
+    // Regressão do erro 120: o endpoint de `engine::bind` anunciava só
+    // `atlas/sync/1`, e o iroh abortava o handshake do pareamento no acceptor.
+    use crate::sync::engine;
+
+    let a = bind().await;
+    let b = engine::bind(SecretKey::generate()).await.unwrap();
+    let server = {
+      let b = b.clone();
+      tokio::spawn(async move {
+        let (conn, alpn) = engine::accept_raw(&b).await.unwrap().expect("conexão entrante");
+        assert_eq!(alpn, ALPN, "o endpoint do app precisa aceitar o ALPN de pareamento");
+        accept(conn, local(&b, "iPhone"), |_offer| async move { true }).await
+      })
+    };
+    let conn = a.connect(loopback(&b), ALPN).await.unwrap();
+    let (dialed, accepted) = tokio::join!(
+      dial(conn, local(&a, "Windows"), |_offer| async move { true }),
+      server
+    );
+    let dialed = dialed.expect("quem discou pareou");
+    let accepted = accepted.unwrap().expect("quem aceitou pareou");
+    assert_eq!(dialed.sas, accepted.sas, "os dois lados veem o mesmo código");
+
+    a.close().await;
+    b.close().await;
+  }
+
+  #[tokio::test]
   async fn rejection_on_either_side_aborts_the_pairing() {
     let a = bind().await;
     let b = bind().await;

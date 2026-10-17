@@ -691,6 +691,33 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn repairing_after_losing_cursors_does_not_duplicate_notes() {
+    let peers = peers().await;
+    seed_note(&peers.a_pool, "100", "dev-a", "diario", None).await;
+    sync(&peers).await;
+    assert_eq!(count(&peers.a_pool, "notes").await, 1);
+    assert_eq!(count(&peers.b_pool, "notes").await, 1);
+
+    // Desemparelhar apaga os cursores; re-parear refaz o delta completo e a
+    // mesma nota volta dos dois lados. Ela não pode virar cópia de conflito.
+    for pool in [&peers.a_pool, &peers.b_pool] {
+      sqlx::query("DELETE FROM sync_cursors")
+        .execute(pool)
+        .await
+        .expect("limpar cursores");
+    }
+    sync(&peers).await;
+
+    for pool in [&peers.a_pool, &peers.b_pool] {
+      assert_eq!(count(pool, "notes").await, 1, "a nota não duplica ao re-parear");
+      assert_eq!(conflict_copies(pool).await, 0);
+    }
+
+    peers.a.close().await;
+    peers.b.close().await;
+  }
+
+  #[tokio::test]
   async fn legacy_rows_without_device_id_still_travel() {
     let peers = peers().await;
     // Linha de antes do `device_id`: origem `legacy`, mas continua replicando.
