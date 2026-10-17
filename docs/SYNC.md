@@ -1,0 +1,103 @@
+# Atlas — sync P2P na LAN (S10)
+
+Plano fechado numa sessão de alinhamento (out/2026). Ordem das fatias vive em
+`docs/ROADMAP.md` §7; escopo do produto em `docs/MVP.md`; UI em `docs/DESIGN.md`.
+
+> Objetivo: dois aparelhos (iPhone + Windows, nesta ordem de ciclo) na mesma
+> Wi‑Fi se acham e convergem **sem ação manual**, sem conta, serviço central ou
+> custo. Nada vaza sem pareamento.
+
+---
+
+## 1. O que já está pronto (feito em S2, não repetir)
+
+- Upsert por linha + lápides (`deleted_at`) — o `saveSnapshot` **não** apaga mais tudo.
+- `updated_at`/`deleted_at`/`device_id` na maioria das tabelas + índices.
+- `device_id` por instalação (em `app_settings`) e `device_id` próprio do modo de teste.
+- Tabelas `notes`/`folders` e grafo em tabelas (`nodes/edges/domains`), trackers.
+
+## 2. Bloqueador conhecido (resolvido por decisão)
+
+**mDNS cru não é opção no iOS.** Os crates de descoberta local do iroh
+(`iroh-mdns-address-lookup` = `swarm-discovery`; `iroh-mdns-peer-lookup`) enviam
+UDP multicast por socket BSD. No iPhone físico isso exige o entitlement restrito
+`com.apple.developer.networking.multicast`, e a Apple **recusa o pedido quando o
+objetivo é mDNS direto** ("not our policy to enable this entitlement for apps
+trying to use mDNS directly"). Também não dá com Personal Team.
+
+Decisão: **iOS descobre via Bonjour nativo** (`NSNetService`/`NWBrowser`, que
+usam o mDNSResponder do sistema e só precisam de permissão de Rede Local) e o
+**Windows fala DNS-SD padrão** (`mdns-sd`, com PTR/SRV/TXT). `swarm-discovery`
+não emite PTR, então não serve nem do lado Windows.
+
+O agente (Windows) não valida iOS: a parte iOS é escrita, revisada e verificada
+no device depois (mesmo fluxo de S7/S9).
+
+## 3. Decisões travadas
+
+### Transporte e descoberta
+
+| Tema | Decisão |
+|---|---|
+| Biblioteca | **iroh 1.0** (bindings Swift oficiais desde jun/2026; roda em iOS/Windows) |
+| Alcance | **Só LAN** (config local-first do iroh 1.0: sem relay, sem DNS/Pkarr da n0) |
+| Protocolo | ALPN `atlas/sync/1`; handshake troca versão de protocolo + `user_version` do schema e recusa se não bater |
+| Descoberta (Windows) | crate `mdns-sd` (DNS-SD padrão) |
+| Descoberta (iOS) | `NSNetService`/`NWBrowser` via bridge Swift; serviço `_atlas-sync._udp`, TXT com o EndpointID |
+| Execução | opt-in, **só com o app aberto** (sem serviço em background; iOS suspende socket de qualquer forma) |
+
+### Identidade, pareamento e confiança
+
+| Tema | Decisão |
+|---|---|
+| Identidade do endpoint | chave Ed25519 em `<appdata>/atlas-identity.key` (0600), **fora** do backup e do banco; reinstalar = nova identidade = re-parear |
+| `device_id` | continua em `app_settings`, local; **nunca** entra no backup (conferido: `exportBackupV2` manda só snapshot+notas+pastas) |
+| Pareamento | lista de descobertos → **SAS de 6 dígitos** iguais nos dois aparelhos → allowlist de EndpointID |
+| Revogação | "Desemparelhar" remove o par e libera a purga das lápides que ele segurava |
+| Desligar sync | **pausa**: para de anunciar e encerra o endpoint, mas preserva pares, nomes e cursores |
+
+### Modelo de dados
+
+| Tema | Decisão |
+|---|---|
+| Conflito | **LWW** por linha: maior `updated_at` vence; empate → menor `device_id` |
+| Carimbo | **HLC-lite**: `updated_at = max(relógio local, maior visto + 1)` (`src/lib/hlc.ts`); o maior visto vive em `app_settings.hlc_last` |
+| Cursor | por **par × device de origem** (`sync_cursors(peer_id, owner, updated_at)`) — cursor global quebra com relógio adiantado |
+| Reestampa | `saveSnapshot` só carimba **linha alterada** (`planRows`); a inalterada preserva `updated_at`/`device_id` |
+| Purga de lápides | só abaixo do **menor `last_sync_at` dos pares pareados**; sem par, purga tudo; par que nunca sincronizou (`last_sync_at = 0`) segura a purga |
+| Escopo v1 | todas as linhas: snapshot (categorias, hábitos, logs, transações, blocos, trackers, registros) + `shared_settings` + `counters` + notas/pastas + grafo |
+| Anexos | **v2** (blobs); v1 mostra o anexo que falta como não sincronizado |
+| `preferences` | **não sincroniza** (som/háptica/tema são do aparelho) |
+| Modo de teste | sync **desligado** (banco e `device_id` próprios; juntar fixture no real seria corrupção) |
+| XP | **contador por aparelho** (`counters`); o total exibido é a soma — dois aparelhos ganhando XP não se sobrescrevem |
+| Life Force / finance | singleton com **LWW** (`shared_settings`): `value` decai e satura localmente, então "incremento perdido" é ruído de gamificação, não dado |
+| `habit_logs` | id **determinístico** `hlog:<habitId>:<date>` (há `UNIQUE(habit_id, occurred_on)`; id aleatório colide no merge) |
+| Nota em conflito | LWW na nota + **cópia** marcada com `conflictOf`/`conflictedAt` no payload e rótulo na UI (i18n-safe), na mesma pasta |
+
+### Merge, UI e processo
+
+| Tema | Decisão |
+|---|---|
+| Onde mescla | no **Rust** (sqlx direto), payload-agnóstico; emite evento e o front recarrega |
+| Front com edição aberta | recarrega e **preserva o rascunho**, com aviso "atualizado de outro dispositivo" |
+| Primeiro sync | **backup automático** (`exportBackupV2`) + resumo do que vai juntar, antes de conectar |
+| UI | seção **Sincronização** nas Configurações (Paraglide `m.*`): toggle, lista de devices com "sincronizado há X", Parear, Desemparelhar; sem indicador no shell |
+| iOS | `InfoPlist.strings` em `pt-BR.lproj` + `NSBonjourServices` + `NSLocalNetworkUsageDescription` (não passa pelo Paraglide) |
+| Windows | prompt do Firewall (UDP de entrada) aceito e documentado; instalação continua per-user sem admin |
+| Testes | Rust: 2 endpoints iroh + 2 SQLite temporários (protocolo, LWW, cursor, lápide, convergência, conflito de nota) no CI |
+
+## 4. Fatias
+
+| Fatia | Conteúdo | Estado |
+|---|---|---|
+| **P1** | Metadados de sync (migração v6): `notes.updated_at` → epoch ms, `folders.updated_at`, `shared_settings`, `counters`, `sync_peers`/`sync_cursors`, ids determinísticos de log, HLC, gravação só da linha alterada, purga por par | ✅ |
+| **P2** | Engine: E0a (PoC Windows↔Windows) → endpoint iroh LAN, protocolo/cursor, LWW, evento pro front | — |
+| **P3** | Pareamento SAS + allowlist + store de pares | — |
+| **P4** | Descoberta iOS (bridge Swift) + `project.yml`/`InfoPlist.strings` | — |
+| **P5** | UI de Sincronização + backup/resumo do primeiro sync + rótulo de conflito | — |
+| **P6** | Anexos (blobs) | fora do ciclo |
+
+## 5. Verificação manual (só o usuário)
+
+- **iPhone**: prompt de Rede Local, descoberta real, SAS, edição nos dois sentidos. Depende do `.ipa` via SideStore (`docs/IOS-SIDELOAD.md`).
+- **Windows**: prompt do Firewall na primeira execução; roteiro em `docs/WINDOWS-INSTALLER.md`.

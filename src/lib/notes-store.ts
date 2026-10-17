@@ -7,7 +7,7 @@
  */
 import { isTauri } from '@tauri-apps/api/core';
 import { BaseDirectory, mkdir, readDir, readFile, remove, writeFile } from '@tauri-apps/plugin-fs';
-import { getDatabase, getDeviceId, runSerialized } from './storage';
+import { getDatabase, getDeviceId, nextWriteStamp, runSerialized } from './storage';
 import { demoNotes } from './fixtures';
 import { activeDbName, attachmentsRoot, previewKey, readTestMode } from './test-mode';
 import { ensureColumn, type SqlContext } from './db/migrations';
@@ -55,15 +55,18 @@ async function setupSchema(): Promise<boolean> {
 		name TEXT NOT NULL,
 		position INTEGER NOT NULL DEFAULT 0,
 		payload TEXT NOT NULL,
+		updated_at INTEGER NOT NULL DEFAULT 0,
 		deleted_at INTEGER,
 		device_id TEXT
 	)`);
+	// `updated_at` é o carimbo de sync (epoch ms). O `updatedAt` ISO do payload é
+	// do app (exibição/ordenação da nota), não do LWW.
 	await db.execute(`CREATE TABLE IF NOT EXISTS notes (
 		id TEXT PRIMARY KEY,
 		folder_id TEXT,
 		title TEXT NOT NULL DEFAULT '',
 		created_at TEXT NOT NULL,
-		updated_at TEXT NOT NULL,
+		updated_at INTEGER NOT NULL DEFAULT 0,
 		pinned INTEGER NOT NULL DEFAULT 0,
 		payload TEXT NOT NULL,
 		deleted_at INTEGER,
@@ -82,6 +85,7 @@ async function setupSchema(): Promise<boolean> {
 		await ensureColumn(ctx, table, 'deleted_at', 'deleted_at INTEGER');
 		await ensureColumn(ctx, table, 'device_id', 'device_id TEXT');
 	}
+	await ensureColumn(ctx, 'folders', 'updated_at', 'updated_at INTEGER NOT NULL DEFAULT 0');
 	let fts = false;
 	try {
 		// Smoke test: o FTS5 pode não estar compilado no SQLite empacotado.
@@ -170,7 +174,7 @@ export function replaceNotesState(state: NotesState): Promise<void> {
 		const fts = await ensureSchema();
 		const db = await getDatabase();
 		const deviceId = await getDeviceId();
-		const at = Date.now();
+		const at = await nextWriteStamp(db);
 		const [existingNotes, existingFolders] = await Promise.all([
 			db.select<Array<{ id: string }>>('SELECT id FROM notes WHERE deleted_at IS NULL'),
 			db.select<Array<{ id: string }>>('SELECT id FROM folders WHERE deleted_at IS NULL')
@@ -197,7 +201,13 @@ async function tombstoneRow(
 	deviceId: string,
 	fts: boolean
 ): Promise<void> {
-	await db.execute(`UPDATE ${table} SET deleted_at = $1, device_id = $2 WHERE id = $3`, [String(at), deviceId, id]);
+	// `updated_at` acompanha `deleted_at`: sem isso a lápide não ordena no LWW e
+	// o aparelho que ainda tem a linha vence o delete.
+	await db.execute(`UPDATE ${table} SET deleted_at = $1, updated_at = $1, device_id = $2 WHERE id = $3`, [
+		String(at),
+		deviceId,
+		id
+	]);
 	if (fts && table === 'notes') await db.execute('DELETE FROM notes_fts WHERE note_id = $1', [id]);
 }
 
@@ -221,9 +231,18 @@ async function upsertNoteRaw(note: Note): Promise<void> {
 	const fts = await ensureSchema();
 	const db = await getDatabase();
 	const deviceId = await getDeviceId();
+	const json = JSON.stringify(note);
+	// Conteúdo idêntico não é escrita: preserva o carimbo/origem da linha (senão
+	// um autosave no-op reivindicaria uma edição que é do outro aparelho).
+	const existing = await db.select<Array<{ payload: string; deleted_at: unknown }>>(
+		'SELECT payload, deleted_at FROM notes WHERE id = $1',
+		[note.id]
+	);
+	if (existing.length > 0 && existing[0].deleted_at == null && existing[0].payload === json) return;
+	const at = await nextWriteStamp(db);
 	await db.execute(
 		upsertSql('notes', ['id', 'folder_id', 'title', 'created_at', 'updated_at', 'pinned', 'payload', 'device_id']),
-		[note.id, note.folderId, note.title, note.createdAt, note.updatedAt, note.pinned ? 1 : 0, JSON.stringify(note), deviceId]
+		[note.id, note.folderId, note.title, note.createdAt, String(at), note.pinned ? 1 : 0, json, deviceId]
 	);
 	if (fts) {
 		await db.execute('DELETE FROM notes_fts WHERE note_id = $1', [note.id]);
@@ -250,12 +269,7 @@ async function deleteNoteRaw(noteId: string): Promise<void> {
 	const fts = await ensureSchema();
 	const db = await getDatabase();
 	const deviceId = await getDeviceId();
-	await db.execute('UPDATE notes SET deleted_at = $1, device_id = $2 WHERE id = $3', [
-		String(Date.now()),
-		deviceId,
-		noteId
-	]);
-	if (fts) await db.execute('DELETE FROM notes_fts WHERE note_id = $1', [noteId]);
+	await tombstoneRow(db, 'notes', noteId, await nextWriteStamp(db), deviceId, fts);
 	await deleteNoteAttachments(noteId);
 }
 
@@ -275,12 +289,20 @@ async function upsertFolderRaw(folder: NoteFolder): Promise<void> {
 	await ensureSchema();
 	const db = await getDatabase();
 	const deviceId = await getDeviceId();
-	await db.execute(upsertSql('folders', ['id', 'parent_id', 'name', 'position', 'payload', 'device_id']), [
+	const json = JSON.stringify(folder);
+	const existing = await db.select<Array<{ payload: string; deleted_at: unknown }>>(
+		'SELECT payload, deleted_at FROM folders WHERE id = $1',
+		[folder.id]
+	);
+	if (existing.length > 0 && existing[0].deleted_at == null && existing[0].payload === json) return;
+	const at = await nextWriteStamp(db);
+	await db.execute(upsertSql('folders', ['id', 'parent_id', 'name', 'position', 'payload', 'updated_at', 'device_id']), [
 		folder.id,
 		folder.parentId,
 		folder.name,
 		folder.position,
-		JSON.stringify(folder),
+		json,
+		String(at),
 		deviceId
 	]);
 }
@@ -298,14 +320,8 @@ export function deleteFolders(folderIds: string[]): Promise<void> {
 		await ensureSchema();
 		const db = await getDatabase();
 		const deviceId = await getDeviceId();
-		const at = Date.now();
-		for (const folderId of folderIds) {
-			await db.execute('UPDATE folders SET deleted_at = $1, device_id = $2 WHERE id = $3', [
-				String(at),
-				deviceId,
-				folderId
-			]);
-		}
+		const at = await nextWriteStamp(db);
+		for (const folderId of folderIds) await tombstoneRow(db, 'folders', folderId, at, deviceId, false);
 		// Remove em cascata as notas das pastas excluídas (e seus anexos).
 		const state = await loadNotes();
 		const doomed = state.notes.filter((note) => note.folderId && folderIds.includes(note.folderId));

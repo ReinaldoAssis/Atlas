@@ -23,22 +23,51 @@ import type { Note, NoteFolder } from './notes';
 import { normalizeNotesState } from './notes';
 import { runMigrations, type SqlContext } from './db/migrations';
 import {
+	SHARED_SETTING_KEYS,
+	XP_COUNTER_KEY,
+	planRows,
 	settingStatements,
 	tombstoneIds,
 	tombstoneStatements,
-	upsertSql,
-	type BatchStatement
+	type BatchStatement,
+	type RowStamp
 } from './db/persist';
 import { demoSnapshot } from './fixtures';
+import { nextStamp, observeStamp } from './hlc';
 import { activeDbName, previewKey, readTestMode } from './test-mode';
 
 const PREVIEW_KEY = 'atlas-preview-state-v1';
 const LIFEFORCE_MIGRATION_KEY = 'atlas-preview-lifeforce-v3';
-/** Lápides de deleção são purgadas após esse prazo. */
-const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const SYNC_TABLES = ['categories', 'transactions', 'habits', 'habit_logs', 'trackers', 'tracker_entries', 'time_blocks'] as const;
-/** Tabelas cujas lápides são purgadas (inclui grafo e notas/pastas). */
-const PURGE_TABLES = [...SYNC_TABLES, 'graph_domains', 'graph_nodes', 'graph_edges', 'notes', 'folders'];
+/** Maior carimbo já visto (HLC); vive em `app_settings` porque é local. */
+const HLC_KEY = 'hlc_last';
+
+/**
+ * Tabelas replicadas no sync P2P: cada linha tem payload (ou valor) e as
+ * colunas de carimbo `updated_at`/`deleted_at`/`device_id`.
+ */
+export const SYNC_TABLES = [
+	'categories',
+	'transactions',
+	'habits',
+	'habit_logs',
+	'trackers',
+	'tracker_entries',
+	'time_blocks',
+	'graph_domains',
+	'graph_nodes',
+	'graph_edges',
+	'notes',
+	'folders',
+	'shared_settings',
+	'counters'
+] as const;
+
+/**
+ * Tabelas cujas lápides são purgadas. A purga só alcança carimbos anteriores ao
+ * último sync de **todos** os pares pareados (ver `purgeTombstones`): apagar uma
+ * lápide que um par ainda não viu ressuscita o dado apagado.
+ */
+const PURGE_TABLES = SYNC_TABLES;
 
 /**
  * Últimos ids ativos conhecidos por tabela.
@@ -49,6 +78,26 @@ const PURGE_TABLES = [...SYNC_TABLES, 'graph_domains', 'graph_nodes', 'graph_edg
  * Preenchido no `loadSnapshot` e atualizado a cada `saveSnapshot`.
  */
 const knownActiveIds: Record<string, Set<string>> = {};
+
+/**
+ * Conteúdo + carimbo da última gravação de cada linha, por tabela.
+ *
+ * É o que permite gravar só a linha alterada e preservar
+ * `updated_at`/`device_id` das demais (ver `planRows`). Preenchido no
+ * `loadSnapshot` (a partir do banco) e atualizado a cada gravação.
+ */
+const knownRowStamps: Record<string, Record<string, RowStamp>> = {};
+
+/**
+ * Contribuições de XP já conhecidas: chave do contador → origem → valor.
+ * Escrever só a diferença da minha origem (`totalXp` − soma das outras) é o que
+ * impede o LWW de engolir o XP ganho do outro aparelho.
+ */
+let knownCounters: Record<string, Record<string, number>> = {};
+
+/** Carimbo HLC desta sessão (por banco ativo). */
+let hlcDb: string | undefined;
+let hlcLast = 0;
 
 let database: Promise<Database> | undefined;
 
@@ -70,6 +119,11 @@ export function resetStorageCache(): void {
 	initialized = undefined;
 	writeQueue = Promise.resolve();
 	for (const key of Object.keys(knownActiveIds)) delete knownActiveIds[key];
+	for (const key of Object.keys(knownRowStamps)) delete knownRowStamps[key];
+	knownCounters = {};
+	hlcDb = undefined;
+	hlcLast = 0;
+	lastPreferencesJson = undefined;
 }
 
 /**
@@ -128,12 +182,14 @@ async function initializeDatabase(db: Database): Promise<void> {
 		'SELECT id FROM categories WHERE deleted_at IS NULL LIMIT 1'
 	);
 	if (categoryRows.length === 0) {
+		// As categorias padrão já entram carimbadas: linha com `updated_at = 0`
+		// nunca seria enviada a um par (o cursor começa em 0).
+		const at = await nextWriteStamp(db);
 		for (const category of defaultCategories) {
-			await db.execute('INSERT INTO categories (id, module, payload) VALUES ($1, $2, $3)', [
-				category.id,
-				category.module,
-				JSON.stringify(category)
-			]);
+			await db.execute(
+				'INSERT INTO categories (id, module, payload, updated_at, device_id) VALUES ($1, $2, $3, $4, $5)',
+				[category.id, category.module, JSON.stringify(category), String(at), deviceId]
+			);
 		}
 	}
 	if (readTestMode()) await seedTestData(db, deviceId);
@@ -151,22 +207,65 @@ async function seedTestData(db: Database, deviceId: string): Promise<void> {
 		db.select<Array<{ id: string }>>('SELECT id FROM time_blocks WHERE deleted_at IS NULL LIMIT 1')
 	]);
 	if (habits.length + transactions.length + blocks.length > 0) return;
-	const nextKnown: Record<string, Set<string>> = {};
-	const statements = buildSnapshotStatements(demoSnapshot(), deviceId, Date.now(), nextKnown);
-	statements.push({
-		sql: 'INSERT OR REPLACE INTO app_settings (key, value) VALUES ($1, $2)',
-		params: ['test_seeded', JSON.stringify(true)]
-	});
+	const at = await nextWriteStamp(db);
+	const statements = buildSnapshotStatements(demoSnapshot(), deviceId, at);
+	statements.push(
+		hlcStatement(at),
+		{
+			sql: 'INSERT OR REPLACE INTO app_settings (key, value) VALUES ($1, $2)',
+			params: ['test_seeded', JSON.stringify(true)]
+		}
+	);
 	await invoke('db_batch', { db: activeDbName(), statements });
-	Object.assign(knownActiveIds, nextKnown);
 }
 
-/** Remove lápides antigas (o sync futuro não precisa revivê-las). */
+/**
+ * Remove lápides que nenhum par confiável ainda pode precisar.
+ *
+ * Regra (decisão de produto, `docs/SYNC.md`): apaga só o que é mais antigo que o
+ * último sync de **todos** os pares pareados. Com TTL fixo, um aparelho offline
+ * por mais tempo reenviaria linhas apagadas — e elas ressuscitariam. Sem par
+ * nenhum não há o que proteger: purga tudo. Par que nunca sincronizou
+ * (`last_sync_at = 0`) segura a purga.
+ */
 async function purgeTombstones(db: Database): Promise<void> {
-	const cutoff = String(Date.now() - TOMBSTONE_TTL_MS);
+	const peers = await db.select<Array<{ last_sync_at: unknown }>>('SELECT last_sync_at FROM sync_peers');
+	const cutoff = peers.length
+		? Math.min(...peers.map((peer) => Number(peer.last_sync_at) || 0))
+		: Date.now();
 	for (const table of PURGE_TABLES) {
-		await db.execute(`DELETE FROM ${table} WHERE deleted_at IS NOT NULL AND deleted_at < $1`, [cutoff]);
+		await db.execute(`DELETE FROM ${table} WHERE deleted_at IS NOT NULL AND deleted_at < $1`, [String(cutoff)]);
 	}
+}
+
+/** Carrega o carimbo HLC guardado (uma vez por banco ativo). */
+async function ensureHlcLast(db: Database): Promise<void> {
+	const name = activeDbName();
+	if (hlcDb === name) return;
+	const rows = await db.select<Array<{ value: string }>>('SELECT value FROM app_settings WHERE key = $1', [HLC_KEY]);
+	hlcLast = rows.length ? Number(JSON.parse(rows[0].value)) || 0 : 0;
+	hlcDb = name;
+}
+
+/**
+ * Próximo carimbo de escrita (HLC) desta instalação.
+ *
+ * O maior carimbo visto vive em `app_settings.hlc_last` (local, nunca
+ * sincronizado): assim ele continua monotônico entre reinícios e sempre acima
+ * do que já chegou de outro aparelho, mesmo com relógios divergentes.
+ */
+export async function nextWriteStamp(db: Database): Promise<number> {
+	await ensureHlcLast(db);
+	hlcLast = nextStamp(Date.now(), hlcLast);
+	return hlcLast;
+}
+
+/** Statement que persiste o carimbo (entra no mesmo lote da gravação). */
+function hlcStatement(at: number): BatchStatement {
+	return {
+		sql: 'INSERT OR REPLACE INTO app_settings (key, value) VALUES ($1, $2)',
+		params: [HLC_KEY, JSON.stringify(at)]
+	};
 }
 
 /** Identidade estável desta instalação (base do sync futuro). */
@@ -189,24 +288,45 @@ export async function getDeviceId(): Promise<string> {
 	return ensureDeviceId(db);
 }
 
-/** Monta os upserts das linhas e as lápides das que sumiram. */
-function pushRows(
-	statements: BatchStatement[],
-	nextKnown: Record<string, Set<string>>,
-	table: string,
-	columns: string[],
-	rows: string[][],
-	currentIds: string[],
-	deviceId: string,
-	at: number
-): void {
-	const sql = upsertSql(table, [...columns, 'updated_at', 'device_id']);
-	for (const row of rows) {
-		statements.push({ sql, params: [...row, String(at), deviceId] });
-	}
+/** Linha a gravar no plano: chave lógica + valores + JSON para detectar mudança. */
+interface RowInput {
+	key: string;
+	values: string[];
+	json: string;
+}
+
+/**
+ * Planeja as escritas de uma tabela (só linhas alteradas, via `planRows`) e
+ * guarda os carimbos resultantes.
+ */
+function planTable(args: {
+	table: string;
+	columns: string[];
+	conflict?: string[];
+	rows: RowInput[];
+	deviceId: string;
+	at: number;
+}): BatchStatement[] {
+	const { table, columns, conflict, rows, deviceId, at } = args;
+	const planned = planRows({
+		table,
+		columns,
+		conflict,
+		rows: rows.map((row) => ({ key: row.key, values: row.values, json: row.json })),
+		previous: knownRowStamps[table],
+		deviceId,
+		at
+	});
+	// A tabela recebe o conjunto completo de linhas ativas: o que não veio sumiu.
+	knownRowStamps[table] = planned.stamps;
+	return planned.statements;
+}
+
+/** Lápides das linhas que sumiram do conjunto ativo. */
+function planTombstones(table: string, currentIds: string[], deviceId: string, at: number): BatchStatement[] {
 	const previous = knownActiveIds[table] ?? new Set<string>();
-	statements.push(...tombstoneStatements(table, tombstoneIds(previous, currentIds), at, deviceId));
-	nextKnown[table] = new Set(currentIds);
+	knownActiveIds[table] = new Set(currentIds);
+	return tombstoneStatements(table, tombstoneIds(previous, currentIds), at, deviceId);
 }
 
 const FALLBACK_LIMITS: Record<string, number> = {
@@ -287,28 +407,112 @@ function migrateLifeForceBaseline(snapshot: AtlasSnapshot): void {
 	localStorage.setItem(LIFEFORCE_MIGRATION_KEY, 'done');
 }
 
+/** Linha replicada lida do banco. */
+interface SyncRow {
+	id: string;
+	payload: string;
+	updated_at: unknown;
+	device_id: string | null;
+}
+
+/** Guarda ids ativos e carimbos de uma tabela replicada (base do delta). */
+function readSyncTable(table: string, rows: SyncRow[]): void {
+	const stamps: Record<string, RowStamp> = {};
+	const ids = new Set<string>();
+	for (const row of rows) {
+		ids.add(row.id);
+		stamps[row.id] = {
+			json: row.payload,
+			updatedAt: Number(row.updated_at) || 0,
+			deviceId: row.device_id ?? ''
+		};
+	}
+	knownActiveIds[table] = ids;
+	knownRowStamps[table] = stamps;
+}
+
+/** Maior carimbo visto entre as linhas carregadas (mantém o HLC acima do banco). */
+function observeRows(rows: Array<{ updated_at: unknown }>): void {
+	let max = 0;
+	for (const row of rows) max = Math.max(max, Number(row.updated_at) || 0);
+	hlcLast = observeStamp(hlcLast, max);
+}
+
 export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	if (!isTauri()) return readPreview();
 	const db = await getReadyDatabase();
 	await writeQueue;
-	const [categories, transactions, habits, habitLogs, trackers, trackerEntries, timeBlocks, graphDomains, graphNodes, graphEdges, settings] = await Promise.all([
-		db.select<Array<{ payload: string }>>('SELECT payload FROM categories WHERE deleted_at IS NULL'),
-		db.select<Array<{ payload: string }>>('SELECT payload FROM transactions WHERE deleted_at IS NULL ORDER BY occurred_on DESC'),
-		db.select<Array<{ payload: string }>>('SELECT payload FROM habits WHERE deleted_at IS NULL'),
-		db.select<Array<{ payload: string }>>('SELECT payload FROM habit_logs WHERE deleted_at IS NULL ORDER BY occurred_on DESC'),
-		db.select<Array<{ payload: string }>>('SELECT payload FROM trackers WHERE deleted_at IS NULL'),
-		db.select<Array<{ payload: string }>>('SELECT payload FROM tracker_entries WHERE deleted_at IS NULL ORDER BY occurred_on DESC'),
-		db.select<Array<{ payload: string }>>('SELECT payload FROM time_blocks WHERE deleted_at IS NULL ORDER BY starts_at DESC'),
-		db.select<Array<{ payload: string }>>('SELECT payload FROM graph_domains WHERE deleted_at IS NULL'),
-		db.select<Array<{ payload: string }>>('SELECT payload FROM graph_nodes WHERE deleted_at IS NULL'),
-		db.select<Array<{ payload: string }>>('SELECT payload FROM graph_edges WHERE deleted_at IS NULL'),
-		db.select<Array<{ key: string; value: string }>>('SELECT key, value FROM app_settings')
+	const [categories, transactions, habits, habitLogs, trackers, trackerEntries, timeBlocks, graphDomains, graphNodes, graphEdges, settings, shared, counters] = await Promise.all([
+		db.select<SyncRow[]>('SELECT id, payload, updated_at, device_id FROM categories WHERE deleted_at IS NULL'),
+		db.select<SyncRow[]>('SELECT id, payload, updated_at, device_id FROM transactions WHERE deleted_at IS NULL ORDER BY occurred_on DESC'),
+		db.select<SyncRow[]>('SELECT id, payload, updated_at, device_id FROM habits WHERE deleted_at IS NULL'),
+		db.select<SyncRow[]>('SELECT id, payload, updated_at, device_id FROM habit_logs WHERE deleted_at IS NULL ORDER BY occurred_on DESC'),
+		db.select<SyncRow[]>('SELECT id, payload, updated_at, device_id FROM trackers WHERE deleted_at IS NULL'),
+		db.select<SyncRow[]>('SELECT id, payload, updated_at, device_id FROM tracker_entries WHERE deleted_at IS NULL ORDER BY occurred_on DESC'),
+		db.select<SyncRow[]>('SELECT id, payload, updated_at, device_id FROM time_blocks WHERE deleted_at IS NULL ORDER BY starts_at DESC'),
+		db.select<SyncRow[]>('SELECT id, payload, updated_at, device_id FROM graph_domains WHERE deleted_at IS NULL'),
+		db.select<SyncRow[]>('SELECT id, payload, updated_at, device_id FROM graph_nodes WHERE deleted_at IS NULL'),
+		db.select<SyncRow[]>('SELECT id, payload, updated_at, device_id FROM graph_edges WHERE deleted_at IS NULL'),
+		db.select<Array<{ key: string; value: string }>>('SELECT key, value FROM app_settings'),
+		db.select<Array<{ key: string; value: string; updated_at: unknown; device_id: string | null }>>(
+			'SELECT key, value, updated_at, device_id FROM shared_settings WHERE deleted_at IS NULL'
+		),
+		db.select<Array<{ key: string; owner: string; value: unknown; updated_at: unknown; device_id: string | null }>>(
+			'SELECT key, owner, value, updated_at, device_id FROM counters WHERE deleted_at IS NULL'
+		)
 	]);
+	await ensureHlcLast(db);
+	readSyncTable('categories', categories);
+	readSyncTable('transactions', transactions);
+	readSyncTable('habits', habits);
+	readSyncTable('habit_logs', habitLogs);
+	readSyncTable('trackers', trackers);
+	readSyncTable('tracker_entries', trackerEntries);
+	readSyncTable('time_blocks', timeBlocks);
+	readSyncTable('graph_domains', graphDomains);
+	readSyncTable('graph_nodes', graphNodes);
+	readSyncTable('graph_edges', graphEdges);
+	observeRows([
+		...categories,
+		...transactions,
+		...habits,
+		...habitLogs,
+		...trackers,
+		...trackerEntries,
+		...timeBlocks,
+		...graphDomains,
+		...graphNodes,
+		...graphEdges,
+		...shared,
+		...counters
+	]);
+	const sharedStamps: Record<string, RowStamp> = {};
+	for (const row of shared) {
+		sharedStamps[row.key] = { json: row.value, updatedAt: Number(row.updated_at) || 0, deviceId: row.device_id ?? '' };
+	}
+	knownRowStamps.shared_settings = sharedStamps;
+	knownCounters = {};
+	const counterStamps: Record<string, RowStamp> = {};
+	for (const row of counters) {
+		const value = Number(row.value) || 0;
+		knownCounters[row.key] = { ...(knownCounters[row.key] ?? {}), [row.owner]: value };
+		counterStamps[`${row.key}:${row.owner}`] = {
+			json: String(value),
+			updatedAt: Number(row.updated_at) || 0,
+			deviceId: row.device_id ?? ''
+		};
+	}
+	knownRowStamps.counters = counterStamps;
+
 	const settingsMap = Object.fromEntries(settings.map((item) => [item.key, JSON.parse(item.value)]));
+	const sharedMap = Object.fromEntries(shared.map((item) => [item.key, JSON.parse(item.value)]));
 	const defaults = createEmptySnapshot();
-	const lifeForce = { ...defaults.lifeForce, ...(settingsMap.lifeForce ?? {}) } as LifeForceState;
-	const experience = { ...defaults.experience, ...(settingsMap.experience ?? {}) } as ExperienceState;
-	const finance = { ...defaults.finance, ...(settingsMap.finance ?? {}) } as FinanceState;
+	// `app_settings` fica como fallback do que a migração v6 ainda não moveu
+	// (instalações antigas, banco de teste recém-criado).
+	const lifeForce = { ...defaults.lifeForce, ...(sharedMap.lifeForce ?? settingsMap.lifeForce ?? {}) } as LifeForceState;
+	const finance = { ...defaults.finance, ...(sharedMap.finance ?? settingsMap.finance ?? {}) } as FinanceState;
+	const totalXp = Object.values(knownCounters[XP_COUNTER_KEY] ?? {}).reduce((sum, value) => sum + value, 0);
+	const experience = { totalXp } as ExperienceState;
 	const preferences = { ...defaults.preferences, ...(settingsMap.preferences ?? {}) };
 	const graph =
 		graphDomains.length + graphNodes.length + graphEdges.length === 0
@@ -334,135 +538,82 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	};
 	snapshot.graph = reconcileGraph(snapshot.graph, snapshot);
 	migrateLifeForceBaseline(snapshot);
-	knownActiveIds.categories = new Set(snapshot.categories.map((item) => item.id));
-	knownActiveIds.transactions = new Set(snapshot.transactions.map((item) => item.id));
-	knownActiveIds.habits = new Set(snapshot.habits.map((item) => item.id));
-	knownActiveIds.habit_logs = new Set(snapshot.habitLogs.map((item) => item.id));
-	knownActiveIds.trackers = new Set(snapshot.trackers.map((item) => item.id));
-	knownActiveIds.tracker_entries = new Set(snapshot.trackerEntries.map((item) => item.id));
-	knownActiveIds.time_blocks = new Set(snapshot.timeBlocks.map((item) => item.id));
-	knownActiveIds.graph_domains = new Set(snapshot.graph.domains.map((item) => item.id));
-	knownActiveIds.graph_nodes = new Set(snapshot.graph.nodes.map((item) => item.id));
-	knownActiveIds.graph_edges = new Set(snapshot.graph.edges.map((item) => item.id));
 	return snapshot;
 }
 
-/** Statements do snapshot inteiro (upserts + lápides + settings). */
-function buildSnapshotStatements(
-	snapshot: AtlasSnapshot,
-	deviceId: string,
-	at: number,
-	nextKnown: Record<string, Set<string>>
-): BatchStatement[] {
+/** JSON de `preferences` na última gravação (evita reescrever sem mudança). */
+let lastPreferencesJson: string | undefined;
+
+/** Statements do snapshot inteiro (upserts só do que mudou + lápides). */
+function buildSnapshotStatements(snapshot: AtlasSnapshot, deviceId: string, at: number): BatchStatement[] {
 	const statements: BatchStatement[] = [];
-	pushRows(
-		statements,
-		nextKnown,
-		'categories',
-		['id', 'module', 'payload'],
-		snapshot.categories.map((item) => [item.id, item.module, JSON.stringify(item)]),
-		snapshot.categories.map((item) => item.id),
-		deviceId,
-		at
-	);
-	pushRows(
-		statements,
-		nextKnown,
-		'transactions',
-		['id', 'occurred_on', 'payload'],
-		snapshot.transactions.map((item) => [item.id, item.date, JSON.stringify(item)]),
-		snapshot.transactions.map((item) => item.id),
-		deviceId,
-		at
-	);
-	pushRows(
-		statements,
-		nextKnown,
-		'habits',
-		['id', 'payload'],
-		snapshot.habits.map((item) => [item.id, JSON.stringify(item)]),
-		snapshot.habits.map((item) => item.id),
-		deviceId,
-		at
-	);
-	pushRows(
-		statements,
-		nextKnown,
-		'habit_logs',
-		['id', 'habit_id', 'occurred_on', 'payload'],
-		snapshot.habitLogs.map((item) => [item.id, item.habitId, item.date, JSON.stringify(item)]),
-		snapshot.habitLogs.map((item) => item.id),
-		deviceId,
-		at
-	);
-	pushRows(
-		statements,
-		nextKnown,
-		'trackers',
-		['id', 'payload'],
-		snapshot.trackers.map((item) => [item.id, JSON.stringify(item)]),
-		snapshot.trackers.map((item) => item.id),
-		deviceId,
-		at
-	);
-	pushRows(
-		statements,
-		nextKnown,
-		'tracker_entries',
-		['id', 'tracker_id', 'occurred_on', 'payload'],
-		snapshot.trackerEntries.map((item) => [item.id, item.trackerId, item.date, JSON.stringify(item)]),
-		snapshot.trackerEntries.map((item) => item.id),
-		deviceId,
-		at
-	);
-	pushRows(
-		statements,
-		nextKnown,
-		'time_blocks',
-		['id', 'starts_at', 'payload'],
-		snapshot.timeBlocks.map((item) => [item.id, item.startAt, JSON.stringify(item)]),
-		snapshot.timeBlocks.map((item) => item.id),
-		deviceId,
-		at
-	);
-	pushRows(
-		statements,
-		nextKnown,
-		'graph_domains',
-		['id', 'payload'],
-		snapshot.graph.domains.map((item) => [item.id, JSON.stringify(item)]),
-		snapshot.graph.domains.map((item) => item.id),
-		deviceId,
-		at
-	);
-	pushRows(
-		statements,
-		nextKnown,
-		'graph_nodes',
-		['id', 'payload'],
-		snapshot.graph.nodes.map((item) => [item.id, JSON.stringify(item)]),
-		snapshot.graph.nodes.map((item) => item.id),
-		deviceId,
-		at
-	);
-	pushRows(
-		statements,
-		nextKnown,
-		'graph_edges',
-		['id', 'payload'],
-		snapshot.graph.edges.map((item) => [item.id, JSON.stringify(item)]),
-		snapshot.graph.edges.map((item) => item.id),
-		deviceId,
-		at
-	);
+	const payloadRows = <T extends { id: string }>(items: T[], columns: (item: T) => string[]): RowInput[] =>
+		items.map((item) => {
+			const json = JSON.stringify(item);
+			return { key: item.id, values: columns(item), json };
+		});
+
+	statements.push(...planTable({ table: 'categories', columns: ['id', 'module', 'payload'], rows: payloadRows(snapshot.categories, (item) => [item.id, item.module]), deviceId, at }));
+	statements.push(...planTable({ table: 'transactions', columns: ['id', 'occurred_on', 'payload'], rows: payloadRows(snapshot.transactions, (item) => [item.id, item.date]), deviceId, at }));
+	statements.push(...planTable({ table: 'habits', columns: ['id', 'payload'], rows: payloadRows(snapshot.habits, (item) => [item.id]), deviceId, at }));
+	statements.push(...planTable({ table: 'habit_logs', columns: ['id', 'habit_id', 'occurred_on', 'payload'], rows: payloadRows(snapshot.habitLogs, (item) => [item.id, item.habitId, item.date]), deviceId, at }));
+	statements.push(...planTable({ table: 'trackers', columns: ['id', 'payload'], rows: payloadRows(snapshot.trackers, (item) => [item.id]), deviceId, at }));
+	statements.push(...planTable({ table: 'tracker_entries', columns: ['id', 'tracker_id', 'occurred_on', 'payload'], rows: payloadRows(snapshot.trackerEntries, (item) => [item.id, item.trackerId, item.date]), deviceId, at }));
+	statements.push(...planTable({ table: 'time_blocks', columns: ['id', 'starts_at', 'payload'], rows: payloadRows(snapshot.timeBlocks, (item) => [item.id, item.startAt]), deviceId, at }));
+	statements.push(...planTable({ table: 'graph_domains', columns: ['id', 'payload'], rows: payloadRows(snapshot.graph.domains, (item) => [item.id]), deviceId, at }));
+	statements.push(...planTable({ table: 'graph_nodes', columns: ['id', 'payload'], rows: payloadRows(snapshot.graph.nodes, (item) => [item.id]), deviceId, at }));
+	statements.push(...planTable({ table: 'graph_edges', columns: ['id', 'payload'], rows: payloadRows(snapshot.graph.edges, (item) => [item.id]), deviceId, at }));
+
+	// Lápides: o que estava ativo e sumiu do snapshot.
+	statements.push(...planTombstones('categories', snapshot.categories.map((item) => item.id), deviceId, at));
+	statements.push(...planTombstones('transactions', snapshot.transactions.map((item) => item.id), deviceId, at));
+	statements.push(...planTombstones('habits', snapshot.habits.map((item) => item.id), deviceId, at));
+	statements.push(...planTombstones('habit_logs', snapshot.habitLogs.map((item) => item.id), deviceId, at));
+	statements.push(...planTombstones('trackers', snapshot.trackers.map((item) => item.id), deviceId, at));
+	statements.push(...planTombstones('tracker_entries', snapshot.trackerEntries.map((item) => item.id), deviceId, at));
+	statements.push(...planTombstones('time_blocks', snapshot.timeBlocks.map((item) => item.id), deviceId, at));
+	statements.push(...planTombstones('graph_domains', snapshot.graph.domains.map((item) => item.id), deviceId, at));
+	statements.push(...planTombstones('graph_nodes', snapshot.graph.nodes.map((item) => item.id), deviceId, at));
+	statements.push(...planTombstones('graph_edges', snapshot.graph.edges.map((item) => item.id), deviceId, at));
+
+	// Singletons sincronizáveis (LWW por linha).
 	statements.push(
-		...settingStatements({
-			lifeForce: snapshot.lifeForce,
-			preferences: snapshot.preferences,
-			experience: snapshot.experience,
-			finance: snapshot.finance
+		...planTable({
+			table: 'shared_settings',
+			columns: ['key', 'value'],
+			conflict: ['key'],
+			rows: SHARED_SETTING_KEYS.map((key) => {
+				const json = JSON.stringify(snapshot[key]);
+				return { key, values: [key, json], json };
+			}),
+			deviceId,
+			at
 		})
 	);
+
+	// XP: escrevo só a minha contribuição (o total exibido é a soma de todas).
+	const otherXp = Object.entries(knownCounters[XP_COUNTER_KEY] ?? {})
+		.filter(([owner]) => owner !== deviceId)
+		.reduce((sum, [, value]) => sum + value, 0);
+	const myXp = Math.max(0, Math.trunc(snapshot.experience.totalXp) - otherXp);
+	statements.push(
+		...planTable({
+			table: 'counters',
+			columns: ['key', 'owner', 'value'],
+			conflict: ['key', 'owner'],
+			rows: [{ key: `${XP_COUNTER_KEY}:${deviceId}`, values: [XP_COUNTER_KEY, deviceId, String(myXp)], json: String(myXp) }],
+			deviceId,
+			at
+		})
+	);
+	knownCounters[XP_COUNTER_KEY] = { ...(knownCounters[XP_COUNTER_KEY] ?? {}), [deviceId]: myXp };
+
+	// `preferences` é local (som/háptica/tema são do aparelho): sem carimbo nem LWW.
+	const preferencesJson = JSON.stringify(snapshot.preferences);
+	if (preferencesJson !== lastPreferencesJson) {
+		lastPreferencesJson = preferencesJson;
+		statements.push(...settingStatements({ preferences: snapshot.preferences }));
+	}
 	return statements;
 }
 
@@ -475,14 +626,46 @@ export function saveSnapshot(snapshot: AtlasSnapshot): Promise<void> {
 		// Garante `load` + schema (e o pool) antes de escrever.
 		const db = await getReadyDatabase();
 		const deviceId = await ensureDeviceId(db);
-		// Só aplicamos os ids conhecidos se a gravação tiver sucesso, para que
-		// uma falha não "esqueça" lápides pendentes.
-		const nextKnown: Record<string, Set<string>> = {};
-		const statements = buildSnapshotStatements(snapshot, deviceId, Date.now(), nextKnown);
+		const at = await nextWriteStamp(db);
+		// Só aplicamos o estado conhecido se a gravação tiver sucesso, para que
+		// uma falha não "esqueça" lápides pendentes (ver `planTable`).
+		const previousIds = cloneIds(knownActiveIds);
+		const previousStamps = cloneStamps(knownRowStamps);
+		const previousXp = { ...knownCounters };
+		const previousPreferences = lastPreferencesJson;
+		const statements = buildSnapshotStatements(snapshot, deviceId, at);
+		if (!statements.length) return;
+		statements.push(hlcStatement(at));
 		// Uma transação numa única conexão (ver `db_batch` no lib.rs).
-		await invoke('db_batch', { db: activeDbName(), statements });
-		Object.assign(knownActiveIds, nextKnown);
+		try {
+			await invoke('db_batch', { db: activeDbName(), statements });
+		} catch (error) {
+			restoreKnown(previousIds, previousStamps, previousXp, previousPreferences);
+			throw error;
+		}
 	});
+}
+
+function cloneIds(source: Record<string, Set<string>>): Record<string, Set<string>> {
+	return Object.fromEntries(Object.entries(source).map(([key, ids]) => [key, new Set(ids)]));
+}
+
+function cloneStamps(source: Record<string, Record<string, RowStamp>>): Record<string, Record<string, RowStamp>> {
+	return Object.fromEntries(Object.entries(source).map(([key, stamps]) => [key, { ...stamps }]));
+}
+
+function restoreKnown(
+	ids: Record<string, Set<string>>,
+	stamps: Record<string, Record<string, RowStamp>>,
+	counters: Record<string, Record<string, number>>,
+	preferences: string | undefined
+): void {
+	for (const key of Object.keys(knownActiveIds)) delete knownActiveIds[key];
+	for (const key of Object.keys(knownRowStamps)) delete knownRowStamps[key];
+	Object.assign(knownActiveIds, ids);
+	Object.assign(knownRowStamps, stamps);
+	knownCounters = counters;
+	lastPreferencesJson = preferences;
 }
 
 function toBase64(bytes: Uint8Array): string {

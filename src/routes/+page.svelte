@@ -7,7 +7,7 @@
 		Wallet, X, type LucideIcon
 	} from '@lucide/svelte';
 	import {
-		HABIT_BOOLEAN_LABELS, booleanLabelOf, currentStreak, dateOffset, didMeetTarget, formatMinutes, id, localDate, money, nextBooleanLog, positiveValueOf, weekStartDate, WEEK_MAX,
+		HABIT_BOOLEAN_LABELS, booleanLabelOf, currentStreak, dateOffset, didMeetTarget, formatMinutes, habitLogId, id, localDate, money, nextBooleanLog, positiveValueOf, weekStartDate, WEEK_MAX,
 		TIME_SLOT_START_HOUR, TIME_SLOT_COUNT, TIME_SLOT_MINUTES,
 		experienceProgress, type AppPreferences, type AtlasSnapshot, type Category, type Habit, type HabitLog,
 		type NavigationKey, type TimeBlock, type Tracker, type TrackerEntry, type Transaction
@@ -1291,7 +1291,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const qualifies = didMeetTarget(habit, value);
 		const awardExperience = qualifies && !existingLog?.experienceAwarded;
 		const log: HabitLog = {
-			id: existingLog?.id ?? id(), habitId: habit.id, date, value,
+			id: existingLog?.id ?? habitLogId(habit.id, date), habitId: habit.id, date, value,
 			completed: habit.metric === 'boolean' ? qualifies : value > 0,
 			experienceAwarded: Boolean(existingLog?.experienceAwarded || awardExperience)
 		};
