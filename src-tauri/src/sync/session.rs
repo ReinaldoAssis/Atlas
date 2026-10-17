@@ -16,7 +16,7 @@ use sqlx::SqlitePool;
 
 use super::engine::{self, LocalNode, Session};
 use super::protocol::{self, Message, Row};
-use super::store::{self, ApplyStats};
+use super::store::{self, ApplyOptions, ApplyStats};
 
 /// Resumo de uma sessão (vai pro log e, em P2c, pro evento do front).
 #[derive(Debug, Clone, Default)]
@@ -24,6 +24,7 @@ pub struct SessionReport {
   /// EndpointID do par (vai no evento/status).
   pub peer: String,
   pub applied: usize,
+  pub conflicts: usize,
   pub skipped: usize,
   pub sent: usize,
   pub received: usize,
@@ -82,25 +83,43 @@ pub async fn run(mut session: Session, pool: &SqlitePool) -> Result<SessionRepor
   let delta = store::collect_delta(pool, &session.hello.cursors, &peer_device).await?;
   let sent = delta.len();
 
+  // Cursores de antes da sessão: e o que distingue edição concorrente de
+  // reenvio do mesmo carimbo na detecção de conflito de nota.
+  let own_cursors = store::cursors_for(pool, &peer_id).await?;
+  let local_device_id = store::local_device_id(pool).await?;
+  // A cópia de conflito nasce acima de tudo que esta instalação já escreveu
+  // (e do HLC): senão o par, cujo cursor já passou desse carimbo, nunca a vê.
+  let copy_stamp = now_ms()
+    .max(store::origin_max_stamp(pool, &local_device_id).await?)
+    .max(store::hlc_last(pool).await?)
+    + 1;
+  let options = ApplyOptions {
+    local_device_id,
+    own_cursors: cursor_map(&own_cursors),
+    note_conflicts: true,
+    copy_stamp,
+  };
+
   let stats = if session.is_dialer() {
     send_delta(&mut session.send, &delta).await?;
-    receive_delta(&mut session.recv, pool).await?
+    receive_delta(&mut session.recv, pool, &options).await?
   } else {
-    let stats = receive_delta(&mut session.recv, pool).await?;
+    let stats = receive_delta(&mut session.recv, pool, &options).await?;
     send_delta(&mut session.send, &delta).await?;
     stats
   };
 
   // O corte da purga precisa cobrir o maior carimbo recebido (HLC pode estar
   // à frente do relógio de parede).
-  let session_stamp = now_ms().max(stats.max_stamp);
+  let session_stamp = now_ms().max(stats.max_stamp).max(stats.max_created);
   store::save_cursors(pool, &peer_id, &stats.cursors, session_stamp).await?;
-  store::observe_stamp(pool, stats.max_stamp).await?;
+  store::observe_stamp(pool, session_stamp).await?;
   session.close().await;
 
   Ok(SessionReport {
     peer: peer_id,
     applied: stats.applied,
+    conflicts: stats.conflicts,
     skipped: stats.skipped,
     sent,
     received: stats.applied + stats.skipped,
@@ -120,15 +139,18 @@ async fn send_delta(send: &mut SendStream, rows: &[Row]) -> Result<(), String> {
 async fn receive_delta(
   recv: &mut iroh::endpoint::RecvStream,
   pool: &SqlitePool,
+  options: &ApplyOptions,
 ) -> Result<ApplyStats, String> {
   let mut total = ApplyStats::default();
   loop {
     match protocol::read_message(recv).await? {
       Message::Rows { rows } => {
-        let stats = store::apply_rows(pool, &rows).await?;
+        let stats = store::apply_rows(pool, &rows, options).await?;
         total.applied += stats.applied;
         total.skipped += stats.skipped;
+        total.conflicts += stats.conflicts;
         total.max_stamp = total.max_stamp.max(stats.max_stamp);
+        total.max_created = total.max_created.max(stats.max_created);
         for (owner, updated_at) in stats.cursors {
           let entry = total.cursors.entry(owner).or_insert(updated_at);
           if updated_at > *entry {
@@ -267,6 +289,19 @@ mod tests {
     let b = engine::bind(SecretKey::generate()).await.unwrap();
     let a_pool = pool().await;
     let b_pool = pool().await;
+    // `device_id` é lido do banco no merge (origem das cópias de conflito).
+    seed(
+      &a_pool,
+      "app_settings",
+      &[("key", "device_id"), ("value", r#""dev-a""#)],
+    )
+    .await;
+    seed(
+      &b_pool,
+      "app_settings",
+      &[("key", "device_id"), ("value", r#""dev-b""#)],
+    )
+    .await;
     // Allowlist: cada lado conhece o outro (o pareamento real é P3).
     seed(
       &a_pool,
@@ -564,6 +599,97 @@ mod tests {
     peers.b.close().await;
   }
 
+  async fn conflict_copies(pool: &SqlitePool) -> i64 {
+    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM notes WHERE payload LIKE '%\"conflictOf\"%'")
+      .fetch_one(pool)
+      .await
+      .expect("contagem de cópias")
+  }
+
+  async fn note_payload(pool: &SqlitePool, id: &str) -> String {
+    column(pool, "notes", "payload", id).await.expect("nota")
+  }
+
+  async fn seed_note(pool: &SqlitePool, at: &str, device: &str, body: &str, deleted: Option<&str>) {
+    let payload = format!(
+      r#"{{"id":"note-1","title":"Diário","folderId":"f1","body":"{body}","updatedAt":"2026-10-17T10:00:00.000Z"}}"#
+    );
+    let mut cols = vec![
+      ("id", "note-1"),
+      ("title", "Diário"),
+      ("folder_id", "f1"),
+      ("created_at", "2026-10-17T09:00:00.000Z"),
+      ("updated_at", at),
+      ("payload", payload.as_str()),
+      ("device_id", device),
+    ];
+    if let Some(deleted) = deleted {
+      cols.push(("deleted_at", deleted));
+    }
+    seed(pool, "notes", &cols).await;
+  }
+
+  #[tokio::test]
+  async fn conflicting_note_creates_one_copy_with_the_losing_content() {
+    let peers = peers().await;
+    seed_note(&peers.a_pool, "100", "dev-a", "versao-a", None).await;
+    seed_note(&peers.b_pool, "200", "dev-b", "versao-b", None).await;
+
+    sync(&peers).await;
+
+    // B recebe a versão perdedora (A@100) e guarda a cópia; A recebe a
+    // vencedora (B@200) e substitui a própria.
+    assert_eq!(conflict_copies(&peers.b_pool).await, 1);
+    assert_eq!(conflict_copies(&peers.a_pool).await, 0);
+    assert!(note_payload(&peers.a_pool, "note-1").await.contains("versao-b"));
+
+    let copy: (String, String, String) = sqlx::query_as(
+      "SELECT payload, folder_id, device_id FROM notes WHERE payload LIKE '%\"conflictOf\"%'",
+    )
+    .fetch_one(&peers.b_pool)
+    .await
+    .unwrap();
+    assert!(copy.0.contains("versao-a"), "a cópia guarda a versão perdedora");
+    assert!(copy.0.contains(r#""conflictOf":"note-1""#));
+    assert_eq!(copy.1, "f1", "a cópia fica na mesma pasta");
+    assert_eq!(copy.2, "dev-b", "quem copiou é o aparelho local");
+
+    // A cópia entra no próximo sync, sem duplicar na origem.
+    sync(&peers).await;
+    assert_eq!(conflict_copies(&peers.a_pool).await, 1);
+    assert_eq!(conflict_copies(&peers.b_pool).await, 1, "reenvio não duplica");
+  }
+
+  #[tokio::test]
+  async fn tombstone_conflict_does_not_copy() {
+    let peers = peers().await;
+    seed_note(&peers.a_pool, "100", "dev-a", "antigo", None).await;
+    seed_note(&peers.b_pool, "200", "dev-b", "antigo", Some("200")).await;
+
+    sync(&peers).await;
+
+    assert_eq!(conflict_copies(&peers.a_pool).await, 0);
+    assert_eq!(conflict_copies(&peers.b_pool).await, 0);
+    assert_eq!(
+      column(&peers.a_pool, "notes", "deleted_at", "note-1").await.as_deref(),
+      Some("200")
+    );
+  }
+
+  #[tokio::test]
+  async fn repeating_a_sync_does_not_duplicate_the_conflict_copy() {
+    let peers = peers().await;
+    seed_note(&peers.a_pool, "100", "dev-a", "versao-a", None).await;
+    seed_note(&peers.b_pool, "200", "dev-b", "versao-b", None).await;
+
+    sync(&peers).await;
+    sync(&peers).await;
+    sync(&peers).await;
+
+    assert_eq!(conflict_copies(&peers.a_pool).await, 1);
+    assert_eq!(conflict_copies(&peers.b_pool).await, 1);
+  }
+
   #[tokio::test]
   async fn legacy_rows_without_device_id_still_travel() {
     let peers = peers().await;
@@ -607,7 +733,8 @@ mod tests {
       .fetch_one(&peers.b_pool)
       .await
       .unwrap();
-    assert_eq!(hlc, "5000", "HLC local sobe acima do que chegou");
+    let hlc: i64 = hlc.parse().unwrap_or(0);
+    assert!(hlc >= 5000, "HLC local sobe acima do que chegou (veio {hlc})");
 
     let last_sync: i64 = sqlx::query_scalar("SELECT last_sync_at FROM sync_peers LIMIT 1")
       .fetch_one(&peers.b_pool)
@@ -633,7 +760,7 @@ mod tests {
       .into_iter()
       .collect(),
     };
-    assert!(store::apply_rows(&pool, &[row]).await.is_err());
+    assert!(store::apply_rows(&pool, &[row], &ApplyOptions::default()).await.is_err());
   }
 
   #[tokio::test]
