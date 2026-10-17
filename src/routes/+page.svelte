@@ -96,17 +96,6 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	/** Sub-aba do módulo Hábitos: hábitos recorrentes ou trackers. */
 	let habitView = $state<'habits' | 'trackers'>('habits');
 	let habitPagerEl = $state<HTMLDivElement>();
-	let habitDrag = $state(0);
-	let habitDragging = $state(false);
-	let habitSwipe: {
-		pointerId: number;
-		startX: number;
-		startY: number;
-		width: number;
-		axis: 'x' | 'y' | null;
-	} | null = null;
-	let suppressHabitClick = false;
-	const habitIndex = $derived(habitView === 'trackers' ? 1 : 0);
 	let notesState = $state<NotesState>({ notes: [], folders: [] });
 	let notesVersion = $state(0);
 	/** Pede ao NotesView para reler do banco (merge de outro aparelho). */
@@ -144,7 +133,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let timeGridEl = $state<HTMLElement | null>(null);
 	let plannerBubble: TimeBubble | null = null;
 	let plannerBubbleCurrent: NoteRef[] = [];
-	/** Auto-dwell: tela parada por 1,5 s abre o dialog das notas visíveis. */
+	/** Auto-dwell: tela parada por 4 s abre o dialog das notas visíveis. */
 	let autoDwellTimer: ReturnType<typeof setTimeout> | undefined;
 	let autoDwellRings: SVGSVGElement[] = [];
 	let autoDwellAllowed = true;
@@ -911,8 +900,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	function prototypePresets(habit: Habit): number[] {
 		if (habit.metric === 'duration') return [15, 30, 45, 60].map((value) => Math.min(value, prototypeSheetMax(habit)));
-		if (habit.unit.toLowerCase() === 'ml') return [250, 500, 1000].map((value) => Math.min(value, prototypeSheetMax(habit)));
-		return [Math.max(1, Math.ceil(habit.target / 2)), habit.target, Math.min(prototypeSheetMax(habit), Math.ceil(habit.target * 1.5))];
+		// Contagem: atalhos em 1/4, 1/2, 3/4 e o range completo do sheet.
+		const max = prototypeSheetMax(habit);
+		return [0.25, 0.5, 0.75, 1].map((ratio) => Math.max(1, Math.round(max * ratio)));
 	}
 
 	function weeklyValue(habit: Habit): number {
@@ -1418,82 +1408,33 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		clearTimeout(habitPressTimer);
 	}
 
-	/* ---------- pager Hábitos ↔ Trackers (toque) ---------- */
+	/* ---------- pager Hábitos ↔ Trackers (scroll nativo) ---------- */
 	function changeHabitView(next: 'habits' | 'trackers') {
 		habitView = next;
-		habitDrag = 0;
+		if (!habitPagerEl) return;
+		habitPagerEl.scrollTo({
+			left: (next === 'trackers' ? 1 : 0) * habitPagerEl.clientWidth,
+			behavior: prefersReducedMotion() ? 'auto' : 'smooth'
+		});
 	}
 
-	function beginHabitSwipe(event: PointerEvent) {
-		if (event.pointerType === 'mouse' || !habitPagerEl || habitSwipe) return;
-		const target = event.target as HTMLElement | null;
-		if (target?.closest('.habit-prototype-pip')) return;
-		habitSwipe = {
-			pointerId: event.pointerId,
-			startX: event.clientX,
-			startY: event.clientY,
-			width: habitPagerEl.clientWidth,
-			axis: null
-		};
+	function onHabitScroll() {
+		if (!habitPagerEl) return;
+		const width = habitPagerEl.clientWidth;
+		if (!width) return;
+		const next = Math.round(habitPagerEl.scrollLeft / width) === 1 ? 'trackers' : 'habits';
+		if (next === habitView) return;
+		habitView = next;
+		pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 4);
 	}
 
-	function moveHabitSwipe(event: PointerEvent) {
-		const swipe = habitSwipe;
-		if (!swipe || event.pointerId !== swipe.pointerId) return;
-		const dx = event.clientX - swipe.startX;
-		const dy = event.clientY - swipe.startY;
-		if (!swipe.axis) {
-			if (Math.hypot(dx, dy) < 8) return;
-			swipe.axis = Math.abs(dx) > Math.abs(dy) * 1.2 ? 'x' : 'y';
-			if (swipe.axis === 'y') {
-				habitSwipe = null;
-				return;
-			}
-			habitDragging = true;
-			suppressHabitClick = true;
-			try {
-				habitPagerEl?.setPointerCapture(event.pointerId);
-			} catch {
-				// Sem captura o gesto ainda funciona dentro do pager.
-			}
-		}
-		if (event.cancelable) event.preventDefault();
-		const limit = swipe.width * 0.4;
-		let drag = Math.max(-limit, Math.min(limit, dx));
-		// Nas extremidades (sem loop) o gesto resiste em vez de revelar vazio.
-		if (dx > 0 && habitIndex === 0) drag = Math.min(drag, limit * 0.35);
-		if (dx < 0 && habitIndex === 1) drag = Math.max(drag, -limit * 0.35);
-		habitDrag = Math.round(drag);
-	}
-
-	function endHabitSwipe(event: PointerEvent) {
-		const swipe = habitSwipe;
-		if (!swipe || event.pointerId !== swipe.pointerId) return;
-		habitSwipe = null;
-		habitDragging = false;
-		const dx = habitDrag;
-		if (swipe.axis === 'x') {
-			const next =
-				dx < -48 && habitIndex === 0 ? 'trackers' : dx > 48 && habitIndex === 1 ? 'habits' : null;
-			if (next) changeHabitView(next);
-			else habitDrag = 0;
-			setTimeout(() => (suppressHabitClick = false), 80);
-		} else {
-			habitDrag = 0;
-		}
-		try {
-			habitPagerEl?.releasePointerCapture(event.pointerId);
-		} catch {
-			// Captura já liberada.
-		}
-	}
-
-	function suppressSwipeClick(event: MouseEvent) {
-		if (!suppressHabitClick) return;
-		event.preventDefault();
-		event.stopPropagation();
-		suppressHabitClick = false;
-	}
+	// Mantém o scroll alinhado quando a aba muda por fora (Segmented, reload).
+	$effect(() => {
+		const pager = habitPagerEl;
+		if (!pager) return;
+		const target = (habitView === 'trackers' ? 1 : 0) * pager.clientWidth;
+		if (Math.abs(pager.scrollLeft - target) > 4) pager.scrollLeft = target;
+	});
 
 	async function deleteHabit(habit: Habit) {
 		if (!snapshot) return;
@@ -1537,7 +1478,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	async function saveHabit(event: SubmitEvent) {
 		event.preventDefault();
 		if (!snapshot) return;
-		if (!habitForm.name.trim() || !habitForm.scheduledDays.length || (habitForm.metric !== 'boolean' && Number(habitForm.target) <= 0)) {
+		if (!habitForm.name.trim() || (habitForm.metric !== 'weekly' && !habitForm.scheduledDays.length) || (habitForm.metric !== 'boolean' && Number(habitForm.target) <= 0)) {
 			formError = 'Informe um nome, uma meta válida e pelo menos um dia.';
 			return;
 		}
@@ -1552,9 +1493,22 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const fields = {
 			name: habitForm.name.trim(),
 			metric: habitForm.metric,
-			unit: habitForm.metric === 'duration' ? 'min' : habitForm.unit.trim(),
-			target: habitForm.metric === 'boolean' ? 1 : Number(habitForm.target),
-			scheduledDays: [...habitForm.scheduledDays],
+			unit:
+				habitForm.metric === 'duration'
+					? 'min'
+					: habitForm.metric === 'weekly'
+						? 'semana'
+						: habitForm.unit.trim(),
+			target:
+				habitForm.metric === 'boolean'
+					? 1
+					: habitForm.metric === 'weekly'
+						? Math.max(1, Math.min(7, Number(habitForm.target)))
+						: Number(habitForm.target),
+			scheduledDays:
+				habitForm.metric === 'weekly'
+					? [0, 1, 2, 3, 4, 5, 6]
+					: [...habitForm.scheduledDays],
 			reminder: habitForm.reminder || undefined,
 			...labels
 		};
@@ -1918,7 +1872,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		autoDwellRings.push(svg);
 		if (prefersReducedMotion()) return;
 		requestAnimationFrame(() => {
-			outline.style.transition = 'stroke-dashoffset 1.5s linear';
+			outline.style.transition = 'stroke-dashoffset 4s linear';
 			outline.style.strokeDashoffset = '0';
 		});
 	}
@@ -1937,11 +1891,11 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	function autoDwellEligible(): boolean {
 		if (activeTab !== 'time' || !timeGridEl) return false;
 		if (modal || habitSheet || timeSummaryOpen || timeCategorySheet.open) return false;
-		if (plannerNotesOpen || plannerNoteOpen) return false;
+		if (plannerNotesOpen || plannerNoteOpen || moreMenuOpen || quickMenuOpen) return false;
 		return window.matchMedia('(hover: none)').matches;
 	}
 
-	/** Agenda a abertura automática depois de 1,5 s sem toque/scroll. */
+	/** Agenda a abertura automática depois de 4 s sem toque/scroll. */
 	function scheduleAutoDwell() {
 		cancelAutoDwell();
 		if (!autoDwellAllowed || Date.now() < autoDwellUnlockAt || !autoDwellEligible()) return;
@@ -1963,7 +1917,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			autoDwellAllowed = false;
 			pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 10);
 			playTone(660, 0.08, 'sine', 0.04, snapshot?.preferences.soundEnabled ?? true);
-		}, 1500);
+		}, 4000);
 	}
 
 	function openPlannerNote(note: Note) {
@@ -1996,18 +1950,27 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		autoDwellUnlockAt = 0;
 		let scrollTimer: ReturnType<typeof setTimeout> | undefined;
 		let wheelTimer: ReturnType<typeof setTimeout> | undefined;
-		const onPointerDown = () => {
+		const inPlanner = (target: EventTarget | null) =>
+			target instanceof Element && Boolean(target.closest('.tp-prototype'));
+		const onPointerDown = (event: PointerEvent) => {
 			if (Date.now() < autoDwellUnlockAt) return;
-			// Toque cancela a espera; o hold segue pintando.
-			autoDwellAllowed = true;
+			// Toque cancela a espera; só um gesto no planejador rearma.
 			cancelAutoDwell();
+			if (inPlanner(event.target)) autoDwellAllowed = true;
 		};
-		const onPointerUp = () => {
+		const onPointerUp = (event: PointerEvent) => {
 			if (Date.now() < autoDwellUnlockAt) return;
+			if (!inPlanner(event.target)) return;
 			autoDwellAllowed = true;
 			scheduleAutoDwell();
 		};
-		const onScroll = () => {
+		const onScroll = (event: Event) => {
+			const target = event.target;
+			const plannerScroll =
+				target === document ||
+				target === window ||
+				(target instanceof Element && target.classList.contains('tp-scroll'));
+			if (!plannerScroll) return;
 			cancelAutoDwell();
 			autoDwellAllowed = true;
 			if (scrollTimer) clearTimeout(scrollTimer);
@@ -2047,7 +2010,16 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	// Qualquer sheet aberto suspende o auto-dwell.
 	$effect(() => {
-		if (modal || habitSheet || timeSummaryOpen || timeCategorySheet.open || plannerNotesOpen || plannerNoteOpen) {
+		if (
+			modal ||
+			habitSheet ||
+			timeSummaryOpen ||
+			timeCategorySheet.open ||
+			plannerNotesOpen ||
+			plannerNoteOpen ||
+			moreMenuOpen ||
+			quickMenuOpen
+		) {
 			cancelAutoDwell();
 		}
 	});
@@ -3115,18 +3087,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 							role="group"
 							aria-label="Hábitos e trackers"
 							bind:this={habitPagerEl}
-							onpointerdown={beginHabitSwipe}
-							onpointermove={moveHabitSwipe}
-							onpointerup={endHabitSwipe}
-							onpointercancel={endHabitSwipe}
-							onclickcapture={suppressSwipeClick}
+							onscroll={onHabitScroll}
 						>
-							<div
-								class="habit-track"
-								class:dragging={habitDragging}
-								style={`transform:translate3d(calc(${habitIndex * -100}% + ${habitDrag}px),0,0)`}
-							>
-								<div class="habit-pane" aria-hidden={habitView !== 'habits'} inert={habitView !== 'habits'}>
+							<div class="habit-pane" aria-hidden={habitView !== 'habits'} inert={habitView !== 'habits'}>
 									<section class="habit-prototype" aria-label="Hábitos">
 										<div class="habit-prototype-top">
 											<div class="habit-prototype-level"><small>Nível {levelProgress.level}</small><div class="habit-prototype-xpbar"><i style={`width:${levelProgress.currentXp / levelProgress.nextLevelXp * 100}%`}></i></div></div>
@@ -3211,7 +3174,6 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 										ondeleteentry={deleteTrackerEntry}
 									/>
 								</div>
-							</div>
 						</div>
 					{/if}
 				{:else if activeTab === 'time'}
@@ -3524,19 +3486,51 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 							<option value="boolean">Feito ou não feito</option>
 							<option value="duration">Duração</option>
 							<option value="count">Contagem</option>
+							<option value="weekly">Meta na semana</option>
 						</select>
 					</Field>
-					{#if habitForm.metric !== 'boolean'}
+					{#if habitForm.metric === 'duration'}
+						<div class="sheet-row">
+							<Field label="Horas">
+								<input
+									type="number"
+									min="0"
+									value={Math.floor(Number(habitForm.target) / 60)}
+									oninput={(event) => {
+										const hours = Number(event.currentTarget.value) || 0;
+										const minutes = Number(habitForm.target) % 60;
+										habitForm.target = String(hours * 60 + minutes);
+									}}
+								/>
+							</Field>
+							<Field label="Minutos">
+								<input
+									type="number"
+									min="0"
+									max="59"
+									value={Number(habitForm.target) % 60}
+									oninput={(event) => {
+										const hours = Math.floor(Number(habitForm.target) / 60);
+										const minutes = Number(event.currentTarget.value) || 0;
+										habitForm.target = String(hours * 60 + Math.min(59, minutes));
+									}}
+								/>
+							</Field>
+						</div>
+					{:else if habitForm.metric === 'weekly'}
+						<div class="sheet-row">
+							<Field label="Dias por semana">
+								<input bind:value={habitForm.target} type="number" min="1" max="7" required />
+							</Field>
+							<Field label="Unidade"><span class="static">dias</span></Field>
+						</div>
+					{:else if habitForm.metric === 'count'}
 						<div class="sheet-row">
 							<Field label="Meta por dia">
 								<input bind:value={habitForm.target} type="number" min="1" required />
 							</Field>
 							<Field label="Unidade">
-								{#if habitForm.metric === 'count'}
-									<input bind:value={habitForm.unit} placeholder="páginas, copos…" required />
-								{:else}
-									<span class="static">minutos</span>
-								{/if}
+								<input bind:value={habitForm.unit} placeholder="páginas, copos…" required />
 							</Field>
 						</div>
 					{:else}
@@ -3561,18 +3555,20 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 							/>
 						</div>
 					{/if}
-					<div class="sheet-days">
-						<span class="sheet-days-label">Dias programados</span>
-						<div class="sheet-days-row">
-							{#each ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'] as day, index}
-								<Chip
-									selected={habitForm.scheduledDays.includes(index)}
-									ariaLabel={`Selecionar dia ${index}`}
-									onselect={() => toggleScheduledDay(index)}
-								>{day}</Chip>
-							{/each}
+					{#if habitForm.metric !== 'weekly'}
+						<div class="sheet-days">
+							<span class="sheet-days-label">Dias programados</span>
+							<div class="sheet-days-row">
+								{#each ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'] as day, index}
+									<Chip
+										selected={habitForm.scheduledDays.includes(index)}
+										ariaLabel={`Selecionar dia ${index}`}
+										onselect={() => toggleScheduledDay(index)}
+									>{day}</Chip>
+								{/each}
+							</div>
 						</div>
-					</div>
+					{/if}
 					<Field label="Lembrete" hint="opcional">
 						<input type="time" bind:value={habitForm.reminder} />
 					</Field>

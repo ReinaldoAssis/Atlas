@@ -162,7 +162,7 @@
 - **Menu de hábito/tracker**: `⋯` só com hover; long-press abre o menu; fecha ao
   tocar fora; clique resultante do long-press é suprimido; "Editar" abre o
   sheet; mesmos consertos nos Trackers.
-- **Dwell da nota (planejador)**: 1,5 s de **tela parada** (sem toque nem
+- **Dwell da nota (planejador)**: 4 s de **tela parada** (sem toque nem
   scroll), só em aparelho de toque; anel de progresso em cada bloco com nota
   visível. Todos os blocos visíveis entram num **dialog agregado** sobre o
   planejador; tocar a linha abre a nota num segundo sheet dentro do Tempo (sem

@@ -109,13 +109,17 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .habit-prototype *, .habit-prototype-overlay *, .habit-prototype-celebration * { box-sizing: border-box; }
 .habit-prototype button, .habit-prototype-overlay button, .habit-prototype-celebration button { border: 0; color: inherit; font: inherit; text-align: left; touch-action: manipulation; }
 .habit-switch { display: grid; width: min(320px, 100%); margin: 0 auto; padding: 6px 4px 14px; }
-/* Pager de Hábitos/Trackers: as duas views ficam montadas lado a lado. */
-.habit-pager { overflow: hidden; touch-action: pan-y; }
-.habit-track { display: flex; align-items: flex-start; transition: transform .18s cubic-bezier(.2,.9,.2,1); will-change: transform; }
-.habit-track.dragging { transition: none; }
-.habit-pane { flex: 0 0 100%; min-width: 0; }
+/* Pager de Hábitos/Trackers: scroll horizontal nativo (sem transform, para os
+   sheets `position: fixed` continuarem presos à viewport). */
+.habit-pager { display: flex; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; scrollbar-width: none; touch-action: pan-x pan-y; }
+.habit-pager::-webkit-scrollbar { display: none; }
+.habit-pane { flex: 0 0 100%; min-width: 0; scroll-snap-align: start; }
+@media (max-width: 860px) {
+	/* O gesto vale até perto da barra inferior, mesmo com pouco conteúdo. */
+	.habit-pager { min-height: calc(100dvh - 220px); }
+}
 @media (prefers-reduced-motion: reduce) {
-	.habit-track { transition: none; }
+	.habit-pager { scroll-behavior: auto; }
 }
 /* Card com menu (hábitos e trackers): envolve o card para caber o "⋯". */
 .hcard { position: relative; display: grid; min-width: 0; }
@@ -474,7 +478,7 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .tp-grid { position: relative; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .tp-rl { position: sticky; left: 0; z-index: 3; background: var(--bg); font-size: 10px; color: var(--muted); height: 28px; padding-top: 2px; }
 .tp-c { height: 28px; margin: 0 2px; background: var(--panel); box-sizing: border-box; }
-/* Anel do dwell: SVG fixo sobre o bloco, preenchendo em 1,5 s. */
+/* Anel do dwell: SVG fixo sobre o bloco, preenchendo em 4 s. */
 .tp-dwell-ring { position: fixed; z-index: 55; pointer-events: none; overflow: visible; filter: drop-shadow(0 0 4px #0008); }
 @media (prefers-reduced-motion: reduce) {
 	.tp-dwell-ring rect { transition: none !important; }
