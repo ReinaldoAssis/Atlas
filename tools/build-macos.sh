@@ -2,8 +2,9 @@
 # Build local do Atlas para macOS (arm64).
 #
 # Uso:
-#   tools/build-macos.sh                  # versão do tauri.conf.json
-#   tools/build-macos.sh --version 0.3.0  # versão da tag (nome do .dmg)
+#   tools/build-macos.sh                  # build local (versão do tauri.conf.json)
+#   tools/build-macos.sh --version 0.3.1  # build + upload do .dmg no release v0.3.1
+#   tools/build-macos.sh --version 0.3.1 --no-upload
 #
 # Saída:
 #   src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Atlas.app
@@ -11,6 +12,9 @@
 #
 # Build **não assinado**: em outra máquina o Gatekeeper bloqueia. Para abrir:
 #   xattr -dr com.apple.quarantine /Applications/Atlas.app
+#
+# O upload usa o `gh` autenticado e exige que o release da tag já exista
+# (espere o workflow `Release` da tag terminar). Rode manualmente.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,6 +36,7 @@ done < <(hdiutil info | awk '
 ')
 
 VERSION=""
+UPLOAD=1
 TARGET="aarch64-apple-darwin"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -39,8 +44,12 @@ while [[ $# -gt 0 ]]; do
       VERSION="${2:?use --version X.Y.Z}"
       shift 2
       ;;
+    --no-upload)
+      UPLOAD=0
+      shift
+      ;;
     --help | -h)
-      sed -n '2,13p' "$0"
+      sed -n '2,17p' "$0"
       exit 0
       ;;
     *)
@@ -86,3 +95,23 @@ echo
 echo "Artefatos:"
 ls -ldh "$APP"
 ls -lh "$DMG"
+
+TAG="v${APP_VERSION}"
+if [[ "$UPLOAD" -eq 1 && -n "$VERSION" ]]; then
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "build-macos: 'gh' não encontrado; use --no-upload ou instale o GitHub CLI." >&2
+    exit 1
+  fi
+  if ! gh release view "$TAG" >/dev/null 2>&1; then
+    echo "build-macos: release $TAG ainda não existe." >&2
+    echo "  espere o workflow Release da tag terminar (gh run list --workflow release.yml)." >&2
+    exit 1
+  fi
+  echo
+  echo "==> Upload do .dmg para $TAG"
+  gh release upload "$TAG" "$DMG" --clobber
+  echo "==> $(gh release view "$TAG" --json url -q .url)"
+elif [[ "$UPLOAD" -eq 1 ]]; then
+  echo
+  echo "build-macos: sem --version não há tag para subir; build só local."
+fi
