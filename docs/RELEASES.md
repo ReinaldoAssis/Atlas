@@ -46,17 +46,17 @@ O updater e o workflow de release são **só do Windows**: não existe job macOS
 CI. O `.dmg` do macOS sai da máquina Apple Silicon, com a mesma versão da tag:
 
 ```bash
-tools/build-macos.sh --version 0.3.0
+# depois de o workflow `Release` da tag terminar:
+tools/build-macos.sh --version 0.3.1
 # .app: src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Atlas.app
-# .dmg: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Atlas_0.3.0_aarch64.dmg
+# .dmg: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Atlas_0.3.1_aarch64.dmg
+# e sobe o .dmg para o release v0.3.1 (gh release upload --clobber)
 ```
 
-Depois de o workflow `Release` criar o release da tag, anexe o `.dmg`:
-
-```bash
-gh release upload v0.3.0 \
-  src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Atlas_0.3.0_aarch64.dmg
-```
+O script **não** roda no CI e é manual: rode quando quiser publicar/atualizar o
+`.dmg` do Mac. Use `--no-upload` para build só local; sem `--version` ele não
+sobe nada (não há tag). Se o release ainda não existir, ele para e pede para
+esperar o workflow — não cria release incompleto.
 
 - O script builda só o `.app` (`--bundles app`) e cria o `.dmg` com `hdiutil`
   (volume "Atlas" + atalho para `/Applications`). O `bundle_dmg.sh` do Tauri
