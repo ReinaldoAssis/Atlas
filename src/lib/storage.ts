@@ -17,7 +17,7 @@ import {
 	type TrackerEntry,
 	type Transaction
 } from './atlas';
-import { normalizeGraph } from './graph';
+import { normalizeGraph, type GraphDomain, type GraphEdge, type GraphNode } from './graph';
 import { reconcileGraph } from './graph-sources';
 import type { Note, NoteFolder } from './notes';
 import { normalizeNotesState } from './notes';
@@ -524,22 +524,35 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	const totalXp = Object.values(knownCounters[XP_COUNTER_KEY] ?? {}).reduce((sum, value) => sum + value, 0);
 	const experience = { totalXp } as ExperienceState;
 	const preferences = { ...defaults.preferences, ...(settingsMap.preferences ?? {}) };
+	// Payload corrompido (v0.3.0 deslocava as colunas: o `payload` recebia o
+	// carimbo) vira linha descartada, nunca número/objeto sem `id` no snapshot —
+	// senão a gravação seguinte manda `undefined` e o `db_batch` recusa. A linha
+	// descartada ainda vira lápide na próxima gravação.
+	const payloadList = <T extends { id: string }>(rows: Array<{ payload: string }>): T[] =>
+		rows
+			.map((row) => {
+				try {
+					return JSON.parse(row.payload) as T;
+				} catch {
+					return null;
+				}
+			})
+			.filter((item): item is T => Boolean(item) && typeof (item as { id?: unknown }).id === 'string');
+	const domains = payloadList<GraphDomain>(graphDomains);
+	const nodes = payloadList<GraphNode>(graphNodes);
+	const edges = payloadList<GraphEdge>(graphEdges);
 	const graph =
-		graphDomains.length + graphNodes.length + graphEdges.length === 0
+		domains.length + nodes.length + edges.length === 0
 			? defaults.graph
-			: normalizeGraph({
-					domains: graphDomains.map((row) => JSON.parse(row.payload)),
-					nodes: graphNodes.map((row) => JSON.parse(row.payload)),
-					edges: graphEdges.map((row) => JSON.parse(row.payload))
-				});
+			: normalizeGraph({ domains, nodes, edges });
 	const snapshot = {
-		categories: categories.map((row) => normalizeCategory(JSON.parse(row.payload) as Category)),
-		transactions: transactions.map((row) => JSON.parse(row.payload) as Transaction),
-		habits: habits.map((row) => JSON.parse(row.payload) as Habit),
-		habitLogs: habitLogs.map((row) => JSON.parse(row.payload) as HabitLog),
-		trackers: trackers.map((row) => normalizeTracker(JSON.parse(row.payload) as Partial<Tracker>)),
-		trackerEntries: trackerEntries.map((row) => JSON.parse(row.payload) as TrackerEntry),
-		timeBlocks: timeBlocks.map((row) => JSON.parse(row.payload) as TimeBlock),
+		categories: payloadList<Category>(categories).map(normalizeCategory),
+		transactions: payloadList<Transaction>(transactions),
+		habits: payloadList<Habit>(habits),
+		habitLogs: payloadList<HabitLog>(habitLogs),
+		trackers: payloadList<Tracker>(trackers).map((item) => normalizeTracker(item)),
+		trackerEntries: payloadList<TrackerEntry>(trackerEntries),
+		timeBlocks: payloadList<TimeBlock>(timeBlocks),
 		lifeForce,
 		experience,
 		finance,
@@ -555,12 +568,16 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 let lastPreferencesJson: string | undefined;
 
 /** Statements do snapshot inteiro (upserts só do que mudou + lápides). */
-function buildSnapshotStatements(snapshot: AtlasSnapshot, deviceId: string, at: number): BatchStatement[] {
+export function buildSnapshotStatements(snapshot: AtlasSnapshot, deviceId: string, at: number): BatchStatement[] {
 	const statements: BatchStatement[] = [];
+	// A última coluna de todas as tabelas que usam `payloadRows` é `payload`:
+	// o JSON da linha entra **aqui**, junto com as colunas da chave. Sem ele os
+	// parâmetros deslizam (payload←at, updated_at←device_id, device_id←NULL) e
+	// o reload quebra no `JSON.parse` do payload.
 	const payloadRows = <T extends { id: string }>(items: T[], columns: (item: T) => string[]): RowInput[] =>
 		items.map((item) => {
 			const json = JSON.stringify(item);
-			return { key: item.id, values: columns(item), json };
+			return { key: item.id, values: [...columns(item), json], json };
 		});
 
 	statements.push(...planTable({ table: 'categories', columns: ['id', 'module', 'payload'], rows: payloadRows(snapshot.categories, (item) => [item.id, item.module]), deviceId, at }));
