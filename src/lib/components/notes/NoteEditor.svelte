@@ -21,6 +21,7 @@
 	} from '#lib/notes';
 	import { playTone, prefersReducedMotion, pulseHaptic } from '#lib/feedback';
 	import { decorateTempoRefs } from '#lib/tempo-ref';
+	import { TimeBubble } from '#lib/bubble';
 	import type { TimeBlock } from '#lib/atlas';
 	import { Printer } from '@lucide/svelte';
 	import FolderIcon from './FolderIcon.svelte';
@@ -79,7 +80,7 @@
 	let editorEl = $state<HTMLTextAreaElement | null>(null);
 	let previewEl = $state<HTMLElement | null>(null);
 	/** Bolha de preview do bloco de tempo correspondente a uma referência `tempo`. */
-	let refBubble = $state<{ x: number; y: number; from: string; to: string } | null>(null);
+	let bubble: TimeBubble | null = null;
 	let dirty = false;
 	let saveTimer: ReturnType<typeof setTimeout> | undefined;
 	let renderTimer: ReturnType<typeof setTimeout> | undefined;
@@ -137,7 +138,7 @@
 	/* ---------- preview (pipeline Carta) ---------- */
 	async function renderPreview() {
 		if (!previewEl) return;
-		refBubble = null;
+		bubble?.hide(true);
 		try {
 			const html = await carta.render(body);
 			previewEl.innerHTML = html;
@@ -292,7 +293,9 @@
 		const ref = target?.closest<HTMLElement>('.tp-ref');
 		if (ref) {
 			event.preventDefault();
-			showRefBubble(ref);
+			const same = bubble?.isOpen && bubble.currentAnchor === ref;
+			if (same) bubble?.hide();
+			else showRefBubble(ref);
 			return;
 		}
 		const link = target?.closest<HTMLElement>('a.wl[data-wl]');
@@ -301,38 +304,36 @@
 		onwikilink(link.dataset.wl ?? '');
 	}
 
-	/** Blocos que cruzam a referência em foco (para a bolha). */
-	const refBlocks = $derived.by(() => {
-		const bubble = refBubble;
-		if (!bubble) return [];
+	function matchingBlocks(from: string, to: string): TimeBlock[] {
+		if (!from || !to) return [];
 		return timeBlocks
 			.filter(
 				(block) =>
 					block.status !== 'cancelled' &&
-					bubble.from < block.endAt.slice(0, 16) &&
-					bubble.to > block.startAt.slice(0, 16)
+					from < block.endAt.slice(0, 16) &&
+					to > block.startAt.slice(0, 16)
 			)
 			.sort((a, b) => a.startAt.localeCompare(b.startAt));
-	});
-
-	function showRefBubble(element: HTMLElement) {
-		const rect = element.getBoundingClientRect();
-		refBubble = {
-			x: Math.min(Math.max(rect.left + rect.width / 2, 110), window.innerWidth - 110),
-			y: rect.top,
-			from: element.dataset.tpFrom ?? '',
-			to: element.dataset.tpTo ?? ''
-		};
 	}
 
-	function hideRefBubble() {
-		refBubble = null;
+	function escapeHtml(value: string): string {
+		return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+	}
+
+	function showRefBubble(element: HTMLElement) {
+		const blocks = matchingBlocks(element.dataset.tpFrom ?? '', element.dataset.tpTo ?? '');
+		const html = blocks.length
+			? blocks
+					.map((block) => `<div class="tbb-1">${escapeHtml(block.title || '—')}</div><div class="tbb-2">${blockLabel(block)}</div>`)
+					.join('')
+			: '<div class="tbb-2">Sem bloco no planejador.</div>';
+		bubble?.show(element, html, blocks.length ? '#d4f25a' : '#8d968a');
 	}
 
 	function onPreviewPointerOver(event: PointerEvent) {
 		const ref = (event.target as HTMLElement | null)?.closest<HTMLElement>('.tp-ref');
 		if (ref) showRefBubble(ref);
-		else if (refBubble) hideRefBubble();
+		else bubble?.hide();
 	}
 
 	function blockLabel(block: TimeBlock): string {
@@ -380,10 +381,17 @@
 
 	onMount(() => {
 		void refreshAttachments();
+		bubble = new TimeBubble({
+			anchorMiddle: true,
+			offset: 10,
+			touch: typeof window !== 'undefined' && !window.matchMedia('(hover: hover)').matches,
+			sound,
+			haptics
+		});
 		paneEl?.addEventListener('click', onPreviewClick);
 		paneEl?.addEventListener('pointerover', onPreviewPointerOver);
-		paneEl?.addEventListener('pointerleave', hideRefBubble);
-		paneEl?.addEventListener('scroll', hideRefBubble, true);
+		paneEl?.addEventListener('pointerleave', () => bubble?.later());
+		paneEl?.addEventListener('scroll', () => bubble?.hide(true), true);
 		void renderPreview();
 		// iOS suspende timers ao ir para segundo plano: grava o rascunho
 		// pendente antes que o debounce de 800ms se perca.
@@ -396,8 +404,8 @@
 		return () => {
 			paneEl?.removeEventListener('click', onPreviewClick);
 			paneEl?.removeEventListener('pointerover', onPreviewPointerOver);
-			paneEl?.removeEventListener('pointerleave', hideRefBubble);
-			paneEl?.removeEventListener('scroll', hideRefBubble, true);
+			bubble?.destroy();
+			bubble = null;
 			document.removeEventListener('visibilitychange', onVisibility);
 			window.removeEventListener('pagehide', flush);
 			for (const url of objectUrls) URL.revokeObjectURL(url);
@@ -502,16 +510,4 @@
 			<span class="nt-status" class:ok={status.includes('✓')}>{status}</span>
 		</div>
 	</div>
-
-	{#if refBubble}
-		<div class="nt-tp-bubble" style={`left:${refBubble.x}px;top:${refBubble.y}px`} role="tooltip">
-			{#if refBlocks.length}
-				{#each refBlocks as block (block.id)}
-					<div class="nt-tp-row"><b>{block.title || '—'}</b><small>{blockLabel(block)}</small></div>
-				{/each}
-			{:else}
-				<small>Sem bloco no planejador.</small>
-			{/if}
-		</div>
-	{/if}
 </div>

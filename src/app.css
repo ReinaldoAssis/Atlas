@@ -109,6 +109,14 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .habit-prototype *, .habit-prototype-overlay *, .habit-prototype-celebration * { box-sizing: border-box; }
 .habit-prototype button, .habit-prototype-overlay button, .habit-prototype-celebration button { border: 0; color: inherit; font: inherit; text-align: left; touch-action: manipulation; }
 .habit-switch { display: grid; width: min(320px, 100%); margin: 0 auto; padding: 6px 4px 14px; }
+/* Card com menu (hábitos e trackers): envolve o card para caber o "⋯". */
+.hcard { position: relative; display: grid; min-width: 0; }
+.hcard > .habit-prototype-card { height: 100%; }
+.hcard-more { position: absolute; right: 8px; bottom: 8px; z-index: 2; width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 8px; background: #00000055; color: var(--text); opacity: 0; cursor: pointer; transition: opacity 0.15s; }
+@media (hover: hover) {
+	.hcard:hover .hcard-more, .hcard:focus-within .hcard-more { opacity: 1; }
+}
+.hcard-more:focus-visible { opacity: 1; }
 .habit-prototype-top { display: flex; align-items: center; gap: 14px; padding: 6px 4px 12px; }
 .habit-prototype-streak { display: flex; align-items: center; gap: 4px; color: var(--hp-flame); }
 .habit-prototype-streak svg { animation: habit-prototype-flame 1.6s ease-in-out infinite; transform-origin: 50% 90%; }
@@ -459,33 +467,25 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .tp-c.on.st { border-radius: 8px 8px 0 0; }
 .tp-c.on.en { border-radius: 0 0 8px 8px; }
 .tp-c.on.st.en { border-radius: 8px; }
-/* Bloco com nota referenciando o horário: contorno nas pontas do bloco + ponto.
-   O contorno é desenhado só nas células de início/fim — se fosse em toda
-   célula, apareceria uma linha no meio do bloco. */
+/* Bloco com nota referenciando o horário (briefing do animador): linhas
+   laterais em todas as células, topo só no início e base só no fim — assim
+   não aparece linha no meio do bloco — mais o ponto no início. */
 .tp-c { position: relative; }
-.tp-c.nt { --tp-note-line: color-mix(in srgb, var(--lime) 65%, transparent); }
-.tp-c.nt.st { box-shadow: inset 1.5px 0 0 var(--tp-note-line), inset 0 1.5px 0 var(--tp-note-line); }
-.tp-c.nt.en { box-shadow: inset -1.5px 0 0 var(--tp-note-line), inset 0 -1.5px 0 var(--tp-note-line); }
-.tp-c.nt.st.en { box-shadow: inset 1.5px 0 0 var(--tp-note-line), inset -1.5px 0 0 var(--tp-note-line), inset 0 1.5px 0 var(--tp-note-line), inset 0 -1.5px 0 var(--tp-note-line); }
-.tp-note-dot { position: absolute; top: 4px; right: 4px; width: 5px; height: 5px; border-radius: 50%; background: var(--lime); }
-.tp-note-bubble {
-	position: fixed;
-	z-index: 60;
-	transform: translate(-50%, calc(-100% - 8px));
-	width: min(300px, 86vw);
-	display: grid;
-	gap: 6px;
-	padding: 10px;
-	border: 1px solid #2e332e;
-	border-radius: 12px;
-	background: #1d211d;
-	box-shadow: 0 14px 34px #000a;
+.tp-c.nt { box-shadow: inset 1.5px 0 0 var(--lime), inset -1.5px 0 0 var(--lime); }
+.tp-c.nt.st { box-shadow: inset 1.5px 1.5px 0 var(--lime), inset -1.5px 0 0 var(--lime); }
+.tp-c.nt.en { box-shadow: inset 1.5px -1.5px 0 var(--lime), inset -1.5px 0 0 var(--lime); }
+.tp-c.nt.st.en { box-shadow: inset 1.5px 1.5px 0 var(--lime), inset -1.5px -1.5px 0 var(--lime); }
+.tp-c.nt.st::after {
+	content: '';
+	position: absolute;
+	right: 5px;
+	top: 6px;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--lime);
+	box-shadow: 0 0 6px var(--lime);
 }
-.tp-nb-tip { color: var(--muted); font-size: 11px; font-weight: 600; }
-.tp-note-bubble button { display: grid; gap: 2px; padding: 8px 10px; border: 0; border-radius: 9px; background: #272b27; color: #ecefe6; text-align: left; cursor: pointer; transition: background 0.15s; }
-.tp-note-bubble button:hover { background: #333833; }
-.tp-note-bubble button b { font-size: 13px; }
-.tp-note-bubble button small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tp-now { position: absolute; height: 2px; background: var(--lime); z-index: 2; pointer-events: none; box-shadow: 0 0 8px var(--lime); }
 .tp-now::before { content: ''; position: absolute; left: -4px; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--lime); }
 .tp-overlay { position: fixed; z-index: 80; inset: 0; display: flex; align-items: flex-end; justify-content: center; background: #000a; }
@@ -877,36 +877,78 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .nt-gh { position: fixed; z-index: 80; pointer-events: none; background: var(--nt-s2); border: 1px solid var(--acc); border-radius: 10px; padding: 10px 14px; font-weight: 600; box-shadow: 0 12px 30px #000a; transform: translate(-50%, -120%) rotate(-3deg); max-width: 70vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nt-drop { background: var(--accd) !important; outline: 2px solid var(--acc); transform: scale(1.04); }
 
-/* Referência `tempo` na nota: chip destacado + bolha do bloco correspondente. */
+/* Referência `tempo` na nota: chip + bolha do bloco correspondente.
+   Visual/animação seguem o briefing do animador (docs/ANIM-NOTE-BUBBLE.md). */
 .nt-pv .tp-ref {
 	display: inline-block;
-	padding: 0 7px;
+	padding: 2px 8px;
 	border-radius: 7px;
-	background: color-mix(in srgb, var(--acc) 18%, transparent);
+	background: var(--accd);
 	color: var(--acc);
 	font-weight: 600;
-	font-size: 0.92em;
+	font-size: 13px;
+	line-height: 1.5;
+	white-space: nowrap;
 	cursor: help;
 }
-.nt-pv .tp-ref.ms { background: var(--nt-s2); color: var(--nt-mu); }
-.nt-tp-bubble {
+.nt-pv .tp-ref.ms { background: #ffffff12; color: var(--nt-mu); }
+
+/* ---------- Bolha de tempo (material + cauda) ----------
+   Prefixo `tbb-` de propósito: `.tb` é o header do shell. */
+.tbb {
 	position: fixed;
 	z-index: 60;
-	transform: translate(-50%, calc(-100% - 10px));
-	max-width: 300px;
-	padding: 10px 12px;
-	border: 1px solid var(--nt-ln);
-	border-radius: 10px;
-	background: var(--nt-s2);
-	box-shadow: 0 12px 30px #000a;
-	display: grid;
-	gap: 6px;
+	display: none;
+	width: max-content;
+	max-width: min(300px, 86vw);
+	transform: translate(-50%, calc(-100% - var(--of, 10px)));
 	pointer-events: none;
-	font-size: 12px;
-	color: var(--nt-tx);
 }
-.nt-tp-row b { display: block; font-size: 13px; font-weight: 700; }
-.nt-tp-row small { color: var(--nt-mu); }
+.tbb.in { pointer-events: auto; }
+.tbb-m {
+	position: relative;
+	background: color-mix(in srgb, var(--tint, #d4f25a) 13%, #1d211db8);
+	backdrop-filter: blur(18px) saturate(1.5);
+	-webkit-backdrop-filter: blur(18px) saturate(1.5);
+	border: 1px solid #ffffff22;
+	border-radius: 12px;
+	box-shadow: 0 14px 34px #000a, inset 0 1px 0 #ffffff18;
+	padding: 10px 12px;
+}
+.tbb-t {
+	position: absolute;
+	bottom: -6px;
+	left: var(--tx, 50%);
+	width: 12px;
+	height: 12px;
+	background: color-mix(in srgb, var(--tint, #d4f25a) 13%, #222722);
+	border-right: 1px solid #ffffff22;
+	border-bottom: 1px solid #ffffff22;
+	border-radius: 0 0 3px 0;
+	transform: translateX(-50%) rotate(45deg);
+}
+.tbb-1 { font-size: 13px; font-weight: 700; color: var(--tx); }
+.tbb-2 { font-size: 12px; color: var(--mu); }
+.tbb-lb { margin-bottom: 4px; color: var(--mu); font-size: 11px; }
+.tbb-r {
+	display: block;
+	width: calc(100% + 16px);
+	margin: 0 -8px;
+	padding: 6px 8px;
+	border: 0;
+	border-radius: 8px;
+	background: none;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+	transition: background 0.15s;
+}
+.tbb-r:hover { background: #ffffff12; }
+.tbb-r .tbb-2 { font-size: 11px; max-width: 260px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+@media (prefers-reduced-motion: reduce) {
+	.tbb-r { transition: none; }
+}
 
 /* Exportação em PDF (nota única): só o bloco `.nt-print` vai para o papel. */
 .nt-print { display: none; }
