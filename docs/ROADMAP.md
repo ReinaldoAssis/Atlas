@@ -123,34 +123,39 @@ Fatos-chave da pesquisa:
 
 - **iroh** (Rust, crate `iroh`) é a aposta mais direta: conexões QUIC P2P, endpoint identificado por chave pública, com **`MdnsDiscovery`** para descobrir pares na LAN e relay como fallback. **Suporta iOS, macOS, Windows** (confirmado na matriz de plataformas).
 - Sync de estado: o próprio iroh tem **`iroh-docs`** (KV com reconciliação por range) e há exemplo oficial de **Automerge sobre iroh**. Alternativas CRDT em Rust: **Loro**, **Yjs/yrs**.
-- **Gotcha iOS (crítico):** descoberta local exige permissão de **Rede Local** — `NSLocalNetworkUsageDescription` no `Info.plist`; se usar Bonjour/DNS-SD, também `NSBonjourServices`. O iroh usa mDNS multicast (crate `swarm-discovery`), não Bonjour; a doc do iroh sugere que em mobile pode ser preciso usar a descoberta nativa da plataforma. **Precisa de spike no device.**
+- **Gotcha iOS (bloqueador confirmado):** o mDNS cru do iroh (`swarm-discovery`/`iroh-mdns-*`) sai por socket BSD multicast, que no iPhone físico exige o entitlement restrito `com.apple.developer.networking.multicast` — e a Apple **nega** o pedido quando o objetivo é mDNS direto. Só passa pelo mDNSResponder do sistema (`NWBrowser`/`NSNetService`), que precisa apenas de permissão de **Rede Local** (`NSLocalNetworkUsageDescription`) + `NSBonjourServices`. Consequência: iOS por Bonjour nativo e Windows por **DNS-SD padrão** (`mdns-sd`; o `swarm-discovery` não emite PTR e é invisível ao iOS). Detalhe em `docs/SYNC.md` §2.
 - Tauri já embute `Info.plist` por merge: `bundle.iOS.infoPlist` (ou `Info.plist`/`Info.ios.plist` na raiz do Tauri).
 - **Bloqueador de schema:** hoje `saveSnapshot` faz `DELETE`-all + `INSERT`-all (0.2) e não há `updated_at`/`deleted_at`/`device_id` (0.3). Sem isso não existe merge possível. Isso deve ser resolvido **antes** de qualquer protocolo.
 
-### 2.2 Decisão recomendada
+### 2.2 Decisão (fechada — detalhe em `docs/SYNC.md`)
 
-- Transporte/descoberta: **iroh** com `MdnsDiscovery` (+ relay fallback opcional).
-- Modelo de dados: **não** jogar CRDT sobre o snapshot inteiro. Adotar **replicação por linha com Last-Write-Wins**:
-  - colunas/tombstones: `updated_at` (HLC ou `unix_ms`), `deleted_at`, `device_id`, `rev`.
-  - merge: vence o maior `updated_at`; empate → menor `device_id` (determinístico).
-  - listas de notas/anexos: tratar anexos como blobs (`iroh-blobs`).
-- Pareamento: trocar chaves via **QR/短 código**; guardar par confiável (`peer_id` + nome + segredo). Depois, **auto-conexão**: ao abrir o app, se um par confiável aparecer via mDNS na LAN, conecta e sincroniza sem UI.
-- Segurança: conexão iroh já é TLS ponta-a-ponta; o pareamento é a fronteira de confiança (o segredo autoriza o merge).
+Sessão de alinhamento (out/2026) travou 29 decisões; o resumo:
+
+- **Transporte**: iroh 1.0, **só LAN** (sem relay/DNS da n0), ALPN `atlas/sync/1`.
+- **Descoberta**: no iOS **não pode** ser o mDNS cru do iroh — exige o entitlement
+  restrito `com.apple.developer.networking.multicast`, que a Apple recusa para
+  mDNS direto. iOS usa **Bonjour nativo** (mDNSResponder, sem entitlement);
+  Windows usa **DNS-SD padrão** (`mdns-sd`, PTR/SRV/TXT). Ver §2.5.
+- **Modelo**: replicação **por linha com LWW** (não CRDT sobre o snapshot).
+  Carimbo **HLC-lite** (`max(relógio, maior visto + 1)`), empate pelo menor
+  `device_id`; cursor por **par × device de origem**; `saveSnapshot` grava só a
+  linha alterada; lápides só purgadas abaixo do menor `last_sync_at` dos pares.
+- **Contadores**: XP vira **contador por aparelho** (a soma é o total); Life Force
+  e finance ficam LWW (decai/satura localmente).
+- **Pareamento**: SAS de 6 dígitos + allowlist de EndpointID; chave em
+  `<appdata>/atlas-identity.key`; nada mescla sem pareamento.
+- **Merge** no Rust, com evento pro front recarregar (preservando rascunho).
 
 ### 2.3 Fases
 
-| ID | Tarefa | Entregável | Est. |
-|---|---|---|---|
-| E0 | **Spike no device**: iroh sobe no iOS/Tauri? mDNS acha o par? Ativa o prompt de Rede Local? | relatório curto + PoC "hello" | 2–3 |
-| E1 | Migração de schema: `updated_at`/`deleted_at`/`device_id`/`rev` + índices; backfill | migração SQL idempotente | 1–2 |
-| E2 | Reescrever `saveSnapshot` como **upsert-diff + tombstones** (fim do `DELETE`-all); lápides purgadas em N dias | `storage.ts` v2 | 2–3 |
-| E3 | Módulo Rust `sync`: endpoint iroh, ALPN `atlas/sync/1`, protocolo de troca de linhas desde `updated_at` | crate/módulo + testes | 3–4 |
-| E4 | Motor de merge LWW + reconciliação de notas/pastas/grafo | `merge.ts` + testes de convergência | 2–3 |
-| E5 | Pareamento (QR/短 código) + store de pares confiáveis + UI em Configurações | telas + persistência | 2 |
-| E6 | Auto-descoberta + auto-conexão na LAN (mDNS), retry/backoff, indicador de status | serviço + UI | 2 |
-| E7 | Sync de anexos (blobs) e de grafo | — | 2 |
-| E8 | `Info.plist`: `NSLocalNetworkUsageDescription` (+ `NSBonjourServices` se aplicável) | plist | 0.5 |
-| E9 | UI: liga/desliga sync, lista de devices, desemparelhar, "sincronizado há X" | por `DESIGN.md` | 1 |
+| ID | Tarefa | Est. |
+|---|---|---|
+| P1 | **Metadados de sync** (migração v6): `notes.updated_at` em ms, `folders.updated_at`, `shared_settings`, `counters`, `sync_peers`/`sync_cursors`, id determinístico de log, HLC e gravação só da linha alterada | 2–3 |
+| P2 | **Engine**: PoC E0a (Windows↔Windows) → endpoint iroh LAN, protocolo por cursor, merge LWW, evento pro front | 3–4 |
+| P3 | **Pareamento**: SAS de 6 dígitos + allowlist + store de pares | 2 |
+| P4 | **Descoberta no iOS**: bridge Swift (announce/resolve) + `project.yml`/`InfoPlist.strings`/`NSBonjourServices` | 2–3 |
+| P5 | **UI**: seção Sincronização, backup automático/resumo do 1º sync, conflito de nota | 2 |
+| P6 | Anexos (blobs) — fora do ciclo | 2 |
 
 ### 2.4 Aceite
 - Dois devices na mesma Wi‑Fi, já pareados, **conectam e convergem sem ação manual** ao abrir o app.
@@ -158,8 +163,9 @@ Fatos-chave da pesquisa:
 - iOS mostra o prompt de Rede Local com texto próprio; nada vaza sem pareamento.
 
 ### 2.5 Riscos
-- **E0 é go/no-go.** Se o mDNS do iroh não funcionar no iOS, plano B: descoberta via **Bonjour nativo** (bridge Swift `NWBrowser`) ou conexão por endereço salvo do par (sem descoberta) + re-pareamento por QR quando o IP muda.
-- Migração de schema mexe no coração da persistência → **fazer depois dos testes (Fase B) estarem verdes**.
+- **Descoberta no iOS é o risco central** (resolvido por decisão, não por spike): o mDNS cru do iroh exige o entitlement multicast, que a Apple nega para mDNS direto. O caminho é Bonjour nativo (sem entitlement) + DNS-SD no Windows. Se o `NSNetService` não resolver host/porta como esperado (o `NWBrowser` do iOS não resolve sem abrir conexão), o fallback é publicar o IP:porta no TXT do serviço.
+- Migração de schema mexe no coração da persistência → fatia isolada (P1), depois dos testes verdes.
+- Restaurar backup num aparelho novo deixa linhas com o `device_id` antigo: a purga de lápides olha para os **pares**, não para a origem, então nada trava.
 
 ---
 
@@ -321,7 +327,7 @@ Ordem confirmada pelo usuário. Cada fatia termina com o CI verde e um PR.
 | **S7** | Windows: conf NSIS per-user x64 + ícone `.ico` + **job de build no CI Windows** (artefato do instalador) + verificação manual do instalador numa máquina Windows | C1–C4 | S2 |
 | **S8** | Updater (GitHub Releases, Windows) + workflow de release por tag (versão automática) + CSP | C6, hardening | S7 |
 | **S9** | iOS/SideStore: `.ipa`, `docs/IOS-SIDELOAD.md`, verificação no device (Mac) | D1–D3 | S6 |
-| **S10** | Sync P2P: **spike E0 primeiro**, depois E1–E9 | E0–E9 | S4, S7 |
+| **S10** | Sync P2P: **P1–P5** (P1 metadados ✅; P2 engine; P3 pareamento; P4 descoberta iOS; P5 UI). Decisões e protocolo: `docs/SYNC.md` | P1–P6 | S4, S7 |
 
 > S8 entregue em dois PRs: **CSP** (#14) e **updater + release por tag** (#15).
 
@@ -339,7 +345,9 @@ Ordem aprovada numa sessão de alinhamento: polimentos/bugs → Notas → Tracke
 
 Detalhes de estado e o que ficou pendente de verificação manual: `context/atlas-handoff-s11-s14.md`.
 
-> Segue **S10 (sync P2P)** como próxima fatia, e continua valendo: rodar o **spike E0** e revisar antes de implementar.
+> Segue **S10 (sync P2P)** como próxima fatia, em 5 partes (P1–P5). As decisões,
+> o protocolo e o bloqueador do iOS estão em **`docs/SYNC.md`**; o "spike E0"
+> virou **P2 (PoC Windows↔Windows)** + verificação no iPhone depois de P4.
 
 
 **Fora do ciclo** (escolhas do usuário): ícone novo (1024 sem alpha), assinatura Windows (Azure Trusted Signing), AltStore PAL/notarização, kit completo + migração dos overlays de lançamento/hábito, i18n em `en`, macOS.
@@ -348,14 +356,14 @@ Detalhes de estado e o que ficou pendente de verificação manual: `context/atla
 
 ---
 
-## 8. Decisões adiadas (aguardam resultado do spike)
+## 8. Decisões adiadas
 
-Estas dependem de fatos que só o spike revela — não decidir antes:
+Resolvidas na sessão de sync (out/2026) — ver **`docs/SYNC.md`**:
 
-1. **Sync**: confirmar **iroh + LWW por linha** vs. CRDT (Automerge/Loro) — após validar iroh real no iOS (E0).
-2. **Descoberta no iOS**: mDNS do iroh funciona, ou cai no plano B (Bonjour nativo / re-pareamento por QR).
-3. **Relay/alcance**: só LAN ou relay de internet; política de pareamento e segredo.
-4. **SideStore**: detalhes de pairing/refresh e frequência de re-setup (após o primeiro `.ipa` instalado).
+1. ~~**Sync**: iroh + LWW por linha vs. CRDT~~ → **iroh + LWW por linha** (CRDT descartado).
+2. ~~**Descoberta no iOS**: mDNS do iroh ou plano B~~ → **Bonjour nativo** (mDNS cru é bloqueado por entitlement).
+3. ~~**Relay/alcance**~~ → **só LAN**; pareamento por SAS de 6 dígitos + allowlist de EndpointID.
+4. **SideStore**: detalhes de pairing/refresh e frequência de re-setup (após o primeiro `.ipa` instalado) — segue aberto, depende do usuário.
 
 Ideias registradas mas **não implementadas** (split tabs, API de dados para artifacts, integrações de tracker): ver **`docs/IDEAS.md`**.
 
@@ -366,8 +374,8 @@ Ideias registradas mas **não implementadas** (split tabs, API de dados para art
 - `docs/MVP.md`, `docs/DESIGN.md`, `context/atlas-ios-handoff.md`
 - AltStore PAL no Brasil (CADE, 18/06/2026) e requisitos de publicação: `9to5mac.com` / `faq.altstore.io/developers/distribute-with-altstore-pal`
 - SideStore (refresh automático): `docs.sidestore.io`
-- iroh (P2P, iOS, MdnsDiscovery, iroh-docs, Automerge): `iroh.computer`, `docs.iroh.computer`
-- Permissão de Rede Local no iOS: Apple TN3179; `NSLocalNetworkUsageDescription`/`NSBonjourServices`
+- iroh 1.0 (P2P, bindings Swift/Kotlin oficiais em jun/2026; local-first sem relay): `www.iroh.computer/blog/v1`, `docs.iroh.computer/connecting/local-address-lookup`
+- Permissão de Rede Local + entitlement `com.apple.developer.networking.multicast` (negado para mDNS direto): Apple TN3179, `developer.apple.com/documentation/bundleresources/entitlements/com_apple_developer_networking_multicast`
 - Tauri: Windows Installer, Code Signing, Config (`bundle.iOS.infoPlist`): `v2.tauri.app`
 - Vitest + `@testing-library/svelte` + `vitest-browser-svelte`: `testing-library.com`, `svelte.dev/docs/svelte/testing`
 - SmartScreen/EV (mudança de 2024): `v2.tauri.app/distribute/sign/windows`

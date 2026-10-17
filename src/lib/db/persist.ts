@@ -2,7 +2,7 @@
  * Construtores puros da persistência incremental.
  *
  * Sem I/O: recebem o estado atual e devolvem statements. Isso mantém a lógica
- * de upsert/tombstone testável sem Tauri nem SQLite.
+ * de upsert/tombstone/carimbo testável sem Tauri nem SQLite.
  */
 
 export interface BatchStatement {
@@ -11,16 +11,19 @@ export interface BatchStatement {
 }
 
 /**
- * `INSERT ... ON CONFLICT(id) DO UPDATE`, reativando a linha
+ * `INSERT ... ON CONFLICT(...) DO UPDATE`, reativando a linha
  * (limpa `deleted_at`) a cada escrita.
+ *
+ * `conflict` são as colunas da chave: `['id']` para as tabelas de linha,
+ * `['key']` para `shared_settings` e `['key','owner']` para `counters`.
  */
-export function upsertSql(table: string, columns: string[]): string {
+export function upsertSql(table: string, columns: string[], conflict: string[] = ['id']): string {
 	const placeholders = columns.map((_, index) => `$${index + 1}`).join(', ');
 	const updates = columns
-		.filter((column) => column !== 'id')
+		.filter((column) => !conflict.includes(column))
 		.map((column) => `${column} = excluded.${column}`)
 		.join(', ');
-	return `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders}) ON CONFLICT(id) DO UPDATE SET ${updates}, deleted_at = NULL`;
+	return `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders}) ON CONFLICT(${conflict.join(', ')}) DO UPDATE SET ${updates}, deleted_at = NULL`;
 }
 
 /** Ids que existiam e sumiram → viram lápide (deleção). */
@@ -37,12 +40,83 @@ export function tombstoneStatements(table: string, ids: string[], at: number, de
 	}));
 }
 
-/** Chaves de `app_settings` que nunca são apagadas (não entram no DELETE geral). */
-export const SETTING_KEYS = ['lifeForce', 'preferences', 'experience', 'finance'] as const;
+/** Chaves de `app_settings` que só valem nesta instalação (não sincronizam). */
+export const LOCAL_SETTING_KEYS = ['preferences'] as const;
+
+/**
+ * Singletons que sincronizam como linha comum (LWW por `updated_at`).
+ * Saíram de `app_settings` (sem carimbo) para `shared_settings` (com carimbo).
+ */
+export const SHARED_SETTING_KEYS = ['lifeForce', 'finance'] as const;
+
+/** Chave do contador de XP em `counters` (uma linha por `device_id`). */
+export const XP_COUNTER_KEY = 'experience.totalXp';
 
 export function settingStatements(values: Record<string, unknown>): BatchStatement[] {
-	return SETTING_KEYS.filter((key) => key in values).map((key) => ({
+	return LOCAL_SETTING_KEYS.filter((key) => key in values).map((key) => ({
 		sql: 'INSERT OR REPLACE INTO app_settings (key, value) VALUES ($1, $2)',
 		params: [key, JSON.stringify(values[key])]
 	}));
+}
+
+/** Carimbo de uma linha já gravada: conteúdo + `updated_at`/`device_id` usados. */
+export interface RowStamp {
+	json: string;
+	updatedAt: number;
+	deviceId: string;
+}
+
+/** Linha a gravar: chave lógica, valores (na ordem de `columns`) e o JSON de comparação. */
+export interface PlannedRow {
+	key: string;
+	values: string[];
+	json: string;
+}
+
+export interface PlanRowsOptions {
+	table: string;
+	columns: string[];
+	conflict?: string[];
+	rows: PlannedRow[];
+	previous?: Record<string, RowStamp>;
+	deviceId: string;
+	at: number;
+}
+
+export interface PlanRowsResult {
+	statements: BatchStatement[];
+	stamps: Record<string, RowStamp>;
+	/** Linhas idênticas à última gravação — não vão para o banco. */
+	skipped: number;
+}
+
+/**
+ * Planeja as escritas de uma tabela preservando o carimbo das linhas inalteradas.
+ *
+ * O `saveSnapshot` recebe o snapshot inteiro a cada mudança e antes carimbava
+ * **todas** as linhas com o mesmo `at`/`device_id`. Duas consequências ruins:
+ * a linha herdada de outro aparelho ganhava carimbo novo e vencia uma edição
+ * real feita depois no outro aparelho; e qualquer edição virava delta "novo"
+ * para o cursor do sync (full-state + churn do grafo).
+ *
+ * Aqui a linha só é reescrita quando o conteúdo muda; a inalterada mantém
+ * `updated_at`/`device_id` de origem. Isso também evita IPC por gravação.
+ */
+export function planRows(options: PlanRowsOptions): PlanRowsResult {
+	const { table, columns, conflict = ['id'], rows, previous, deviceId, at } = options;
+	const sql = upsertSql(table, [...columns, 'updated_at', 'device_id'], conflict);
+	const statements: BatchStatement[] = [];
+	const stamps: Record<string, RowStamp> = {};
+	let skipped = 0;
+	for (const row of rows) {
+		const before = previous?.[row.key];
+		if (before && before.json === row.json) {
+			stamps[row.key] = before;
+			skipped += 1;
+			continue;
+		}
+		statements.push({ sql, params: [...row.values, String(at), deviceId] });
+		stamps[row.key] = { json: row.json, updatedAt: at, deviceId };
+	}
+	return { statements, stamps, skipped };
 }

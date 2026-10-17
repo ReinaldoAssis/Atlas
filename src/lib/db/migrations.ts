@@ -9,6 +9,9 @@
  * - SQLite não tem `ADD COLUMN IF NOT EXISTS`: use `addColumn`.
  */
 
+import { habitLogId } from '../atlas';
+import { SHARED_SETTING_KEYS, XP_COUNTER_KEY } from './persist';
+
 export interface SqlContext {
 	execute(sql: string, params?: unknown[]): Promise<void>;
 	select<T>(sql: string, params?: unknown[]): Promise<T[]>;
@@ -34,6 +37,45 @@ export async function ensureColumn(ctx: SqlContext, table: string, column: strin
 async function addColumn(ctx: SqlContext, table: string, column: string, ddl: string): Promise<void> {
 	return ensureColumn(ctx, table, column, ddl);
 }
+
+/** Interpreta o JSON guardado numa coluna; devolve `undefined` se não der. */
+function safeJson<T>(value: unknown): T | undefined {
+	try {
+		return JSON.parse(String(value)) as T;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Normaliza um carimbo legado para epoch ms.
+ *
+ * `notes.updated_at` guardava ISO (`2026-10-16T12:00:00.000Z`) enquanto as
+ * outras tabelas já usavam epoch ms — carimbos de tipos diferentes não se
+ * comparam no LWW. Aqui aceitamos os dois formatos.
+ */
+export function toEpochMs(value: unknown): number {
+	if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
+	const text = String(value ?? '').trim();
+	if (!text) return 0;
+	if (/^-?\d+$/.test(text)) return Number(text);
+	const parsed = Date.parse(text);
+	return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/** Tabelas de linha que já existem antes da v6 (todas com `updated_at`). */
+const PRE_V6_TABLES = [
+	'categories',
+	'transactions',
+	'habits',
+	'habit_logs',
+	'trackers',
+	'tracker_entries',
+	'time_blocks',
+	'graph_domains',
+	'graph_nodes',
+	'graph_edges'
+] as const;
 
 export const migrations: Migration[] = [
 	{
@@ -168,6 +210,148 @@ export const migrations: Migration[] = [
 			await ctx.execute('CREATE INDEX IF NOT EXISTS tracker_entries_by_date ON tracker_entries(occurred_on)');
 			await ctx.execute('CREATE INDEX IF NOT EXISTS trackers_by_updated ON trackers(updated_at)');
 			await ctx.execute('CREATE INDEX IF NOT EXISTS tracker_entries_by_updated ON tracker_entries(updated_at)');
+		}
+	},
+	{
+		version: 6,
+		name: 'sync-metadata-v2',
+		// Metadados que faltavam para o sync P2P (S10/P1). Quatro buracos:
+		// 1. `notes.updated_at` era TEXT ISO enquanto o resto usava epoch ms —
+		//    carimbos de tipos diferentes não ordenam. SQLite não muda o tipo de
+		//    uma coluna, então a tabela é reconstruída.
+		// 2. `folders` não tinha carimbo nenhum (não dava nem para calcular delta).
+		// 3. `lifeForce`/`finance`/`experience` viviam em `app_settings` (sem
+		//    carimbo e sem lápide) → viraram `shared_settings` (LWW por linha) e
+		//    `counters` (uma contribuição por aparelho; a soma é o XP).
+		// 4. `habit_logs` tinha id aleatório com `UNIQUE(habit_id, occurred_on)`:
+		//    dois aparelhos criando o mesmo dia colidiam no merge. O id passa a
+		//    ser derivado de (hábito, data).
+		run: async (ctx) => {
+			const at = Date.now();
+			const deviceRows = await ctx.select<{ value: string }>(
+				'SELECT value FROM app_settings WHERE key = $1',
+				['device_id']
+			);
+			// Instalação nova ainda não tem `device_id` (ele nasce depois das
+			// migrações): o que veio de antes fica sob a origem `legacy`.
+			const deviceId = safeJson<string>(deviceRows[0]?.value) ?? 'legacy';
+			const stamp = String(at);
+
+			// 1. `notes`: reconstrói com `updated_at` em epoch ms.
+			await ctx.execute(`CREATE TABLE IF NOT EXISTS notes_sync (
+				id TEXT PRIMARY KEY, folder_id TEXT, title TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL, updated_at INTEGER NOT NULL DEFAULT 0,
+				pinned INTEGER NOT NULL DEFAULT 0, payload TEXT NOT NULL,
+				deleted_at INTEGER, device_id TEXT
+			)`);
+			const notes = await ctx.select<{
+				id: string;
+				folder_id: string | null;
+				title: string;
+				created_at: string;
+				updated_at: unknown;
+				pinned: unknown;
+				payload: string;
+				deleted_at: unknown;
+				device_id: string | null;
+			}>('SELECT id, folder_id, title, created_at, updated_at, pinned, payload, deleted_at, device_id FROM notes');
+			for (const note of notes) {
+				await ctx.execute(
+					'INSERT OR REPLACE INTO notes_sync (id, folder_id, title, created_at, updated_at, pinned, payload, deleted_at, device_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+					[
+						note.id,
+						note.folder_id ?? null,
+						note.title ?? '',
+						note.created_at ?? '',
+						String(toEpochMs(note.updated_at)),
+						String(Number(note.pinned) ? 1 : 0),
+						note.payload,
+						note.deleted_at == null ? null : toEpochMs(note.deleted_at),
+						note.device_id ?? null
+					]
+				);
+			}
+			await ctx.execute('DROP TABLE notes');
+			await ctx.execute('ALTER TABLE notes_sync RENAME TO notes');
+			await ctx.execute('CREATE INDEX IF NOT EXISTS notes_by_folder ON notes(folder_id)');
+			await ctx.execute('CREATE INDEX IF NOT EXISTS notes_by_updated ON notes(updated_at)');
+
+			// 2. `folders` ganha carimbo (as existentes entram como deste instante).
+			await addColumn(ctx, 'folders', 'updated_at', 'updated_at INTEGER NOT NULL DEFAULT 0');
+			await ctx.execute('UPDATE folders SET updated_at = $1 WHERE updated_at = 0', [stamp]);
+			await ctx.execute('CREATE INDEX IF NOT EXISTS folders_by_updated ON folders(updated_at)');
+
+			// 3a. Singletons sincronizáveis saem de `app_settings`.
+			await ctx.execute(`CREATE TABLE IF NOT EXISTS shared_settings (
+				key TEXT PRIMARY KEY, value TEXT NOT NULL,
+				updated_at INTEGER NOT NULL DEFAULT 0, deleted_at INTEGER, device_id TEXT
+			)`);
+			await ctx.execute('CREATE INDEX IF NOT EXISTS shared_settings_by_updated ON shared_settings(updated_at)');
+			const shared = await ctx.select<{ key: string; value: string }>(
+				`SELECT key, value FROM app_settings WHERE key IN (${SHARED_SETTING_KEYS.map((key) => `'${key}'`).join(', ')})`
+			);
+			for (const row of shared) {
+				await ctx.execute(
+					'INSERT OR REPLACE INTO shared_settings (key, value, updated_at, device_id) VALUES ($1,$2,$3,$4)',
+					[row.key, row.value, stamp, deviceId]
+				);
+			}
+			await ctx.execute(
+				`DELETE FROM app_settings WHERE key IN (${SHARED_SETTING_KEYS.map((key) => `'${key}'`).join(', ')})`
+			);
+
+			// 3b. XP vira contador por aparelho (somar incrementos é o que
+			// sobrevive ao LWW: dois aparelhos ganhando XP não se sobrescrevem).
+			await ctx.execute(`CREATE TABLE IF NOT EXISTS counters (
+				key TEXT NOT NULL, owner TEXT NOT NULL, value INTEGER NOT NULL DEFAULT 0,
+				updated_at INTEGER NOT NULL DEFAULT 0, deleted_at INTEGER, device_id TEXT,
+				PRIMARY KEY (key, owner)
+			)`);
+			await ctx.execute('CREATE INDEX IF NOT EXISTS counters_by_updated ON counters(updated_at)');
+			const experience = await ctx.select<{ value: string }>(
+				"SELECT value FROM app_settings WHERE key = 'experience'"
+			);
+			if (experience.length > 0) {
+				const parsed = safeJson<{ totalXp?: number }>(experience[0].value);
+				const totalXp = Math.max(0, Math.trunc(Number(parsed?.totalXp ?? 0)));
+				await ctx.execute(
+					'INSERT OR REPLACE INTO counters (key, owner, value, updated_at, device_id) VALUES ($1,$2,$3,$4,$5)',
+					[XP_COUNTER_KEY, deviceId, String(totalXp), stamp, deviceId]
+				);
+				await ctx.execute("DELETE FROM app_settings WHERE key = 'experience'");
+			}
+
+			// 4. Bookkeeping de sync: pares confiáveis (P3) e cursor por
+			//    (par × aparelho de origem). A purga de lápides usa `last_sync_at`.
+			await ctx.execute(`CREATE TABLE IF NOT EXISTS sync_peers (
+				endpoint_id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
+				paired_at INTEGER NOT NULL DEFAULT 0, last_sync_at INTEGER NOT NULL DEFAULT 0
+			)`);
+			await ctx.execute(`CREATE TABLE IF NOT EXISTS sync_cursors (
+				peer_id TEXT NOT NULL, owner TEXT NOT NULL,
+				updated_at INTEGER NOT NULL DEFAULT 0,
+				PRIMARY KEY (peer_id, owner)
+			)`);
+
+			// 5. Log de hábito com id determinístico.
+			const logs = await ctx.select<{ id: string; payload: string }>('SELECT id, payload FROM habit_logs');
+			for (const log of logs) {
+				const parsed = safeJson<{ habitId?: string; date?: string }>(log.payload);
+				if (!parsed?.habitId || !parsed?.date) continue;
+				const nextId = habitLogId(parsed.habitId, parsed.date);
+				if (nextId === log.id) continue;
+				await ctx.execute('UPDATE habit_logs SET id = $1, payload = $2 WHERE id = $3', [
+					nextId,
+					JSON.stringify({ ...parsed, id: nextId }),
+					log.id
+				]);
+			}
+
+			// 6. Linhas sem carimbo (a seed de categorias inseria com default 0)
+			//    nunca seriam enviadas a um par: o cursor começa em 0.
+			for (const table of PRE_V6_TABLES) {
+				await ctx.execute(`UPDATE ${table} SET updated_at = $1 WHERE updated_at = 0`, [stamp]);
+			}
 		}
 	}
 ];

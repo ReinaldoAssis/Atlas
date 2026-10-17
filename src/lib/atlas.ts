@@ -228,6 +228,19 @@ export function id(): string {
 	return `a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/**
+ * Id determinístico do log de um hábito.
+ *
+ * O log é único por (hábito, data) — a tabela tem `UNIQUE(habit_id, occurred_on)`.
+ * Com id aleatório, dois aparelhos criando o log do mesmo dia produzem duas
+ * linhas: o upsert do sync é por `id`, então não cobre e a constraint estoura
+ * (ou sobra duplicata). Derivar o id da chave de negócio faz os dois lados
+ * calcularem a MESMA linha, e aí o LWW resolve valor/undo normalmente.
+ */
+export function habitLogId(habitId: string, date: string): string {
+	return `hlog:${habitId}:${date}`;
+}
+
 export function localDate(value = new Date()): string {
 	const year = value.getFullYear();
 	const month = String(value.getMonth() + 1).padStart(2, '0');

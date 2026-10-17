@@ -7,6 +7,7 @@ import {
 	didMeetTarget,
 	experienceProgress,
 	HABIT_BOOLEAN_LABELS,
+	habitLogId,
 	localDate,
 	money,
 	nextBooleanLog,
@@ -35,6 +36,23 @@ function dailyBooleanHabit(overrides: Partial<Habit> = {}): Habit {
 function log(habitId: string, date: string, value = 1): HabitLog {
 	return { id: `${habitId}-${date}`, habitId, date, value, completed: value > 0 };
 }
+
+describe('habitLogId', () => {
+	it('deriva o id da chave de negócio (hábito + data)', () => {
+		expect(habitLogId('h1', '2026-05-01')).toBe('hlog:h1:2026-05-01');
+	});
+
+	it('é estável entre aparelhos: mesmo hábito e data, mesmo id', () => {
+		// É o que evita duas linhas para o mesmo dia (UNIQUE habit_id + occurred_on)
+		// quando os dois aparelhos criam o log offline.
+		expect(habitLogId('demo-meditar', '2026-05-01')).toBe(habitLogId('demo-meditar', '2026-05-01'));
+	});
+
+	it('separa hábitos e dias diferentes', () => {
+		expect(habitLogId('h1', '2026-05-01')).not.toBe(habitLogId('h1', '2026-05-02'));
+		expect(habitLogId('h1', '2026-05-01')).not.toBe(habitLogId('h2', '2026-05-01'));
+	});
+});
 
 describe('dateOffset', () => {
 	it('anda para trás dentro do mesmo mês', () => {
