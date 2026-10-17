@@ -45,6 +45,9 @@ jobs:
           "version=$($tag.TrimStart('v'))" >> $env:GITHUB_OUTPUT
           Write-Host "release $tag (versão $($tag.TrimStart('v')))"
 
+      - name: Conferir VERSION x tag
+        run: node tools/version.mjs check ${{ steps.version.outputs.version }}
+
       - name: Config do release (versão da tag + artefatos do updater)
         shell: pwsh
         run: |

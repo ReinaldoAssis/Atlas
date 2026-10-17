@@ -2,9 +2,13 @@
 # Build local do Atlas para macOS (arm64).
 #
 # Uso:
-#   tools/build-macos.sh                  # build local (versão do tauri.conf.json)
-#   tools/build-macos.sh --version 0.3.1  # build + upload do .dmg no release v0.3.1
-#   tools/build-macos.sh --version 0.3.1 --no-upload
+#   tools/build-macos.sh                  # usa VERSION e pergunta se sobe o .dmg
+#   tools/build-macos.sh --no-upload      # build só local
+#   tools/build-macos.sh --yes            # usa VERSION e sobe sem perguntar
+#   tools/build-macos.sh --version 0.3.2  # atualiza VERSION/package/tauri e builda
+#
+# A versão vem de `VERSION` (fonte única). Sem --version, o script pergunta
+# `Fazer upload do .dmg para vX? [y/N]` quando o release da tag existe.
 #
 # Saída:
 #   src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Atlas.app
@@ -12,9 +16,6 @@
 #
 # Build **não assinado**: em outra máquina o Gatekeeper bloqueia. Para abrir:
 #   xattr -dr com.apple.quarantine /Applications/Atlas.app
-#
-# O upload usa o `gh` autenticado e exige que o release da tag já exista
-# (espere o workflow `Release` da tag terminar). Rode manualmente.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,21 +36,26 @@ done < <(hdiutil info | awk '
   /^\/Volumes\// { if (image ~ /Atlas_/) print device }
 ')
 
-VERSION=""
+VERSION_ARG=""
 UPLOAD=1
+ASSUME_YES=0
 TARGET="aarch64-apple-darwin"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version)
-      VERSION="${2:?use --version X.Y.Z}"
+      VERSION_ARG="${2:?use --version X.Y.Z}"
       shift 2
       ;;
     --no-upload)
       UPLOAD=0
       shift
       ;;
+    --yes | -y)
+      ASSUME_YES=1
+      shift
+      ;;
     --help | -h)
-      sed -n '2,17p' "$0"
+      sed -n '2,16p' "$0"
       exit 0
       ;;
     *)
@@ -59,20 +65,21 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -n "$VERSION" && ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "build-macos: versão inválida (use X.Y.Z): $VERSION" >&2
-  exit 2
+if [[ -n "$VERSION_ARG" ]]; then
+  if [[ ! "$VERSION_ARG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "build-macos: versão inválida (use X.Y.Z): $VERSION_ARG" >&2
+    exit 2
+  fi
+  # Atualiza a fonte única e os arquivos derivados; o build usa o mesmo valor.
+  node tools/version.mjs set "$VERSION_ARG"
 fi
 
-echo "==> Atlas para macOS ($TARGET${VERSION:+, versão $VERSION})"
+APP_VERSION="$(node tools/version.mjs)"
+echo "==> Atlas para macOS ($TARGET, versão $APP_VERSION)"
 # `--bundles app`: o `bundle_dmg.sh` do Tauri depende de Finder/AppleScript e
 # falha de forma intermitente em build local. O DMG é feito abaixo com
 # `hdiutil`, sem depender de UI.
-if [[ -n "$VERSION" ]]; then
-  npx tauri build --target "$TARGET" --bundles app --config "{\"version\":\"$VERSION\"}"
-else
-  npx tauri build --target "$TARGET" --bundles app
-fi
+npx tauri build --target "$TARGET" --bundles app --config "{\"version\":\"$APP_VERSION\"}"
 
 BUNDLE="src-tauri/target/$TARGET/release/bundle"
 APP="$(ls -d "$BUNDLE"/macos/*.app 2>/dev/null | head -1 || true)"
@@ -97,21 +104,32 @@ ls -ldh "$APP"
 ls -lh "$DMG"
 
 TAG="v${APP_VERSION}"
-if [[ "$UPLOAD" -eq 1 && -n "$VERSION" ]]; then
+if [[ "$UPLOAD" -eq 1 && "$ASSUME_YES" -eq 0 ]]; then
+  if [[ -t 0 ]]; then
+    read -r -p "Fazer upload do .dmg para $TAG? [y/N] " answer || answer=""
+    [[ "$answer" =~ ^[Yy]$ ]] || UPLOAD=0
+  else
+    # Sem terminal (CI/script): não sobe sozinho.
+    UPLOAD=0
+  fi
+fi
+
+if [[ "$UPLOAD" -eq 1 ]]; then
   if ! command -v gh >/dev/null 2>&1; then
     echo "build-macos: 'gh' não encontrado; use --no-upload ou instale o GitHub CLI." >&2
     exit 1
   fi
   if ! gh release view "$TAG" >/dev/null 2>&1; then
-    echo "build-macos: release $TAG ainda não existe." >&2
-    echo "  espere o workflow Release da tag terminar (gh run list --workflow release.yml)." >&2
-    exit 1
+    echo
+    echo "build-macos: release $TAG ainda não existe; build só local."
+    echo "  publique a tag e rode de novo (gh run list --workflow release.yml)."
+    exit 0
   fi
   echo
   echo "==> Upload do .dmg para $TAG"
   gh release upload "$TAG" "$DMG" --clobber
   echo "==> $(gh release view "$TAG" --json url -q .url)"
-elif [[ "$UPLOAD" -eq 1 ]]; then
+else
   echo
-  echo "build-macos: sem --version não há tag para subir; build só local."
+  echo "build-macos: build local de $TAG (sem upload)."
 fi

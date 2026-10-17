@@ -162,11 +162,12 @@
 - **Menu de hábito/tracker**: `⋯` só com hover; long-press abre o menu; fecha ao
   tocar fora; clique resultante do long-press é suprimido; "Editar" abre o
   sheet; mesmos consertos nos Trackers.
-- **Dwell da nota (planejador)**: 1,5 s, só toque/caneta, só com o **centro do
-  bloco** na faixa central de 40–60% da tela; anel de progresso no contorno do
-  bloco, na cor da categoria. 1 nota abre direto; 2+ abre a bolha, que fica até
-  toque fora/rolar/escolher. Mover >8 px antes de 1,5 s cancela o anel e
-  **começa a pintar**; soltar sem mover pinta só a célula.
+- **Dwell da nota (planejador)**: 4 s de **tela parada** (sem toque nem
+  scroll), só em aparelho de toque; anel de progresso em cada bloco com nota
+  visível. Todos os blocos visíveis entram num **dialog agregado** sobre o
+  planejador; tocar a linha abre a nota num segundo sheet dentro do Tempo (sem
+  trocar de aba). Toque/hold cancela a espera e continua pintando/borrando.
+  Fechar o dialog exige um novo gesto para reabrir.
 - **Swipe Hábitos ↔ Trackers**: pager real com as duas views montadas, segue o
   dedo, limiar 48 px / 40% da largura, esquerda = Trackers, direita = Hábitos,
   sem loop, só toque/caneta; animação respeita `prefers-reduced-motion`.
@@ -179,3 +180,7 @@
   nada. Auto-scroll perto das bordas.
 - **Release**: `v0.3.2` só depois do teste no iPhone; build/instalação única no
   fim da implementação.
+- **Versão única**: `VERSION` na raiz é a fonte; `npm run version:set -- X.Y.Z`
+  sincroniza `package.json`, `package-lock.json`, `tauri.conf.json`,
+  `Cargo.toml` e `Cargo.lock`. O rodapé de Configurações e o build macOS leem
+  esse valor; o release falha se a tag não bater com ele.

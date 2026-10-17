@@ -5,7 +5,7 @@
 	import Segmented from '#lib/components/ui/Segmented.svelte';
 	import Sheet from '#lib/components/ui/Sheet.svelte';
 	import Toggle from '#lib/components/ui/Toggle.svelte';
-	import { lastSyncLabel, type SyncPeerStatus, type SyncStatus } from '#lib/sync';
+	import { lastSyncLabel, type SyncPeerStatus, type SyncStatus, type SyncDiscoveryStatus } from '#lib/sync';
 
 	/**
 	 * Configurações seguindo `docs/DESIGN.md` §4: sheet com tiles, sem
@@ -34,6 +34,7 @@
 		oncheckupdates,
 		onsynctoggle,
 		onsyncnow,
+		onsyncdiscoveryrestart,
 		onpair,
 		onunpair
 	}: {
@@ -61,6 +62,7 @@
 		oncheckupdates: () => void;
 		onsynctoggle: (enabled: boolean) => void;
 		onsyncnow: () => void;
+		onsyncdiscoveryrestart: () => void;
 		onpair: () => void;
 		onunpair: (peer: SyncPeerStatus) => void;
 	} = $props();
@@ -80,6 +82,33 @@
 	async function handleCurrency(event: Event) {
 		const select = event.currentTarget as HTMLSelectElement;
 		if (!(await oncurrency(select.value))) select.value = snapshot.preferences.currency;
+	}
+
+	function discoveryLabel(status: SyncDiscoveryStatus): string {
+		if (status.message) return status.message;
+		switch (status.state) {
+			case 'starting':
+				return m.sync_discovery_starting();
+			case 'announcing':
+				return m.sync_discovery_announcing();
+			case 'browsing':
+				return status.found
+					? m.sync_discovery_found({ count: status.found })
+					: m.sync_discovery_browsing();
+			case 'off':
+				return m.sync_discovery_off();
+			default:
+				return m.sync_discovery_error();
+		}
+	}
+
+	async function openAppSettings() {
+		try {
+			const { openUrl } = await import('@tauri-apps/plugin-opener');
+			await openUrl('app-settings:');
+		} catch {
+			// Sem o plugin/permissão, a instrução na mensagem continua valendo.
+		}
 	}
 
 	function submitCategory(event: SubmitEvent) {
@@ -190,6 +219,28 @@
 						/>
 					</div>
 					{#if sync?.running}
+						<div class="row">
+							<span class="lead"><Wifi size={17} /></span>
+							<span class="text">
+								<strong>{m.sync_discovery()}</strong>
+								<small>{sync.discovery ? discoveryLabel(sync.discovery) : m.sync_discovery_off()}</small>
+							</span>
+							<button
+								type="button"
+								class="btn compact"
+								disabled={syncBusy}
+								onclick={onsyncdiscoveryrestart}
+							>
+								{m.sync_discovery_restart()}
+							</button>
+						</div>
+						{#if sync.discovery?.state === 'permission'}
+							<div class="actions">
+								<button type="button" class="btn" onclick={openAppSettings}>
+									{m.sync_discovery_settings()}
+								</button>
+							</div>
+						{/if}
 						{#each sync.peers as peer (peer.endpointId)}
 							<div class="row">
 								<span class="lead"><Smartphone size={17} /></span>
@@ -314,6 +365,10 @@
 			<Flame size={16} />
 			{m.settings_pause()}
 		</button>
+
+		<p class="version" aria-label="Versão do app">
+			Atlas {__ATLAS_VERSION__} · {__ATLAS_COMMIT__}
+		</p>
 	</div>
 </Sheet>
 
@@ -526,6 +581,13 @@
 		font-size: 14px;
 		font-weight: 600;
 		cursor: pointer;
+	}
+	.version {
+		margin: 2px 0 0;
+		color: var(--mu);
+		font-size: 11px;
+		text-align: center;
+		letter-spacing: 0.02em;
 	}
 	@media (prefers-reduced-motion: reduce) {
 		.swatch {

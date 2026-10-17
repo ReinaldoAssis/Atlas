@@ -27,6 +27,14 @@
           "path": "$APPDATA/**"
         }
       ]
+    },
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "app-settings:*"
+        }
+      ]
     }
   ]
 }

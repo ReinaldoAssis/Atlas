@@ -93,6 +93,7 @@ pub fn run() {
       sync::commands::sync_stop,
       sync::commands::sync_now,
       sync::commands::sync_status,
+      sync::commands::sync_discovery_restart,
       sync::commands::sync_cursors,
       sync::commands::sync_discovered,
       sync::commands::sync_pair_begin,

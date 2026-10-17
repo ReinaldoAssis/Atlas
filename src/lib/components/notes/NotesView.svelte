@@ -122,7 +122,18 @@
 
 	let suppressClick = false;
 	let drag: { kind: 'note' | 'folder'; id: string; x: number; y: number; active: boolean; ghost?: HTMLElement } | null = null;
-	let longPress: { note: Note; x: number; y: number; timer: ReturnType<typeof setTimeout> } | null = null;
+	let longPress: {
+		kind: 'note' | 'folder';
+		id: string;
+		note?: Note;
+		x: number;
+		y: number;
+		armed: boolean;
+		timer: ReturnType<typeof setTimeout>;
+	} | null = null;
+	/** Card que já "armou" o arrasto (escala + háptico) enquanto o dedo segura. */
+	let armedKey = $state<string | null>(null);
+	let scrollTimer: ReturnType<typeof setInterval> | undefined;
 	let dropTarget: HTMLElement | null = null;
 
 	const activeNotes = $derived(notes.filter((note) => !note.trashedAt));
@@ -201,9 +212,12 @@
 	}
 
 	/* ---------- menu de contexto ---------- */
+	let menuOpenedAt = 0;
+
 	function openMenu(note: Note, x: number, y: number) {
 		const width = 190;
 		const height = 62;
+		menuOpenedAt = Date.now();
 		menuState = {
 			note,
 			x: Math.max(8, Math.min(x, window.innerWidth - width)),
@@ -217,8 +231,10 @@
 		menuState = null;
 	}
 
-	function onWindowClick(event: MouseEvent) {
-		if (menuState && !(event.target as HTMLElement | null)?.closest?.('.nt-menu')) closeMenu();
+	function closeMenuFromBackdrop() {
+		// O clique que solta o long-press chega logo depois de abrir: ignora.
+		if (Date.now() - menuOpenedAt < 320) return;
+		closeMenu();
 	}
 
 	function onKeyDown(event: KeyboardEvent) {
@@ -610,7 +626,11 @@
 		await openNote(note, 'write');
 	}
 
-	/* ---------- ponteiro: arrastar (mouse) / contexto (toque) ---------- */
+	/* ---------- ponteiro: arrastar / menu de contexto ---------- */
+	function armKey(kind: 'note' | 'folder', id: string): string {
+		return `${kind}:${id}`;
+	}
+
 	function rowPointerDown(event: PointerEvent, note: Note) {
 		if (event.button !== 0 || (event.target as HTMLElement | null)?.closest('.nt-pin')) return;
 		if (event.pointerType === 'mouse') {
@@ -620,22 +640,42 @@
 		clearLongPress();
 		const { clientX: x, clientY: y } = event;
 		longPress = {
+			kind: 'note',
+			id: note.id,
 			note,
 			x,
 			y,
+			armed: false,
 			timer: setTimeout(() => {
-				suppressClick = true;
-				setTimeout(() => (suppressClick = false), 800);
-				openMenu(note, x, y);
-				longPress = null;
+				if (!longPress) return;
+				longPress.armed = true;
+				armedKey = armKey('note', note.id);
+				haptic(12);
 			}, 480)
 		};
 	}
 
 	function folderPointerDown(event: PointerEvent, folder: NoteFolder) {
 		if (event.button !== 0) return;
-		if (event.pointerType !== 'mouse') return;
-		drag = { kind: 'folder', id: folder.id, x: event.clientX, y: event.clientY, active: false };
+		if (event.pointerType === 'mouse') {
+			drag = { kind: 'folder', id: folder.id, x: event.clientX, y: event.clientY, active: false };
+			return;
+		}
+		clearLongPress();
+		const { clientX: x, clientY: y } = event;
+		longPress = {
+			kind: 'folder',
+			id: folder.id,
+			x,
+			y,
+			armed: false,
+			timer: setTimeout(() => {
+				if (!longPress) return;
+				longPress.armed = true;
+				armedKey = armKey('folder', folder.id);
+				haptic(12);
+			}, 480)
+		};
 	}
 
 	function clearLongPress() {
@@ -643,11 +683,13 @@
 			clearTimeout(longPress.timer);
 			longPress = null;
 		}
+		armedKey = null;
 	}
 
 	function startDrag() {
 		if (!drag || drag.active) return;
 		drag.active = true;
+		armedKey = null;
 		const label = drag.kind === 'note'
 			? (() => { const note = notes.find((item) => item.id === drag?.id); return note ? noteTitle(note) : ''; })()
 			: (folders.find((item) => item.id === drag?.id)?.name ?? '');
@@ -677,22 +719,68 @@
 		}
 	}
 
+	/** Rola a página quando o ghost chega perto do topo/rodapé. */
+	function updateAutoScroll(y: number) {
+		const edge = 76;
+		const speed = y < edge ? -10 : y > window.innerHeight - edge ? 10 : 0;
+		if (!speed) {
+			stopAutoScroll();
+			return;
+		}
+		if (scrollTimer !== undefined) return;
+		scrollTimer = setInterval(() => window.scrollBy(0, speed), 16);
+	}
+
+	function stopAutoScroll() {
+		if (scrollTimer === undefined) return;
+		clearInterval(scrollTimer);
+		scrollTimer = undefined;
+	}
+
 	function onPointerMove(event: PointerEvent) {
 		if (longPress) {
-			if (Math.hypot(event.clientX - longPress.x, event.clientY - longPress.y) > 9) clearLongPress();
+			const distance = Math.hypot(event.clientX - longPress.x, event.clientY - longPress.y);
+			if (!longPress.armed) {
+				if (distance > 9) clearLongPress();
+				return;
+			}
+			if (distance <= 8) return;
+			const pending = longPress;
+			clearLongPress();
+			drag = {
+				kind: pending.kind,
+				id: pending.id,
+				x: event.clientX,
+				y: event.clientY,
+				active: false
+			};
+			startDrag();
+			if (event.cancelable) event.preventDefault();
 			return;
 		}
 		if (!drag) return;
-		const distance = Math.hypot(event.clientX - drag.x, event.clientY - drag.y);
-		if (!drag.active) {
-			if (distance > 8) startDrag();
-			else return;
+		if (drag.active) {
+			moveGhost(event.clientX, event.clientY);
+			updateAutoScroll(event.clientY);
+			if (event.pointerType !== 'mouse' && event.cancelable) event.preventDefault();
+			return;
 		}
-		moveGhost(event.clientX, event.clientY);
+		const distance = Math.hypot(event.clientX - drag.x, event.clientY - drag.y);
+		if (distance > 8) startDrag();
 	}
 
 	function onPointerUp(event: PointerEvent) {
+		const pending = longPress;
 		clearLongPress();
+		stopAutoScroll();
+		if (pending?.armed && event.type === 'pointerup') {
+			// O clique que segue o pointerup não pode abrir a nota/pasta.
+			suppressClick = true;
+			setTimeout(() => (suppressClick = false), 800);
+			if (pending.kind === 'note' && pending.note) {
+				openMenu(pending.note, pending.x, pending.y);
+			}
+		}
 		const current = drag;
 		drag = null;
 		if (!current || !current.active) return;
@@ -728,7 +816,7 @@
 	}
 </script>
 
-<svelte:window onpointermove={onPointerMove} onpointerup={onPointerUp} onpointercancel={onPointerUp} onclick={onWindowClick} onkeydown={onKeyDown} />
+<svelte:window onpointermove={onPointerMove} onpointerup={onPointerUp} onpointercancel={onPointerUp} onkeydown={onKeyDown} />
 
 <section class="nt-prototype nt-anim">
 	<div class="nt-top">
@@ -822,7 +910,7 @@
 					<button class="nt-fo new" data-nt-new onclick={newNote}>+ Nota</button>
 					<button class="nt-fo new" onclick={openNewFolder}>+ Pasta</button>
 					{#each children as folder (folder.id)}
-						<button class="nt-fo" data-folder={folder.id} style={`--cc:${folder.color}`} onpointerdown={(event) => folderPointerDown(event, folder)} onclick={() => { if (suppressClick) return; openFolder(folder.id); }}>
+						<button class="nt-fo" class:nt-armed={armedKey === armKey('folder', folder.id)} data-folder={folder.id} style={`--cc:${folder.color}`} onpointerdown={(event) => folderPointerDown(event, folder)} onclick={() => { if (suppressClick) return; openFolder(folder.id); }}>
 							<FolderIcon color={folder.color} />
 							<span class="nt-fo-name">{folder.name}</span>
 							<span class="nt-fo-tip" role="tooltip">{folderTotalCount(activeNotes, folders, folder.id)} notas</span>
@@ -835,6 +923,7 @@
 				{#each visibleNotes as note (note.id)}
 					<div
 						class="nt-row"
+						class:nt-armed={armedKey === armKey('note', note.id)}
 						role="listitem"
 						data-note={note.id}
 						style={`--cc:${(note.folderId && folders.find((f) => f.id === note.folderId)?.color) || '#454c45'}`}
@@ -873,8 +962,13 @@
 </section>
 
 {#if menuState}
-	<div class="nt-menu" role="menu" style={`left:${menuState.x}px; top:${menuState.y}px`}>
-		<button class="danger" role="menuitem" onclick={() => requestDelete(menuState!.note)}>
+	<div class="nt-menu-ov" role="presentation" onclick={closeMenuFromBackdrop}></div>
+	<div
+		class="nt-menu"
+		role="menu"
+		style={`left:${menuState.x}px; top:${menuState.y}px; --nt-tint:${(menuState.note.folderId && folders.find((f) => f.id === menuState!.note.folderId)?.color) || '#8d968a'}`}
+	>
+		<button class="danger" role="menuitem" onclick={() => { const note = menuState!.note; closeMenu(); requestDelete(note); }}>
 			<Trash2 size={15} /> Excluir nota
 		</button>
 	</div>

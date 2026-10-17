@@ -31,6 +31,7 @@ import { checkForUpdate, relaunchApp, updaterSupportedHere } from '#lib/updater'
 		onSyncApplied,
 		shortId,
 		syncDiscovered,
+		syncDiscoveryRestart,
 		syncNow,
 		syncPairBegin,
 		syncPairConfirm,
@@ -51,6 +52,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	import GraphView from '#lib/components/graph/GraphView.svelte';
 	import NotesView from '#lib/components/notes/NotesView.svelte';
 	import TrackersView from '#lib/components/habits/TrackersView.svelte';
+	import PlannerNotesSheet from '#lib/components/time/PlannerNotesSheet.svelte';
+	import PlannerNoteSheet from '#lib/components/time/PlannerNoteSheet.svelte';
 	import SettingsSheet from '#lib/components/settings/SettingsSheet.svelte';
 	import SyncIntroSheet from '#lib/components/settings/SyncIntroSheet.svelte';
 	import SyncPairSheet from '#lib/components/settings/SyncPairSheet.svelte';
@@ -92,6 +95,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let activeTab = $state<NavigationKey>('dashboard');
 	/** Sub-aba do módulo Hábitos: hábitos recorrentes ou trackers. */
 	let habitView = $state<'habits' | 'trackers'>('habits');
+	let habitPagerEl = $state<HTMLDivElement>();
 	let notesState = $state<NotesState>({ notes: [], folders: [] });
 	let notesVersion = $state(0);
 	/** Pede ao NotesView para reler do banco (merge de outro aparelho). */
@@ -128,6 +132,15 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	/** Bolha de notas de um horário no planejador. */
 	let timeGridEl = $state<HTMLElement | null>(null);
 	let plannerBubble: TimeBubble | null = null;
+	let plannerBubbleCurrent: NoteRef[] = [];
+	/** Auto-dwell: tela parada por 4 s abre o dialog das notas visíveis. */
+	let autoDwellTimer: ReturnType<typeof setTimeout> | undefined;
+	let autoDwellRings: SVGSVGElement[] = [];
+	let autoDwellAllowed = true;
+	let autoDwellUnlockAt = 0;
+	let plannerNotesOpen = $state(false);
+	let plannerNotesItems = $state<{ note: Note; label: string; color: string }[]>([]);
+	let plannerNoteOpen = $state<Note | null>(null);
 	let editingTransactionId = $state('');
 	let formError = $state('');
 	let wasPaused = $state(false);
@@ -428,6 +441,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let habitMenu = $state<{ habit: Habit; x: number; y: number } | null>(null);
 	let habitPressTimer: ReturnType<typeof setTimeout> | undefined;
 	let habitPressOrigin = { x: 0, y: 0 };
+	/** O clique que fecha o long-press não pode registrar/abrir o hábito. */
+	let habitPressSuppress = false;
 	let habitValues = $state<Record<string, string>>({});
 	let habitSheet = $state<Habit | null>(null);
 	let habitSheetValue = $state(0);
@@ -696,6 +711,18 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		await startSync();
 	}
 
+	async function restartSyncDiscovery() {
+		syncBusy = true;
+		try {
+			sync = await syncDiscoveryRestart();
+		} catch (error) {
+			toastMessage(m.sync_error(), { warning: true });
+			console.error(error);
+		} finally {
+			syncBusy = false;
+		}
+	}
+
 	async function refreshPairDevices() {
 		if (!pairOpen) return;
 		try {
@@ -873,8 +900,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	function prototypePresets(habit: Habit): number[] {
 		if (habit.metric === 'duration') return [15, 30, 45, 60].map((value) => Math.min(value, prototypeSheetMax(habit)));
-		if (habit.unit.toLowerCase() === 'ml') return [250, 500, 1000].map((value) => Math.min(value, prototypeSheetMax(habit)));
-		return [Math.max(1, Math.ceil(habit.target / 2)), habit.target, Math.min(prototypeSheetMax(habit), Math.ceil(habit.target * 1.5))];
+		// Contagem: atalhos em 1/4, 1/2, 3/4 e o range completo do sheet.
+		const max = prototypeSheetMax(habit);
+		return [0.25, 0.5, 0.75, 1].map((ratio) => Math.max(1, Math.round(max * ratio)));
 	}
 
 	function weeklyValue(habit: Habit): number {
@@ -1366,14 +1394,47 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	function startHabitPress(event: PointerEvent, habit: Habit) {
 		if (event.button !== 0 || event.pointerType === 'mouse') return;
+		if ((event.target as HTMLElement | null)?.closest('.habit-prototype-pip')) return;
+		habitPressSuppress = false;
 		habitPressOrigin = { x: event.clientX, y: event.clientY };
 		clearTimeout(habitPressTimer);
-		habitPressTimer = setTimeout(() => openHabitMenu(habit, event.clientX, event.clientY), 460);
+		habitPressTimer = setTimeout(() => {
+			habitPressSuppress = true;
+			openHabitMenu(habit, event.clientX, event.clientY);
+		}, 460);
 	}
 
 	function cancelHabitPress() {
 		clearTimeout(habitPressTimer);
 	}
+
+	/* ---------- pager Hábitos ↔ Trackers (scroll nativo) ---------- */
+	function changeHabitView(next: 'habits' | 'trackers') {
+		habitView = next;
+		if (!habitPagerEl) return;
+		habitPagerEl.scrollTo({
+			left: (next === 'trackers' ? 1 : 0) * habitPagerEl.clientWidth,
+			behavior: prefersReducedMotion() ? 'auto' : 'smooth'
+		});
+	}
+
+	function onHabitScroll() {
+		if (!habitPagerEl) return;
+		const width = habitPagerEl.clientWidth;
+		if (!width) return;
+		const next = Math.round(habitPagerEl.scrollLeft / width) === 1 ? 'trackers' : 'habits';
+		if (next === habitView) return;
+		habitView = next;
+		pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 4);
+	}
+
+	// Mantém o scroll alinhado quando a aba muda por fora (Segmented, reload).
+	$effect(() => {
+		const pager = habitPagerEl;
+		if (!pager) return;
+		const target = (habitView === 'trackers' ? 1 : 0) * pager.clientWidth;
+		if (Math.abs(pager.scrollLeft - target) > 4) pager.scrollLeft = target;
+	});
 
 	async function deleteHabit(habit: Habit) {
 		if (!snapshot) return;
@@ -1417,7 +1478,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	async function saveHabit(event: SubmitEvent) {
 		event.preventDefault();
 		if (!snapshot) return;
-		if (!habitForm.name.trim() || !habitForm.scheduledDays.length || (habitForm.metric !== 'boolean' && Number(habitForm.target) <= 0)) {
+		if (!habitForm.name.trim() || (habitForm.metric !== 'weekly' && !habitForm.scheduledDays.length) || (habitForm.metric !== 'boolean' && Number(habitForm.target) <= 0)) {
 			formError = 'Informe um nome, uma meta válida e pelo menos um dia.';
 			return;
 		}
@@ -1432,9 +1493,22 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const fields = {
 			name: habitForm.name.trim(),
 			metric: habitForm.metric,
-			unit: habitForm.metric === 'duration' ? 'min' : habitForm.unit.trim(),
-			target: habitForm.metric === 'boolean' ? 1 : Number(habitForm.target),
-			scheduledDays: [...habitForm.scheduledDays],
+			unit:
+				habitForm.metric === 'duration'
+					? 'min'
+					: habitForm.metric === 'weekly'
+						? 'semana'
+						: habitForm.unit.trim(),
+			target:
+				habitForm.metric === 'boolean'
+					? 1
+					: habitForm.metric === 'weekly'
+						? Math.max(1, Math.min(7, Number(habitForm.target)))
+						: Number(habitForm.target),
+			scheduledDays:
+				habitForm.metric === 'weekly'
+					? [0, 1, 2, 3, 4, 5, 6]
+					: [...habitForm.scheduledDays],
 			reminder: habitForm.reminder || undefined,
 			...labels
 		};
@@ -1667,18 +1741,300 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		plannerBubble?.hide(true);
 	}
 
-	// Cria a bolha quando a grade do planejador está montada e liga o hover das células.
+	function plannerBlockTint(blockId: string): string {
+		const block = snapshot?.timeBlocks.find((item) => item.id === blockId);
+		return (block ? currentCategory(block.categoryId)?.color : null) ?? '#d4f25a';
+	}
+
+	function plannerBubbleHtml(items: NoteRef[]): string {
+		const rows = items
+			.map(
+				(item, index) =>
+					`<button class="tbb-r" data-i="${index}"><div class="tbb-1">${escapeText(item.note.title || 'Sem título')}</div><div class="tbb-2">${escapeText(noteExcerpt(item.note.body))}</div></button>`
+			)
+			.join('');
+		return `<div class="tbb-lb">Notas neste horário</div>${rows}`;
+	}
+
+	function showPlannerBubble(anchor: HTMLElement, items: NoteRef[], blockId: string) {
+		plannerBubbleCurrent = items;
+		plannerBubble?.show(anchor, plannerBubbleHtml(items), plannerBlockTint(blockId));
+	}
+
+	/** Células que pertencem ao mesmo bloco (um bloco pode ocupar vários slots). */
+	function dwellBlockCells(blockId: string): HTMLElement[] {
+		const grid = timeGridEl;
+		if (!grid || !blockId) return [];
+		return Array.from(grid.querySelectorAll<HTMLElement>(`[data-tp-block="${CSS.escape(blockId)}"]`));
+	}
+
+	function dwellBlockRect(blockId: string): DOMRect | null {
+		const cells = dwellBlockCells(blockId);
+		if (!cells.length) return null;
+		let top = Number.POSITIVE_INFINITY;
+		let left = Number.POSITIVE_INFINITY;
+		let right = Number.NEGATIVE_INFINITY;
+		let bottom = Number.NEGATIVE_INFINITY;
+		for (const cell of cells) {
+			const rect = cell.getBoundingClientRect();
+			top = Math.min(top, rect.top);
+			left = Math.min(left, rect.left);
+			right = Math.max(right, rect.right);
+			bottom = Math.max(bottom, rect.bottom);
+		}
+		return new DOMRect(left, top, right - left, bottom - top);
+	}
+
+	/** Blocos com nota que estão visíveis na tela neste momento. */
+	function visibleNoteBlocks(): string[] {
+		const grid = timeGridEl;
+		if (!grid) return [];
+		const ids = new Set<string>();
+		for (const cell of grid.querySelectorAll<HTMLElement>('[data-tp-block]')) {
+			const id = cell.dataset.tpBlock;
+			if (!id || !timeBlockNotes.get(id)?.length) continue;
+			const rect = cell.getBoundingClientRect();
+			if (
+				rect.bottom <= 0 ||
+				rect.top >= window.innerHeight ||
+				rect.right <= 0 ||
+				rect.left >= window.innerWidth
+			) {
+				continue;
+			}
+			ids.add(id);
+		}
+		return [...ids];
+	}
+
+	/** Agrega as notas de todos os blocos visíveis, sem repetir a mesma nota. */
+	function plannerNoteItems(blockIds: string[]): { note: Note; label: string; color: string }[] {
+		const rows: { note: Note; label: string; color: string; startAt: string }[] = [];
+		for (const blockId of blockIds) {
+			const block = snapshot?.timeBlocks.find((item) => item.id === blockId);
+			const label = block ? `${shortDay(block.startAt.slice(0, 10))} ${block.startAt.slice(11, 16)}` : '';
+			for (const ref of timeBlockNotes.get(blockId) ?? []) {
+				const note = notesState.notes.find((item) => item.id === ref.note.id) ?? (ref.note as Note);
+				rows.push({
+					note,
+					label,
+					color: plannerBlockTint(blockId),
+					startAt: block?.startAt ?? ''
+				});
+			}
+		}
+		rows.sort((a, b) => a.startAt.localeCompare(b.startAt));
+		const seen = new Set<string>();
+		return rows
+			.filter((row) => {
+				if (seen.has(row.note.id)) return false;
+				seen.add(row.note.id);
+				return true;
+			})
+			.map(({ note, label, color }) => ({ note, label, color }));
+	}
+
+	function clearDwellRings() {
+		for (const ring of autoDwellRings) ring.remove();
+		autoDwellRings = [];
+	}
+
+	function addDwellRing(blockId: string) {
+		const rect = dwellBlockRect(blockId);
+		if (!rect) return;
+		const margin = 3;
+		const width = rect.width + margin * 2;
+		const height = rect.height + margin * 2;
+		const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+		svg.setAttribute('class', 'tp-dwell-ring');
+		svg.setAttribute('width', String(width));
+		svg.setAttribute('height', String(height));
+		svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+		svg.setAttribute('aria-hidden', 'true');
+		svg.style.left = `${rect.left - margin}px`;
+		svg.style.top = `${rect.top - margin}px`;
+		svg.style.width = `${width}px`;
+		svg.style.height = `${height}px`;
+		const outline = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+		outline.setAttribute('x', '1');
+		outline.setAttribute('y', '1');
+		outline.setAttribute('width', String(Math.max(0, width - 2)));
+		outline.setAttribute('height', String(Math.max(0, height - 2)));
+		outline.setAttribute('rx', '7');
+		outline.setAttribute('fill', 'none');
+		outline.setAttribute('pathLength', '100');
+		outline.style.strokeDasharray = '100';
+		outline.style.strokeDashoffset = prefersReducedMotion() ? '0' : '100';
+		outline.setAttribute('stroke-width', '2.5');
+		outline.style.stroke = plannerBlockTint(blockId);
+		svg.appendChild(outline);
+		document.body.appendChild(svg);
+		autoDwellRings.push(svg);
+		if (prefersReducedMotion()) return;
+		requestAnimationFrame(() => {
+			outline.style.transition = 'stroke-dashoffset 4s linear';
+			outline.style.strokeDashoffset = '0';
+		});
+	}
+
+	function showDwellRings(blockIds: string[]) {
+		clearDwellRings();
+		for (const blockId of blockIds) addDwellRing(blockId);
+	}
+
+	function cancelAutoDwell() {
+		if (autoDwellTimer) clearTimeout(autoDwellTimer);
+		autoDwellTimer = undefined;
+		clearDwellRings();
+	}
+
+	function autoDwellEligible(): boolean {
+		if (activeTab !== 'time' || !timeGridEl) return false;
+		if (modal || habitSheet || timeSummaryOpen || timeCategorySheet.open) return false;
+		if (plannerNotesOpen || plannerNoteOpen || moreMenuOpen || quickMenuOpen) return false;
+		return window.matchMedia('(hover: none)').matches;
+	}
+
+	/** Agenda a abertura automática depois de 4 s sem toque/scroll. */
+	function scheduleAutoDwell() {
+		cancelAutoDwell();
+		if (!autoDwellAllowed || Date.now() < autoDwellUnlockAt || !autoDwellEligible()) return;
+		const blocks = visibleNoteBlocks();
+		if (!blocks.length) return;
+		showDwellRings(blocks);
+		autoDwellTimer = setTimeout(() => {
+			autoDwellTimer = undefined;
+			if (!autoDwellAllowed || !autoDwellEligible()) {
+				cancelAutoDwell();
+				return;
+			}
+			const current = visibleNoteBlocks();
+			const items = plannerNoteItems(current.length ? current : blocks);
+			cancelAutoDwell();
+			if (!items.length) return;
+			plannerNotesItems = items;
+			plannerNotesOpen = true;
+			autoDwellAllowed = false;
+			pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 10);
+			playTone(660, 0.08, 'sine', 0.04, snapshot?.preferences.soundEnabled ?? true);
+		}, 4000);
+	}
+
+	function openPlannerNote(note: Note) {
+		plannerNoteOpen = note;
+		cancelAutoDwell();
+	}
+
+	function closePlannerNotes() {
+		plannerNotesOpen = false;
+		plannerNoteOpen = null;
+		autoDwellAllowed = false;
+		autoDwellUnlockAt = Date.now() + 500;
+		cancelAutoDwell();
+	}
+
+	function closePlannerNote() {
+		plannerNoteOpen = null;
+		autoDwellAllowed = false;
+		autoDwellUnlockAt = Date.now() + 500;
+	}
+
+	// Abre o dialog das notas quando a tela do planejador fica parada.
+	$effect(() => {
+		const grid = timeGridEl;
+		if (activeTab !== 'time' || !grid) {
+			cancelAutoDwell();
+			return;
+		}
+		autoDwellAllowed = true;
+		autoDwellUnlockAt = 0;
+		let scrollTimer: ReturnType<typeof setTimeout> | undefined;
+		let wheelTimer: ReturnType<typeof setTimeout> | undefined;
+		const inPlanner = (target: EventTarget | null) =>
+			target instanceof Element && Boolean(target.closest('.tp-prototype'));
+		const onPointerDown = (event: PointerEvent) => {
+			if (Date.now() < autoDwellUnlockAt) return;
+			// Toque cancela a espera; só um gesto no planejador rearma.
+			cancelAutoDwell();
+			if (inPlanner(event.target)) autoDwellAllowed = true;
+		};
+		const onPointerUp = (event: PointerEvent) => {
+			if (Date.now() < autoDwellUnlockAt) return;
+			if (!inPlanner(event.target)) return;
+			autoDwellAllowed = true;
+			scheduleAutoDwell();
+		};
+		const onScroll = (event: Event) => {
+			const target = event.target;
+			const plannerScroll =
+				target === document ||
+				target === window ||
+				(target instanceof Element && target.classList.contains('tp-scroll'));
+			if (!plannerScroll) return;
+			cancelAutoDwell();
+			autoDwellAllowed = true;
+			if (scrollTimer) clearTimeout(scrollTimer);
+			if (Date.now() >= autoDwellUnlockAt) {
+				scrollTimer = setTimeout(() => scheduleAutoDwell(), 220);
+			}
+		};
+		const onWheel = () => {
+			cancelAutoDwell();
+			autoDwellAllowed = true;
+			if (wheelTimer) clearTimeout(wheelTimer);
+			if (Date.now() >= autoDwellUnlockAt) {
+				wheelTimer = setTimeout(() => scheduleAutoDwell(), 220);
+			}
+		};
+		const start = setTimeout(() => {
+			autoDwellAllowed = true;
+			scheduleAutoDwell();
+		}, 250);
+		window.addEventListener('pointerdown', onPointerDown, true);
+		window.addEventListener('pointerup', onPointerUp, true);
+		window.addEventListener('pointercancel', onPointerUp, true);
+		window.addEventListener('scroll', onScroll, true);
+		window.addEventListener('wheel', onWheel, { passive: true });
+		return () => {
+			clearTimeout(start);
+			if (scrollTimer) clearTimeout(scrollTimer);
+			if (wheelTimer) clearTimeout(wheelTimer);
+			window.removeEventListener('pointerdown', onPointerDown, true);
+			window.removeEventListener('pointerup', onPointerUp, true);
+			window.removeEventListener('pointercancel', onPointerUp, true);
+			window.removeEventListener('scroll', onScroll, true);
+			window.removeEventListener('wheel', onWheel);
+			cancelAutoDwell();
+		};
+	});
+
+	// Qualquer sheet aberto suspende o auto-dwell.
+	$effect(() => {
+		if (
+			modal ||
+			habitSheet ||
+			timeSummaryOpen ||
+			timeCategorySheet.open ||
+			plannerNotesOpen ||
+			plannerNoteOpen ||
+			moreMenuOpen ||
+			quickMenuOpen
+		) {
+			cancelAutoDwell();
+		}
+	});
+
+	// Cria a bolha de hover do planejador (desktop).
 	$effect(() => {
 		const grid = timeGridEl;
 		if (!grid) return;
-		let current: NoteRef[] = [];
 		const bubble = new TimeBubble({
 			interactive: true,
 			offset: 8,
 			sound: snapshot?.preferences.soundEnabled ?? true,
 			haptics: snapshot?.preferences.hapticsEnabled ?? true,
 			onRowClick: (index) => {
-				const item = current[index];
+				const item = plannerBubbleCurrent[index];
 				if (item) openNoteFromPlanner(item.note.id);
 			}
 		});
@@ -1691,15 +2047,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 				if (bubble.isOpen) bubble.later();
 				return;
 			}
-			const block = snapshot?.timeBlocks.find((item) => item.id === blockId);
-			current = found;
-			const rows = found
-				.map(
-					(item, index) =>
-						`<button class="tbb-r" data-i="${index}"><div class="tbb-1">${escapeText(item.note.title || 'Sem título')}</div><div class="tbb-2">${escapeText(noteExcerpt(item.note.body))}</div></button>`
-				)
-				.join('');
-			bubble.show(cell, `<div class="tbb-lb">Notas neste horário</div>${rows}`, block ? currentCategory(block.categoryId)?.color ?? '#d4f25a' : '#d4f25a');
+			showPlannerBubble(cell, found, blockId);
 		};
 		const onLeave = () => bubble.later();
 		grid.addEventListener('pointerover', onOver);
@@ -1770,6 +2118,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function handleTimeScroll() {
+		cancelAutoDwell();
 		hideBlockNotes();
 		if (!timeScroll) return;
 		timeVisibleStart = Math.round(timeScroll.scrollLeft / timeColumnWidth);
@@ -1869,6 +2218,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const cell = timeCellFromEvent(event);
 		if (!cell) return;
 		timePaintStart = [event.clientX, event.clientY];
+		cancelAutoDwell();
 		if (event.pointerType === 'mouse') {
 			startTimePaint(cell);
 			return;
@@ -2729,89 +3079,102 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 									{ value: 'trackers', label: 'Trackers' }
 								]}
 								value={habitView}
-								onchange={(value) => (habitView = value === 'trackers' ? 'trackers' : 'habits')}
+								onchange={(value) => changeHabitView(value === 'trackers' ? 'trackers' : 'habits')}
 							/>
 						</div>
-						{#if habitView === 'trackers'}
-							<TrackersView
-								trackers={snapshot.trackers}
-								entries={snapshot.trackerEntries}
-								sound={snapshot.preferences.soundEnabled}
-								haptics={snapshot.preferences.hapticsEnabled}
-								oncreatetracker={(tracker) => saveTracker(tracker, true)}
-								onupdatetracker={(tracker) => saveTracker(tracker, false)}
-								onarchive={archiveTracker}
-								ondeletetracker={deleteTracker}
-								oncreateentry={(entry) => saveTrackerEntry(entry, true)}
-								onupdateentry={(entry) => saveTrackerEntry(entry, false)}
-								ondeleteentry={deleteTrackerEntry}
-							/>
-						{:else}
-						<section class="habit-prototype" aria-label="Hábitos">
-							<div class="habit-prototype-top">
-								<div class="habit-prototype-level"><small>Nível {levelProgress.level}</small><div class="habit-prototype-xpbar"><i style={`width:${levelProgress.currentXp / levelProgress.nextLevelXp * 100}%`}></i></div></div>
-							</div>
+						<div
+							class="habit-pager"
+							role="group"
+							aria-label="Hábitos e trackers"
+							bind:this={habitPagerEl}
+							onscroll={onHabitScroll}
+						>
+							<div class="habit-pane" aria-hidden={habitView !== 'habits'} inert={habitView !== 'habits'}>
+									<section class="habit-prototype" aria-label="Hábitos">
+										<div class="habit-prototype-top">
+											<div class="habit-prototype-level"><small>Nível {levelProgress.level}</small><div class="habit-prototype-xpbar"><i style={`width:${levelProgress.currentXp / levelProgress.nextLevelXp * 100}%`}></i></div></div>
+										</div>
 
-							<div class="habit-prototype-grid">
-								<section class="habit-prototype-card habit-prototype-wide habit-prototype-hero">
-									<div class="habit-prototype-ring"><svg width="84" height="84" viewBox="0 0 84 84" aria-hidden="true"><circle cx="42" cy="42" r="34" class="habit-prototype-ring-track"/><circle cx="42" cy="42" r="34" class="habit-prototype-ring-value" style={`stroke-dashoffset:${214 * (1 - (prototypeTodayGoal ? Math.min(prototypeTodayDone, prototypeTodayGoal) / prototypeTodayGoal : 0))}`}/></svg><strong>{Math.min(prototypeTodayDone, prototypeTodayGoal)}<small>/{prototypeTodayGoal}</small></strong></div>
-									<div><h2>{prototypeTodayGoal > 0 && prototypeTodayDone >= prototypeTodayGoal ? 'Meta concluída' : 'Meta do dia'}</h2><p>{prototypeTodayGoal > 0 && prototypeTodayDone >= prototypeTodayGoal ? 'Continue se quiser ir além' : `Faltam ${Math.max(0, prototypeTodayGoal - prototypeTodayDone)}`}</p></div>
-								</section>
-								<section class="habit-prototype-card habit-prototype-wide habit-prototype-week" aria-label="Sequência da semana">
-									{#each habitWeekDays as day, index}
-										{@const reached = day.goal > 0 && day.done >= day.goal}
-										<div class:done={reached} class:today={day.date === today} class="habit-prototype-day"><span>{#if reached}<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/></svg>{/if}</span>{['S', 'T', 'Q', 'Q', 'S', 'S', 'D'][index]}</div>
-									{/each}
-								</section>
-							</div>
-
-							<div class="habit-prototype-grid habit-prototype-habits">
-								<button class="habit-prototype-card habit-prototype-wide habit-prototype-empty" onclick={() => openHabit()}>
-									<Target size={20} /> {snapshot.habits.filter((habit) => habit.active).length ? 'Novo hábito' : 'Criar primeiro hábito'}
-								</button>
-								{#each snapshot.habits.filter((habit) => habit.active) as habit}
-									{#if habit.metric === 'weekly'}
-										{@const count = weeklyValue(habit)}
-										{@const complete = count >= habit.target}
-										<div class="hcard habit-prototype-wide">
-											<section class:done={complete} class="habit-prototype-card habit-prototype-wide habit-prototype-pips" data-habit-id={habit.id}>
-												<div class="habit-prototype-row"><b>{habit.name}</b><small>{count} de {habit.target} na semana</small></div>
-												<div class="habit-prototype-pip-track">
-													{#each Array.from({ length: WEEK_MAX }, (_, index) => index + 1) as step}
-														<button class="habit-prototype-pip" class:on={step <= count} class:goal={step === habit.target} aria-label={`${step} de ${WEEK_MAX} na semana`} aria-pressed={step <= count} onclick={() => setWeeklyValue(habit, count === step ? step - 1 : step)}></button>
-													{/each}
-												</div>
+										<div class="habit-prototype-grid">
+											<section class="habit-prototype-card habit-prototype-wide habit-prototype-hero">
+												<div class="habit-prototype-ring"><svg width="84" height="84" viewBox="0 0 84 84" aria-hidden="true"><circle cx="42" cy="42" r="34" class="habit-prototype-ring-track"/><circle cx="42" cy="42" r="34" class="habit-prototype-ring-value" style={`stroke-dashoffset:${214 * (1 - (prototypeTodayGoal ? Math.min(prototypeTodayDone, prototypeTodayGoal) / prototypeTodayGoal : 0))}`}/></svg><strong>{Math.min(prototypeTodayDone, prototypeTodayGoal)}<small>/{prototypeTodayGoal}</small></strong></div>
+												<div><h2>{prototypeTodayGoal > 0 && prototypeTodayDone >= prototypeTodayGoal ? 'Meta concluída' : 'Meta do dia'}</h2><p>{prototypeTodayGoal > 0 && prototypeTodayDone >= prototypeTodayGoal ? 'Continue se quiser ir além' : `Faltam ${Math.max(0, prototypeTodayGoal - prototypeTodayDone)}`}</p></div>
 											</section>
-											<button class="hcard-more" aria-label={`Opções de ${habit.name}`} onclick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openHabitMenu(habit, rect.left, rect.bottom + 6); }}><MoreHorizontal size={16} /></button>
+											<section class="habit-prototype-card habit-prototype-wide habit-prototype-week" aria-label="Sequência da semana">
+												{#each habitWeekDays as day, index}
+													{@const reached = day.goal > 0 && day.done >= day.goal}
+													<div class:done={reached} class:today={day.date === today} class="habit-prototype-day"><span>{#if reached}<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/></svg>{/if}</span>{['S', 'T', 'Q', 'Q', 'S', 'S', 'D'][index]}</div>
+												{/each}
+											</section>
 										</div>
-									{:else}
-										{@const log = snapshot.habitLogs.find((item) => item.habitId === habit.id && item.date === today)}
-										{@const value = log?.value ?? 0}
-										{@const complete = log ? didMeetTarget(habit, value) : false}
-										{@const progress = habit.metric === 'boolean' ? (complete ? 1 : 0) : Math.min(1, value / habit.target)}
-										{@const label = habit.metric === 'boolean' ? (log ? booleanLabelOf(habit, value, HABIT_BOOLEAN_LABELS) : 'Hoje') : prototypeValue(habit, value)}
-										<div class="hcard">
-											<button
-												class:done={complete}
-												class="habit-prototype-card habit-prototype-habit"
-												data-habit-id={habit.id}
-												style={`--habit-progress:${progress}`}
-												onclick={() => (habit.metric === 'boolean' ? logHabit(habit) : openHabitSheet(habit))}
-												oncontextmenu={(event) => { event.preventDefault(); openHabitMenu(habit, event.clientX, event.clientY); }}
-												onpointerdown={(event) => startHabitPress(event, habit)}
-											>
-												<b>{habit.name}</b><span><span class="habit-prototype-value" class:idle={habit.metric === 'boolean' && !log}>{label}</span><br /><small>{habit.metric === 'boolean' ? (log ? (complete ? 'Concluído' : 'Registrado') : 'Toque para registrar') : `meta ${prototypeValue(habit, habit.target)}`}</small></span>{#if complete}<i class="habit-prototype-check"><Check size={15} /></i>{/if}
+
+										<div class="habit-prototype-grid habit-prototype-habits">
+											<button class="habit-prototype-card habit-prototype-empty" onclick={() => openHabit()}>
+												<Plus size={20} /> Hábito
 											</button>
-											<button class="hcard-more" aria-label={`Opções de ${habit.name}`} onclick={(event) => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); openHabitMenu(habit, rect.left, rect.bottom + 6); }}><MoreHorizontal size={16} /></button>
+											{#each snapshot.habits.filter((habit) => habit.active) as habit}
+												{#if habit.metric === 'weekly'}
+													{@const count = weeklyValue(habit)}
+													{@const complete = count >= habit.target}
+													<div class="hcard habit-prototype-wide">
+														<section role="group" class:done={complete} class="habit-prototype-card habit-prototype-wide habit-prototype-pips" data-habit-id={habit.id} onpointerdown={(event) => startHabitPress(event, habit)}>
+															<div class="habit-prototype-row"><b>{habit.name}</b><small>{count} de {habit.target} na semana</small></div>
+															<div class="habit-prototype-pip-track">
+																{#each Array.from({ length: WEEK_MAX }, (_, index) => index + 1) as step}
+																	<button class="habit-prototype-pip" class:on={step <= count} class:goal={step === habit.target} aria-label={`${step} de ${WEEK_MAX} na semana`} aria-pressed={step <= count} onclick={() => { if (habitPressSuppress) return; setWeeklyValue(habit, count === step ? step - 1 : step); }}></button>
+																{/each}
+															</div>
+														</section>
+														<button class="hcard-more" aria-label={`Opções de ${habit.name}`} onclick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openHabitMenu(habit, rect.left, rect.bottom + 6); }}><MoreHorizontal size={16} /></button>
+													</div>
+												{:else}
+													{@const log = snapshot.habitLogs.find((item) => item.habitId === habit.id && item.date === today)}
+													{@const value = log?.value ?? 0}
+													{@const complete = log ? didMeetTarget(habit, value) : false}
+													{@const progress = habit.metric === 'boolean' ? (complete ? 1 : 0) : Math.min(1, value / habit.target)}
+													{@const label = habit.metric === 'boolean' ? (log ? booleanLabelOf(habit, value, HABIT_BOOLEAN_LABELS) : 'Hoje') : prototypeValue(habit, value)}
+													<div class="hcard">
+														<button
+															class:done={complete}
+															class="habit-prototype-card habit-prototype-habit"
+															data-habit-id={habit.id}
+															style={`--habit-progress:${progress}`}
+															onclick={() => {
+																if (habitPressSuppress) return;
+																if (habit.metric === 'boolean') logHabit(habit);
+																else openHabitSheet(habit);
+															}}
+															oncontextmenu={(event) => { event.preventDefault(); openHabitMenu(habit, event.clientX, event.clientY); }}
+															onpointerdown={(event) => startHabitPress(event, habit)}
+														>
+															<b>{habit.name}</b><span><span class="habit-prototype-value" class:idle={habit.metric === 'boolean' && !log}>{label}</span><br /><small>{habit.metric === 'boolean' ? (log ? (complete ? 'Concluído' : 'Registrado') : 'Toque para registrar') : `meta ${prototypeValue(habit, habit.target)}`}</small></span>{#if complete}<i class="habit-prototype-check"><Check size={15} /></i>{/if}
+														</button>
+														<button class="hcard-more" aria-label={`Opções de ${habit.name}`} onclick={(event) => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); openHabitMenu(habit, rect.left, rect.bottom + 6); }}><MoreHorizontal size={16} /></button>
+													</div>
+												{/if}
+											{/each}
 										</div>
-									{/if}
-								{/each}
-							</div>
-							{#if testModeActive}
-								<div class="habit-prototype-dev"><button onclick={resetPrototypeDay}>Reiniciar dia</button></div>
-							{/if}
-						</section>
-						{/if}
+										{#if testModeActive}
+											<div class="habit-prototype-dev"><button onclick={resetPrototypeDay}>Reiniciar dia</button></div>
+										{/if}
+									</section>
+								</div>
+								<div class="habit-pane" aria-hidden={habitView !== 'trackers'} inert={habitView !== 'trackers'}>
+									<TrackersView
+										trackers={snapshot.trackers}
+										entries={snapshot.trackerEntries}
+										sound={snapshot.preferences.soundEnabled}
+										haptics={snapshot.preferences.hapticsEnabled}
+										oncreatetracker={(tracker) => saveTracker(tracker, true)}
+										onupdatetracker={(tracker) => saveTracker(tracker, false)}
+										onarchive={archiveTracker}
+										ondeletetracker={deleteTracker}
+										oncreateentry={(entry) => saveTrackerEntry(entry, true)}
+										onupdateentry={(entry) => saveTrackerEntry(entry, false)}
+										ondeleteentry={deleteTrackerEntry}
+									/>
+								</div>
+						</div>
 					{/if}
 				{:else if activeTab === 'time'}
 					<section class="tp-prototype" aria-label="Tempo">
@@ -2917,6 +3280,18 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			<span><FlaskConical size={15} /> Modo de teste</span>
 			<button type="button" onclick={() => toggleTestMode(false)}>Desativar</button>
 		</div>
+	{/if}
+
+	{#if plannerNotesOpen}
+		<PlannerNotesSheet
+			items={plannerNotesItems}
+			onopen={openPlannerNote}
+			onclose={closePlannerNotes}
+		/>
+	{/if}
+
+	{#if plannerNoteOpen}
+		<PlannerNoteSheet note={plannerNoteOpen} onclose={closePlannerNote} />
 	{/if}
 
 	{#if habitSheet}
@@ -3111,19 +3486,51 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 							<option value="boolean">Feito ou não feito</option>
 							<option value="duration">Duração</option>
 							<option value="count">Contagem</option>
+							<option value="weekly">Meta na semana</option>
 						</select>
 					</Field>
-					{#if habitForm.metric !== 'boolean'}
+					{#if habitForm.metric === 'duration'}
+						<div class="sheet-row">
+							<Field label="Horas">
+								<input
+									type="number"
+									min="0"
+									value={Math.floor(Number(habitForm.target) / 60)}
+									oninput={(event) => {
+										const hours = Number(event.currentTarget.value) || 0;
+										const minutes = Number(habitForm.target) % 60;
+										habitForm.target = String(hours * 60 + minutes);
+									}}
+								/>
+							</Field>
+							<Field label="Minutos">
+								<input
+									type="number"
+									min="0"
+									max="59"
+									value={Number(habitForm.target) % 60}
+									oninput={(event) => {
+										const hours = Math.floor(Number(habitForm.target) / 60);
+										const minutes = Number(event.currentTarget.value) || 0;
+										habitForm.target = String(hours * 60 + Math.min(59, minutes));
+									}}
+								/>
+							</Field>
+						</div>
+					{:else if habitForm.metric === 'weekly'}
+						<div class="sheet-row">
+							<Field label="Dias por semana">
+								<input bind:value={habitForm.target} type="number" min="1" max="7" required />
+							</Field>
+							<Field label="Unidade"><span class="static">dias</span></Field>
+						</div>
+					{:else if habitForm.metric === 'count'}
 						<div class="sheet-row">
 							<Field label="Meta por dia">
 								<input bind:value={habitForm.target} type="number" min="1" required />
 							</Field>
 							<Field label="Unidade">
-								{#if habitForm.metric === 'count'}
-									<input bind:value={habitForm.unit} placeholder="páginas, copos…" required />
-								{:else}
-									<span class="static">minutos</span>
-								{/if}
+								<input bind:value={habitForm.unit} placeholder="páginas, copos…" required />
 							</Field>
 						</div>
 					{:else}
@@ -3148,18 +3555,20 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 							/>
 						</div>
 					{/if}
-					<div class="sheet-days">
-						<span class="sheet-days-label">Dias programados</span>
-						<div class="sheet-days-row">
-							{#each ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'] as day, index}
-								<Chip
-									selected={habitForm.scheduledDays.includes(index)}
-									ariaLabel={`Selecionar dia ${index}`}
-									onselect={() => toggleScheduledDay(index)}
-								>{day}</Chip>
-							{/each}
+					{#if habitForm.metric !== 'weekly'}
+						<div class="sheet-days">
+							<span class="sheet-days-label">Dias programados</span>
+							<div class="sheet-days-row">
+								{#each ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'] as day, index}
+									<Chip
+										selected={habitForm.scheduledDays.includes(index)}
+										ariaLabel={`Selecionar dia ${index}`}
+										onselect={() => toggleScheduledDay(index)}
+									>{day}</Chip>
+								{/each}
+							</div>
 						</div>
-					</div>
+					{/if}
 					<Field label="Lembrete" hint="opcional">
 						<input type="time" bind:value={habitForm.reminder} />
 					</Field>
@@ -3208,6 +3617,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			oncheckupdates={checkAppUpdate}
 			onsynctoggle={setSyncEnabled}
 			onsyncnow={runSyncNow}
+			onsyncdiscoveryrestart={() => void restartSyncDiscovery()}
 			onpair={openPairing}
 			onunpair={unpair}
 		/>

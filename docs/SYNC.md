@@ -152,12 +152,21 @@ no device depois (mesmo fluxo de S7/S9).
   `npx tauri ios build --debug --target aarch64-sim` → `Atlas.app`.
 - **Device (pendente)**: prompt de Rede Local, descoberta real iPhone↔Windows,
   SAS e edição nos dois sentidos (checklist em `docs/IOS-SIDELOAD.md`).
+- **Diagnóstico (rodada mobile)**: os callbacks `DNSService*` e o `getaddrinfo`
+  do host `.local` agora gravam a falha no estado da descoberta (código +
+  mensagem; `PolicyDenied` vira instrução de Rede Local). `SyncStatus.discovery`
+  expõe `state` (`off`/`starting`/`announcing`/`browsing`/`permission`/`error`),
+  `found` e `message`; a seção Sincronização mostra a linha **Descoberta**,
+  reinicia só ela (`sync_discovery_restart`, sem derrubar o endpoint) e abre
+  Ajustes quando a permissão foi negada. Falha de descoberta não impede mais o
+  `sync_start`: o pareamento manual por `ip:porta` continua disponível.
 
 **P5b (UI + boot + evento) ✅** — `src/lib/sync.ts` + Configurações + notas:
 
 - `src/lib/sync.ts`: wrappers dos commands (`sync_status/start/stop/now`,
-  `sync_discovered`, `sync_pair_begin/confirm`, `sync_unpair`) e dos eventos
-  (`atlas://sync-applied`, `sync-pair-request`, `sync-paired`).
+  `sync_discovery_restart`, `sync_discovered`, `sync_pair_begin/confirm`,
+  `sync_unpair`) e dos eventos (`atlas://sync-applied`, `sync-pair-request`,
+  `sync-paired`).
 - Seção **Sincronização** em Configurações (Paraglide): toggle, estado
   ("Procurando…"/"Desligado"), pares com "sincronizado há X", **Sincronizar
   agora**, **Parear** e **Desemparelhar** (confirmação). Sem indicador no shell.
