@@ -94,7 +94,7 @@ no device depois (mesmo fluxo de S7/S9).
 | **P2** | Engine: E0a (PoC Windows↔Windows) → endpoint iroh LAN, protocolo/cursor, LWW, evento pro front | ✅ **P2a–P2c** |
 | **P3** | Pareamento SAS + allowlist + store de pares | ✅ |
 | **P4** | Descoberta iOS (bridge Swift) + `project.yml`/`InfoPlist.strings` | — |
-| **P5** | UI de Sincronização + backup/resumo do primeiro sync + rótulo de conflito | — |
+| **P5** | UI de Sincronização + backup/resumo do primeiro sync + rótulo de conflito | 🟡 P5a ✅; P5b pendente |
 | **P6** | Anexos (blobs) | fora do ciclo |
 
 ### Estado do P2 (em andamento)
@@ -131,6 +131,19 @@ no device depois (mesmo fluxo de S7/S9).
   no CI, sem mDNS (addr direto de loopback).
 - Gotcha: `finish()` e `conn.close()` na mesma hora descarta o frame em voo — o
   acceptor espera o outro lado fechar antes de fechar a conexão.
+
+**P5a (conflito de nota) ✅** — `store.rs`/`session.rs`:
+
+- Quando a linha que chega **perde** o LWW, as duas versões estão vivas (sem
+  lápide) e o carimbo dela é **estritamente maior** que o cursor daquele par
+  antes da sessão, uma nota conflitante vira cópia.
+- A cópia mantém título/conteúdo perdedores, ganha id `conflict-<hex>`, fica na
+  mesma pasta e leva `conflictOf`/`conflictedAt` no payload (o rótulo é da UI).
+- Carimbo da cópia = `max(agora, maior carimbo desta origem, hlc_last) + 1`:
+  abaixo do que o par já viu, ele nunca puxaria a cópia (cursor por origem).
+- Reenvio do mesmo carimbo (`>= cursor`) não duplica; lápide não gera cópia.
+- `ApplyStats.conflicts` alimenta o log/evento. Limitação conhecida: um relay
+  por terceiro pode gerar uma cópia a mais (preferimos duplicar a perder dado).
 
 **P3 (pareamento) ✅** — `sync/pair.rs` + commands:
 

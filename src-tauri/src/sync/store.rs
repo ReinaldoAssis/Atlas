@@ -178,6 +178,49 @@ pub async fn peers(pool: &SqlitePool) -> Result<Vec<PeerRecord>, String> {
     .collect()
 }
 
+/// Maior carimbo já escrito por uma origem (em qualquer tabela replicada).
+pub async fn origin_max_stamp(pool: &SqlitePool, owner: &str) -> Result<i64, String> {
+  let mut max = 0i64;
+  for table in SYNC_TABLES {
+    let sql = format!(
+      "SELECT COALESCE(MAX(updated_at), 0) AS at FROM {} WHERE COALESCE(NULLIF(device_id, ''), 'legacy') = ?",
+      quote(table)
+    );
+    let value: i64 = sqlx::query_scalar(&sql)
+      .bind(owner)
+      .fetch_one(pool)
+      .await
+      .map_err(|error| format!("maior carimbo de {table}: {error}"))?;
+    max = max.max(value);
+  }
+  Ok(max)
+}
+
+/// `hlc_last` guardado (maior carimbo já visto nesta instalação).
+pub async fn hlc_last(pool: &SqlitePool) -> Result<i64, String> {
+  let row = sqlx::query("SELECT value FROM app_settings WHERE key = 'hlc_last'")
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| format!("hlc_last: {error}"))?;
+  Ok(row
+    .and_then(|row| row.try_get::<String, _>("value").ok())
+    .and_then(|value| serde_json::from_str::<i64>(&value).ok())
+    .unwrap_or(0))
+}
+
+/// `device_id` desta instalação (origem das escritas locais).
+pub async fn local_device_id(pool: &SqlitePool) -> Result<String, String> {
+  let row = sqlx::query("SELECT value FROM app_settings WHERE key = 'device_id'")
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| format!("device_id: {error}"))?;
+  Ok(row
+    .and_then(|row| row.try_get::<String, _>("value").ok())
+    .and_then(|value| serde_json::from_str::<String>(&value).ok())
+    .filter(|value| !value.is_empty())
+    .unwrap_or_else(|| "local".to_string()))
+}
+
 /// Grava um par na allowlist (pareamento confirmado).
 pub async fn add_peer(pool: &SqlitePool, endpoint_id: &str, name: &str, at: i64) -> Result<(), String> {
   sqlx::query(
@@ -314,10 +357,40 @@ pub async fn collect_delta(
 pub struct ApplyStats {
   pub applied: usize,
   pub skipped: usize,
+  /// Cópias de conflito criadas (só notas).
+  pub conflicts: usize,
   /// Maior carimbo recebido (avança o HLC local).
   pub max_stamp: i64,
+  /// Maior carimbo criado aqui (a cópia de conflito também é escrita local).
+  pub max_created: i64,
   /// Maior carimbo recebido por origem (avança os cursores do par).
   pub cursors: BTreeMap<String, i64>,
+}
+
+/// Contexto do merge.
+#[derive(Debug, Clone)]
+pub struct ApplyOptions {
+  /// `device_id` desta instalação (dono da cópia de conflito).
+  pub local_device_id: String,
+  /// Cursores do par **antes** desta sessão, por origem. É o que distingue
+  /// "operação nova do outro lado" de reenvio do mesmo carimbo.
+  pub own_cursors: BTreeMap<String, i64>,
+  /// Cria cópia quando uma nota perde o LWW (P5).
+  pub note_conflicts: bool,
+  /// Carimbo da cópia. Precisa ficar **acima** do maior carimbo já escrito por
+  /// esta instalação, senão o par (cujo cursor já passou dele) nunca a puxa.
+  pub copy_stamp: i64,
+}
+
+impl Default for ApplyOptions {
+  fn default() -> Self {
+    Self {
+      local_device_id: "test".to_string(),
+      own_cursors: BTreeMap::new(),
+      note_conflicts: false,
+      copy_stamp: 1,
+    }
+  }
 }
 
 /// Decide o vencedor do LWW para uma linha.
@@ -337,8 +410,116 @@ pub fn should_apply(local: Option<(i64, Option<&str>)>, incoming: (i64, Option<&
   }
 }
 
+fn column_value<'a>(cols: &'a BTreeMap<String, Option<String>>, column: &str) -> Option<&'a str> {
+  cols.get(column).and_then(|value| value.as_deref())
+}
+
+fn is_deleted(cols: &BTreeMap<String, Option<String>>) -> bool {
+  column_value(cols, "deleted_at").map(|value| !value.is_empty()).unwrap_or(false)
+}
+
+fn new_conflict_id() -> String {
+  let bytes: [u8; 16] = rand::random();
+  format!(
+    "conflict-{}",
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
+  )
+}
+
+/// Monta a cópia da versão perdedora: mesmo conteúdo, id novo, marcada no
+/// payload. O título fica igual — o rótulo é da UI (i18n), não do dado.
+fn conflict_copy(
+  row: &Row,
+  schema: &TableSchema,
+  options: &ApplyOptions,
+) -> Option<BTreeMap<String, Option<String>>> {
+  let mut cols = row.cols.clone();
+  let id = new_conflict_id();
+  let original = column_value(&row.cols, &schema.pk[0])?.to_string();
+  cols.insert(schema.pk[0].clone(), Some(id.clone()));
+  cols.insert(
+    "updated_at".to_string(),
+    Some(options.copy_stamp.to_string()),
+  );
+  cols.insert("device_id".to_string(), Some(options.local_device_id.clone()));
+  cols.insert("deleted_at".to_string(), None);
+
+  let payload = column_value(&row.cols, "payload")?;
+  let mut parsed: serde_json::Value = serde_json::from_str(payload).ok()?;
+  let object = parsed.as_object_mut()?;
+  let conflicted_at = object
+    .get("updatedAt")
+    .and_then(|value| value.as_str())
+    .map(str::to_string)
+    .unwrap_or_else(|| row.updated_at().map(|at| at.to_string()).unwrap_or_default());
+  object.insert("id".into(), serde_json::Value::String(id));
+  object.insert("conflictOf".into(), serde_json::Value::String(original));
+  object.insert("conflictedAt".into(), serde_json::Value::String(conflicted_at));
+  cols.insert("payload".to_string(), Some(parsed.to_string()));
+  Some(cols)
+}
+
+/// Escreve uma linha (upsert por chave). Extraído para a cópia de conflito
+/// reusar a mesma construção de SQL.
+async fn write_row(
+  tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+  schema: &TableSchema,
+  cols: &BTreeMap<String, Option<String>>,
+) -> Result<(), String> {
+  let columns = schema
+    .columns
+    .iter()
+    .map(|column| quote(column))
+    .collect::<Vec<_>>()
+    .join(", ");
+  let placeholders = schema.columns.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+  let updates = schema
+    .columns
+    .iter()
+    .filter(|column| !schema.pk.iter().any(|pk| pk == *column))
+    .map(|column| format!("{0} = excluded.{0}", quote(column)))
+    .collect::<Vec<_>>()
+    .join(", ");
+  let pk = schema
+    .pk
+    .iter()
+    .map(|column| quote(column))
+    .collect::<Vec<_>>()
+    .join(", ");
+  let upsert_sql = if updates.is_empty() {
+    format!(
+      "INSERT INTO {} ({columns}) VALUES ({placeholders}) ON CONFLICT({pk}) DO NOTHING",
+      quote(&schema.name)
+    )
+  } else {
+    format!(
+      "INSERT INTO {} ({columns}) VALUES ({placeholders}) ON CONFLICT({pk}) DO UPDATE SET {updates}",
+      quote(&schema.name)
+    )
+  };
+  let mut upsert = sqlx::query(&upsert_sql);
+  for column in &schema.columns {
+    upsert = upsert.bind(cols.get(column).cloned().flatten());
+  }
+  upsert
+    .execute(&mut **tx)
+    .await
+    .map_err(|error| format!("merge de {}: {error}", schema.name))?;
+  Ok(())
+}
+
+struct LocalRow {
+  updated_at: i64,
+  device_id: Option<String>,
+  deleted_at: Option<String>,
+}
+
 /// Aplica um lote numa transação (lotes parciais já ficam; cursores só no fim).
-pub async fn apply_rows(pool: &SqlitePool, rows: &[Row]) -> Result<ApplyStats, String> {
+pub async fn apply_rows(
+  pool: &SqlitePool,
+  rows: &[Row],
+  options: &ApplyOptions,
+) -> Result<ApplyStats, String> {
   let mut stats = ApplyStats::default();
   if rows.is_empty() {
     return Ok(stats);
@@ -375,7 +556,7 @@ pub async fn apply_rows(pool: &SqlitePool, rows: &[Row]) -> Result<ApplyStats, S
       where_sql.push_str(&format!("{} = ?", quote(&schema.pk[index])));
     }
     let select_sql = format!(
-      "SELECT updated_at, device_id FROM {} WHERE {where_sql}",
+      "SELECT updated_at, device_id, CAST(deleted_at AS TEXT) AS deleted_at FROM {} WHERE {where_sql}",
       quote(&schema.name)
     );
     let mut select = sqlx::query(&select_sql);
@@ -389,64 +570,45 @@ pub async fn apply_rows(pool: &SqlitePool, rows: &[Row]) -> Result<ApplyStats, S
 
     let local = match existing {
       None => None,
-      Some(existing) => Some((
-        existing
+      Some(existing) => Some(LocalRow {
+        updated_at: existing
           .try_get::<i64, _>("updated_at")
           .map_err(|error| error.to_string())?,
-        existing
+        device_id: existing
           .try_get::<Option<String>, _>("device_id")
           .map_err(|error| error.to_string())?,
-      )),
+        deleted_at: existing
+          .try_get::<Option<String>, _>("deleted_at")
+          .map_err(|error| error.to_string())?,
+      }),
     };
     let incoming_device = row.cols.get("device_id").and_then(|value| value.as_deref());
     let local_pair = local
       .as_ref()
-      .map(|(at, device)| (*at, device.as_deref()));
+      .map(|local| (local.updated_at, local.device_id.as_deref()));
     if !should_apply(local_pair, (updated_at, incoming_device)) {
       stats.skipped += 1;
+      // Cópia só quando as duas versões estão vivas e a perdedora é nova para
+      // este par (carimbo estritamente acima do cursor). Reenvio do mesmo
+      // carimbo não duplica a cópia.
+      let concurrent = options.own_cursors.get(row.owner()).copied().unwrap_or(0);
+      let both_live = local.as_ref().map(|local| local.deleted_at.is_none()).unwrap_or(false)
+        && !is_deleted(&row.cols);
+      if options.note_conflicts
+        && schema.name == "notes"
+        && both_live
+        && updated_at > concurrent
+      {
+        if let Some(copy) = conflict_copy(row, schema, options) {
+          write_row(&mut tx, schema, &copy).await?;
+          stats.conflicts += 1;
+          stats.max_created = stats.max_created.max(options.copy_stamp);
+        }
+      }
       continue;
     }
 
-    let columns = schema
-      .columns
-      .iter()
-      .map(|column| quote(column))
-      .collect::<Vec<_>>()
-      .join(", ");
-    let placeholders = schema
-      .columns
-      .iter()
-      .map(|_| "?")
-      .collect::<Vec<_>>()
-      .join(", ");
-    let updates = schema
-      .columns
-      .iter()
-      .filter(|column| !schema.pk.iter().any(|pk| pk == *column))
-      .map(|column| format!("{0} = excluded.{0}", quote(column)))
-      .collect::<Vec<_>>()
-      .join(", ");
-    let upsert_sql = if updates.is_empty() {
-      format!(
-        "INSERT INTO {} ({columns}) VALUES ({placeholders}) ON CONFLICT({}) DO NOTHING",
-        quote(&schema.name),
-        schema.pk.iter().map(|column| quote(column)).collect::<Vec<_>>().join(", ")
-      )
-    } else {
-      format!(
-        "INSERT INTO {} ({columns}) VALUES ({placeholders}) ON CONFLICT({}) DO UPDATE SET {updates}",
-        quote(&schema.name),
-        schema.pk.iter().map(|column| quote(column)).collect::<Vec<_>>().join(", ")
-      )
-    };
-    let mut upsert = sqlx::query(&upsert_sql);
-    for column in &schema.columns {
-      upsert = upsert.bind(row.cols.get(column).cloned().flatten());
-    }
-    upsert
-      .execute(&mut *tx)
-      .await
-      .map_err(|error| format!("merge de {}: {error}", schema.name))?;
+    write_row(&mut tx, schema, &row.cols).await?;
     stats.applied += 1;
   }
   tx.commit().await.map_err(|error| format!("transação: {error}"))?;
