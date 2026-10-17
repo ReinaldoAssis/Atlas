@@ -22,6 +22,12 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_atlas-sync._udp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>O Atlas encontra seus aparelhos na mesma rede Wi-Fi para sincronizar.</string>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>

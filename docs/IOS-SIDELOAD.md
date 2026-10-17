@@ -123,6 +123,11 @@ O que **não** dá para checar no Chrome headless — precisa do iPhone:
       confirmação → os dados do arquivo aparecem no app;
 - [ ] **anexo de nota**: abrir um anexo exporta pelo mesmo picker;
 - [ ] lembretes: permissão de notificação e agendamento (limite de 64 no iOS);
+- [ ] **sync**: Configurações → Sincronização → ligar; o iOS mostra o prompt de
+      **Rede Local** (texto próprio, via `InfoPlist.strings`). Aceite; pareie com
+      o Windows/macOS pelo SAS de 6 dígitos e edite nos dois sentidos. Sem o
+      prompt/pareamento, use "Parear por endereço" com o `ip:porta` do outro
+      aparelho;
 - [ ] plano B do export: se o picker devolver arquivo vazio, os bytes ficam em
       `Arquivos › No meu iPhone › Atlas` (habilitamos `UIFileSharingEnabled` e
       `LSSupportsOpeningDocumentsInPlace`).

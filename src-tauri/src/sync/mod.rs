@@ -7,7 +7,10 @@
 //! Decisões e protocolo: `docs/SYNC.md` §3.
 
 pub mod commands;
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub mod discovery;
+#[cfg(target_os = "ios")]
+pub mod discovery_ios;
 pub mod engine;
 pub mod pair;
 pub mod identity;

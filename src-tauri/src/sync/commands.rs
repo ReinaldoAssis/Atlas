@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use iroh::{Endpoint, EndpointAddr, EndpointId};
@@ -18,7 +19,11 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::{oneshot, Mutex};
 
 use super::protocol::{self, Cursor};
-use super::{discovery, engine, identity, pair, session, store};
+use super::{engine, identity, pair, session, store};
+#[cfg(not(target_os = "ios"))]
+use super::discovery;
+#[cfg(target_os = "ios")]
+use super::discovery_ios;
 
 /// Banco do modo de teste: sync desligado por decisão (`docs/SYNC.md` §3).
 pub const TEST_DB: &str = "sqlite:atlas.test.db";
@@ -51,7 +56,11 @@ struct Running {
   endpoint_id: EndpointId,
   local: engine::LocalNode,
   pair_local: pair::PairLocal,
+  #[cfg(not(target_os = "ios"))]
   advertisement: Option<discovery::Advertisement>,
+  #[cfg(target_os = "ios")]
+  discovery: Option<discovery_ios::Discovery>,
+  alive: Arc<AtomicBool>,
   discovered: Arc<Mutex<BTreeMap<EndpointId, Discovered>>>,
   in_flight: Arc<Mutex<BTreeSet<EndpointId>>>,
   last_attempt: Arc<Mutex<HashMap<EndpointId, Instant>>>,
@@ -225,6 +234,7 @@ struct DialContext {
   pool: SqlitePool,
   in_flight: Arc<Mutex<BTreeSet<EndpointId>>>,
   last_attempt: Arc<Mutex<HashMap<EndpointId, Instant>>>,
+  alive: Arc<AtomicBool>,
 }
 
 /// Dispara uma sessão contra `peer`, respeitando cooldown e sessão em andamento.
@@ -386,6 +396,7 @@ fn spawn_accept(
   });
 }
 
+#[cfg(not(target_os = "ios"))]
 fn spawn_discovery(
   context: Arc<DialContext>,
   receiver: mdns_sd::Receiver<mdns_sd::ServiceEvent>,
@@ -403,7 +414,10 @@ fn spawn_discovery(
     });
 
     let me = context.endpoint.id();
-    while let Some(event) = events_rx.recv().await {
+    while context.alive.load(Ordering::Relaxed) {
+      let Some(event) = events_rx.recv().await else {
+        break;
+      };
       let mdns_sd::ServiceEvent::ServiceResolved(info) = event else {
         continue;
       };
@@ -432,6 +446,55 @@ fn spawn_discovery(
         continue;
       }
       start_dial(&context, peer.addr).await;
+    }
+  });
+}
+
+/// Loop de descoberta no iOS: lê o snapshot do plugin e disca os pareados.
+#[cfg(target_os = "ios")]
+fn spawn_discovery_ios(
+  context: Arc<DialContext>,
+  discovery: discovery_ios::Handle,
+  discovered: Arc<Mutex<BTreeMap<EndpointId, Discovered>>>,
+) {
+  tauri::async_runtime::spawn(async move {
+    let me = context.endpoint.id();
+    while context.alive.load(Ordering::Relaxed) {
+      {
+        let peers = discovery.snapshot();
+        {
+          for peer in peers {
+            let Ok(id) = peer.id.parse::<EndpointId>() else {
+              continue;
+            };
+            if id == me || peer.addresses.is_empty() {
+              continue;
+            }
+            let mut addr = EndpointAddr::new(id);
+            for ip in &peer.addresses {
+              if let Ok(socket) = format!("{ip}:{}", peer.port).parse::<std::net::SocketAddr>() {
+                addr = addr.with_ip_addr(socket);
+              }
+            }
+            discovered.lock().await.insert(
+              id,
+              Discovered {
+                name: peer.name.clone(),
+                addr: addr.clone(),
+              },
+            );
+            if me > id {
+              continue;
+            }
+            let allowlist = store::allowlist(&context.pool).await.unwrap_or_default();
+            if !allowlist.contains(&id.to_string()) {
+              continue;
+            }
+            start_dial(&context, addr).await;
+          }
+        }
+      }
+      tokio::time::sleep(discovery_ios::POLL).await;
     }
   });
 }
@@ -495,12 +558,24 @@ pub async fn sync_start(
     .map_err(|error| format!("identidade do sync: {error}"))?;
   let endpoint = engine::bind(key).await?;
   let endpoint_id = endpoint.id();
+  let name = format!("Atlas {}", endpoint_id.fmt_short());
+
+  #[cfg(not(target_os = "ios"))]
   let (advertisement, receiver) = discovery::Advertisement::start(&endpoint)?;
+  #[cfg(target_os = "ios")]
+  let ios_discovery = {
+    let port = endpoint
+      .bound_sockets()
+      .first()
+      .map(std::net::SocketAddr::port)
+      .ok_or_else(|| "endpoint sem socket UDP ligado".to_string())?;
+    discovery_ios::Discovery::start(&endpoint_id.to_string(), &name, port)?
+  };
 
   let pair_local = pair::PairLocal {
     endpoint_id: endpoint_id.to_string(),
     device_id: device_id.clone(),
-    name: advertisement.instance_name().to_string(),
+    name: name.clone(),
   };
   let local = engine::LocalNode::new(schema, device_id);
   let discovered = Arc::new(Mutex::new(BTreeMap::new()));
@@ -508,6 +583,7 @@ pub async fn sync_start(
   let last_attempt = Arc::new(Mutex::new(HashMap::new()));
   let pending = Arc::new(Mutex::new(BTreeMap::new()));
   let attempts = Arc::new(Mutex::new(HashMap::new()));
+  let alive = Arc::new(AtomicBool::new(true));
 
   spawn_accept(
     app.clone(),
@@ -525,14 +601,21 @@ pub async fn sync_start(
     pool: pool.clone(),
     in_flight: in_flight.clone(),
     last_attempt: last_attempt.clone(),
+    alive: alive.clone(),
   });
+  #[cfg(not(target_os = "ios"))]
   spawn_discovery(context, receiver, discovered.clone());
+  #[cfg(target_os = "ios")]
+  spawn_discovery_ios(context, ios_discovery.handle(), discovered.clone());
 
   set_enabled(&pool, true).await?;
 
   let mut guard = state.inner.lock().await;
   if guard.is_some() {
+    #[cfg(not(target_os = "ios"))]
     advertisement.stop();
+    #[cfg(target_os = "ios")]
+    ios_discovery.stop();
     endpoint.close().await;
     return Err("sync já estava rodando".to_string());
   }
@@ -541,7 +624,11 @@ pub async fn sync_start(
     endpoint_id,
     local,
     pair_local,
+    #[cfg(not(target_os = "ios"))]
     advertisement: Some(advertisement),
+    #[cfg(target_os = "ios")]
+    discovery: Some(ios_discovery),
+    alive,
     discovered,
     in_flight,
     last_attempt,
@@ -562,8 +649,14 @@ pub async fn sync_stop(
   let pool = pool(&app, &db).await?;
   let running = { state.inner.lock().await.take() };
   if let Some(mut running) = running {
+    running.alive.store(false, Ordering::Relaxed);
+    #[cfg(not(target_os = "ios"))]
     if let Some(advertisement) = running.advertisement.take() {
       advertisement.stop();
+    }
+    #[cfg(target_os = "ios")]
+    if let Some(discovery) = running.discovery.take() {
+      discovery.stop();
     }
     running.endpoint.close().await;
   }
@@ -580,7 +673,7 @@ pub async fn sync_now(
 ) -> Result<SyncStatus, String> {
   ensure_prod(&db)?;
   let pool = pool(&app, &db).await?;
-  let (endpoint, local, discovered, in_flight, last_attempt) = {
+  let (endpoint, local, discovered, in_flight, last_attempt, alive) = {
     let guard = state.inner.lock().await;
     let Some(running) = guard.as_ref() else {
       return Err("sync não está rodando".to_string());
@@ -591,6 +684,7 @@ pub async fn sync_now(
       running.discovered.clone(),
       running.in_flight.clone(),
       running.last_attempt.clone(),
+      running.alive.clone(),
     )
   };
   let allowlist = store::allowlist(&pool).await?;
@@ -607,6 +701,7 @@ pub async fn sync_now(
     pool,
     in_flight,
     last_attempt,
+    alive,
   };
   for peer in peers {
     if peer.id > context.endpoint.id() && allowlist.contains(&peer.id.to_string()) {

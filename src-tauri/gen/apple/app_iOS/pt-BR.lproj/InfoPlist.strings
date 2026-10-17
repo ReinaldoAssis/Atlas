@@ -1,0 +1,2 @@
+/* Permissão de Rede Local (iOS) — descoberta P2P do sync. */
+"NSLocalNetworkUsageDescription" = "O Atlas encontra seus aparelhos na mesma rede Wi-Fi para sincronizar.";

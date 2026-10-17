@@ -2,8 +2,8 @@ use serde::Deserialize;
 use tauri::Manager;
 use tauri_plugin_sql::{DbInstances, DbPool};
 
-// Sync P2P (S10/P2) só no desktop até o bridge Bonjour do iOS (P4).
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+// Sync P2P (S10). No iOS a descoberta é um plugin Swift (P4); o resto é comum.
+#[cfg(not(target_os = "android"))]
 pub mod sync;
 
 #[derive(Deserialize)]
@@ -60,8 +60,7 @@ pub fn run() {
     .plugin(tauri_plugin_updater::Builder::new().build())
     .plugin(tauri_plugin_process::init());
 
-  // Os commands de sync só existem no desktop; o iOS entra em P4.
-  #[cfg(not(any(target_os = "android", target_os = "ios")))]
+  #[cfg(not(target_os = "android"))]
   let builder = builder
     .manage(sync::commands::SyncState::default())
     .invoke_handler(tauri::generate_handler![
@@ -77,7 +76,7 @@ pub fn run() {
       sync::commands::sync_unpair
     ]);
 
-  #[cfg(any(target_os = "android", target_os = "ios"))]
+  #[cfg(target_os = "android")]
   let builder = builder.invoke_handler(tauri::generate_handler![db_batch]);
 
   builder
