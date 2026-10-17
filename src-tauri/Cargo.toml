@@ -45,6 +45,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 # Nonce do SAS (pareamento P3) e derivação do código.
 rand = "0.9"
 sha2 = "0.10"
+# O protocolo `tauri://` (iOS) monta um cliente reqwest que exige um
+# CryptoProvider rustls instalado; o iroh habilita o ring, então usamos o mesmo
+# provider (sem aws-lc-rs, que criaria dois e o rustls recusaria o default).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 
 # Updater e relaunch só existem no desktop (o S8 é Windows). Ficam no target
 # desktop para o `tauri ios build` não puxar reqwest/zip no iOS.
