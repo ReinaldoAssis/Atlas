@@ -21,6 +21,16 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
+# Um DMG que falhou no meio deixa o volume montado e o próximo `hdiutil`
+# trava ("resource busy"). Ejeta só volumes que vieram do nosso bundle.
+while read -r device; do
+  [[ -n "$device" ]] && diskutil eject "$device" >/dev/null 2>&1 || true
+done < <(hdiutil info | awk '
+  /^image-path/ { image = $0 }
+  /^\/dev\/disk/ { device = $1 }
+  /^\/Volumes\// { if (image ~ /Atlas_/) print device }
+')
+
 VERSION=""
 TARGET="aarch64-apple-darwin"
 while [[ $# -gt 0 ]]; do
@@ -46,26 +56,33 @@ if [[ -n "$VERSION" && ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 echo "==> Atlas para macOS ($TARGET${VERSION:+, versão $VERSION})"
+# `--bundles app`: o `bundle_dmg.sh` do Tauri depende de Finder/AppleScript e
+# falha de forma intermitente em build local. O DMG é feito abaixo com
+# `hdiutil`, sem depender de UI.
 if [[ -n "$VERSION" ]]; then
-  npx tauri build --target "$TARGET" --config "{\"version\":\"$VERSION\"}"
+  npx tauri build --target "$TARGET" --bundles app --config "{\"version\":\"$VERSION\"}"
 else
-  npx tauri build --target "$TARGET"
+  npx tauri build --target "$TARGET" --bundles app
 fi
 
 BUNDLE="src-tauri/target/$TARGET/release/bundle"
 APP="$(ls -d "$BUNDLE"/macos/*.app 2>/dev/null | head -1 || true)"
-DMG="$(ls "$BUNDLE"/dmg/*.dmg 2>/dev/null | head -1 || true)"
 
 if [[ -z "$APP" ]]; then
   echo "build-macos: o build não gerou .app em $BUNDLE/macos" >&2
   exit 1
 fi
 
+APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
+DMG="$BUNDLE/dmg/Atlas_${APP_VERSION}_aarch64.dmg"
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+cp -R "$APP" "$STAGE/"
+ln -s /Applications "$STAGE/Applications"
+mkdir -p "$BUNDLE/dmg"
+hdiutil create -volname "Atlas" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+
 echo
 echo "Artefatos:"
 ls -ldh "$APP"
-if [[ -n "$DMG" ]]; then
-  ls -lh "$DMG"
-else
-  echo "build-macos: aviso: nenhum .dmg em $BUNDLE/dmg" >&2
-fi
+ls -lh "$DMG"

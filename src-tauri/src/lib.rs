@@ -49,8 +49,26 @@ async fn db_batch(
   Ok(())
 }
 
+/// Torna panic visível no iOS (stderr não aparece no console do device).
+fn install_panic_hook() {
+  std::panic::set_hook(Box::new(|info| {
+    let message = format!("Atlas panic: {info}");
+    #[cfg(target_os = "ios")]
+    {
+      unsafe extern "C" {
+        fn NSLog(format: *const std::ffi::c_char, ...);
+      }
+      if let Ok(text) = std::ffi::CString::new(message.clone()) {
+        unsafe { NSLog(c"%s".as_ptr(), text.as_ptr()) };
+      }
+    }
+    eprintln!("{message}");
+  }));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  install_panic_hook();
   let builder = tauri::Builder::default();
 
   // Updater (S8) e relaunch só no desktop: as crates estão sob o mesmo cfg no

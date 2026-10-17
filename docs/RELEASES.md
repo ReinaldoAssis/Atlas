@@ -58,6 +58,10 @@ gh release upload v0.3.0 \
   src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Atlas_0.3.0_aarch64.dmg
 ```
 
+- O script builda só o `.app` (`--bundles app`) e cria o `.dmg` com `hdiutil`
+  (volume "Atlas" + atalho para `/Applications`). O `bundle_dmg.sh` do Tauri
+  depende de Finder/AppleScript e falha de forma intermitente em build local.
+- Volumes `dmg.*` de tentativas anteriores são ejetados no início do script.
 - **arm64 só** (Apple Silicon). Universal exigiria `rustup target add x86_64-apple-darwin`
   e `--target universal-apple-darwin`.
 - Build **sem assinatura**: em outra máquina o Gatekeeper bloqueia; libere com
