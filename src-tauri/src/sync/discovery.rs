@@ -22,6 +22,15 @@ pub const ANNOUNCE_VERSION: &str = "1";
 pub struct Advertisement {
   daemon: ServiceDaemon,
   fullname: String,
+  instance: String,
+}
+
+/// Um par descoberto na LAN.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredPeer {
+  pub addr: EndpointAddr,
+  /// Nome da instância no anúncio (`Atlas <6 chars>`).
+  pub name: String,
 }
 
 impl Advertisement {
@@ -38,11 +47,12 @@ impl Advertisement {
       .ok_or_else(|| "endpoint sem socket UDP ligado".to_string())?;
     let daemon = ServiceDaemon::new().map_err(|error| format!("mdns: {error}"))?;
     let short = id.fmt_short().to_string();
+    let instance = format!("Atlas {short}");
     // Endereços vêm do host (`addr_auto`): o endpoint liga em 0.0.0.0 e o IP
     // real de cada interface só o mdns-sd conhece.
     let info = ServiceInfo::new(
       SERVICE_TYPE,
-      &format!("Atlas {short}"),
+      &instance,
       &format!("atlas-{short}.local."),
       (),
       port,
@@ -60,7 +70,19 @@ impl Advertisement {
     let receiver = daemon
       .browse(SERVICE_TYPE)
       .map_err(|error| format!("mdns browse: {error}"))?;
-    Ok((Self { daemon, fullname }, receiver))
+    Ok((
+      Self {
+        daemon,
+        fullname,
+        instance,
+      },
+      receiver,
+    ))
+  }
+
+  /// Nome que este endpoint anuncia (vai no pedido de pareamento).
+  pub fn instance_name(&self) -> &str {
+    &self.instance
   }
 
   /// Para de anunciar e fecha o daemon (sai do multicast).
@@ -72,7 +94,7 @@ impl Advertisement {
 
 /// Converte um serviço resolvido em endereço dialável; `None` se não for nosso
 /// (TXT sem `id` ou id inválido) — nada de confiar no nome da instância.
-pub fn parse_resolved(info: &ResolvedService) -> Option<EndpointAddr> {
+pub fn parse_resolved(info: &ResolvedService) -> Option<DiscoveredPeer> {
   let id: EndpointId = info.txt_properties.get_property_val_str(TXT_ID)?.parse().ok()?;
   let mut addr = EndpointAddr::new(id);
   let mut seen = HashSet::new();
@@ -83,7 +105,15 @@ pub fn parse_resolved(info: &ResolvedService) -> Option<EndpointAddr> {
     }
     addr = addr.with_ip_addr(SocketAddr::new(ip, info.port));
   }
-  Some(addr)
+  // O label da instância vem antes do tipo; nomes com ponto são escapados.
+  let name = info
+    .fullname
+    .split('.')
+    .next()
+    .filter(|name| !name.is_empty())
+    .unwrap_or("Atlas")
+    .to_string();
+  Some(DiscoveredPeer { addr, name })
 }
 
 #[cfg(test)]

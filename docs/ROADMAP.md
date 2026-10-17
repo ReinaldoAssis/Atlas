@@ -327,7 +327,7 @@ Ordem confirmada pelo usuário. Cada fatia termina com o CI verde e um PR.
 | **S7** | Windows: conf NSIS per-user x64 + ícone `.ico` + **job de build no CI Windows** (artefato do instalador) + verificação manual do instalador numa máquina Windows | C1–C4 | S2 |
 | **S8** | Updater (GitHub Releases, Windows) + workflow de release por tag (versão automática) + CSP | C6, hardening | S7 |
 | **S9** | iOS/SideStore: `.ipa`, `docs/IOS-SIDELOAD.md`, verificação no device (Mac) | D1–D3 | S6 |
-| **S10** | Sync P2P: **P1–P5** (P1 metadados ✅; P2a–P2c engine/wiring ✅; P3 pareamento; P4 descoberta iOS; P5 UI). Decisões e protocolo: `docs/SYNC.md` | P1–P6 | S4, S7 |
+| **S10** | Sync P2P: **P1–P5** (P1 metadados ✅; P2a–P2c engine/wiring ✅; P3 pareamento ✅; P4 descoberta iOS; P5 UI). Decisões e protocolo: `docs/SYNC.md` | P1–P6 | S4, S7 |
 
 > S8 entregue em dois PRs: **CSP** (#14) e **updater + release por tag** (#15).
 

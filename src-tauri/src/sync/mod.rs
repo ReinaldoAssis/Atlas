@@ -9,6 +9,7 @@
 pub mod commands;
 pub mod discovery;
 pub mod engine;
+pub mod pair;
 pub mod identity;
 pub mod protocol;
 pub mod session;

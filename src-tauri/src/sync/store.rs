@@ -178,6 +178,41 @@ pub async fn peers(pool: &SqlitePool) -> Result<Vec<PeerRecord>, String> {
     .collect()
 }
 
+/// Grava um par na allowlist (pareamento confirmado).
+pub async fn add_peer(pool: &SqlitePool, endpoint_id: &str, name: &str, at: i64) -> Result<(), String> {
+  sqlx::query(
+    "INSERT INTO sync_peers (endpoint_id, name, paired_at, last_sync_at) VALUES (?, ?, ?, 0)
+     ON CONFLICT(endpoint_id) DO UPDATE SET name = excluded.name",
+  )
+  .bind(endpoint_id)
+  .bind(name)
+  .bind(at)
+  .execute(pool)
+  .await
+  .map_err(|error| format!("parear: {error}"))?;
+  Ok(())
+}
+
+/// Remove o par e os cursores dele.
+///
+/// A purga de lápides que ele segurava acontece no próximo boot (o corte é o
+/// menor `last_sync_at` dos pares restantes).
+pub async fn remove_peer(pool: &SqlitePool, endpoint_id: &str) -> Result<(), String> {
+  let mut tx = pool.begin().await.map_err(|error| format!("transação: {error}"))?;
+  sqlx::query("DELETE FROM sync_cursors WHERE peer_id = ?")
+    .bind(endpoint_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|error| format!("desemparelhar: {error}"))?;
+  sqlx::query("DELETE FROM sync_peers WHERE endpoint_id = ?")
+    .bind(endpoint_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|error| format!("desemparelhar: {error}"))?;
+  tx.commit().await.map_err(|error| format!("transação: {error}"))?;
+  Ok(())
+}
+
 /// Todos os cursores conhecidos, por EndpointID (o acceptor precisa antes de
 /// saber com quem está falando).
 pub async fn cursors_by_peer(pool: &SqlitePool) -> Result<BTreeMap<String, Vec<Cursor>>, String> {

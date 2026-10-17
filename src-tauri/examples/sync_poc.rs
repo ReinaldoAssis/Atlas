@@ -98,7 +98,7 @@ async fn main() {
           }
           Ok(None) => break,
           // Timeout é rotina: rearma o accept.
-          Err(error) if error.contains("timeout no hello") => continue,
+          Err(error) if error.contains("timeout") => continue,
           Err(error) => eprintln!("[poc] accept falhou: {error}"),
         }
       }
@@ -123,30 +123,30 @@ async fn main() {
     let Some(peer) = discovery::parse_resolved(&info) else {
       continue;
     };
-    if peer.id == me {
+    if peer.addr.id == me {
       continue;
     }
     // Regra de quem disca: ID menor inicia. O outro só aceita.
-    if me > peer.id {
+    if me > peer.addr.id {
       continue;
     }
     // O mDNS reanuncia periodicamente; não discar de novo para o mesmo par.
-    if !dialed.insert(peer.id) {
+    if !dialed.insert(peer.addr.id) {
       continue;
     }
-    println!("[poc] descobri {} — discando", peer.id);
+    println!("[poc] descobri {} ({}) — discando", peer.addr.id, peer.name);
     let endpoint = endpoint.clone();
     let local = local.clone();
     tokio::spawn(async move {
-      match engine::dial(&endpoint, peer.clone(), &local).await {
+      match engine::dial(&endpoint, peer.addr.clone(), &local).await {
         Ok(session) => {
           println!(
             "[poc] hello de {} (device_id={}, schema={}, proto={})",
-            peer.id, session.hello.device_id, session.hello.schema, session.hello.proto
+            peer.addr.id, session.hello.device_id, session.hello.schema, session.hello.proto
           );
           session.close().await;
         }
-        Err(error) => eprintln!("[poc] dial para {} falhou: {error}", peer.id),
+        Err(error) => eprintln!("[poc] dial para {} falhou: {error}", peer.addr.id),
       }
     });
   }

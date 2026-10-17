@@ -75,7 +75,8 @@ pub async fn accept(
   run(session, pool).await.map(Some)
 }
 
-async fn run(mut session: Session, pool: &SqlitePool) -> Result<SessionReport, String> {
+/// Roda a sessão já com o hello trocado (o roteador de ALPN usa esta entrada).
+pub async fn run(mut session: Session, pool: &SqlitePool) -> Result<SessionReport, String> {
   let peer_id = session.remote.to_string();
   let peer_device = session.peer_device_id().to_string();
   let delta = store::collect_delta(pool, &session.hello.cursors, &peer_device).await?;
