@@ -140,9 +140,12 @@ pub fn check_hello(remote: &Hello, local_schema: u32) -> Result<(), Incompatibil
   Ok(())
 }
 
-/// Escreve um frame. `finish` fica com quem chamou (a sessão pode continuar).
-pub async fn write_message(send: &mut SendStream, message: &Message) -> Result<(), String> {
-  let body = serde_json::to_vec(message).map_err(|error| format!("serialização: {error}"))?;
+/// Escreve um frame JSON. `finish` fica com quem chamou.
+///
+/// Genérico porque o protocolo de pareamento (`atlas/pair/1`) usa o mesmo
+/// framing em outro ALPN.
+pub async fn write_json<T: Serialize>(send: &mut SendStream, value: &T) -> Result<(), String> {
+  let body = serde_json::to_vec(value).map_err(|error| format!("serialização: {error}"))?;
   if body.len() > MAX_FRAME {
     return Err(format!("frame grande demais: {} bytes", body.len()));
   }
@@ -157,8 +160,13 @@ pub async fn write_message(send: &mut SendStream, message: &Message) -> Result<(
   Ok(())
 }
 
-/// Lê um frame; erro claro em tamanho fora do limite.
-pub async fn read_message(recv: &mut RecvStream) -> Result<Message, String> {
+/// Escreve uma mensagem do protocolo de sync.
+pub async fn write_message(send: &mut SendStream, message: &Message) -> Result<(), String> {
+  write_json(send, message).await
+}
+
+/// Lê um frame JSON; erro claro em tamanho fora do limite.
+pub async fn read_json<T: serde::de::DeserializeOwned>(recv: &mut RecvStream) -> Result<T, String> {
   let mut header = [0u8; 4];
   recv
     .read_exact(&mut header)
@@ -174,6 +182,11 @@ pub async fn read_message(recv: &mut RecvStream) -> Result<Message, String> {
     .await
     .map_err(|error| format!("leitura do frame: {error}"))?;
   serde_json::from_slice(&body).map_err(|error| format!("frame inválido: {error}"))
+}
+
+/// Lê uma mensagem do protocolo de sync.
+pub async fn read_message(recv: &mut RecvStream) -> Result<Message, String> {
+  read_json(recv).await
 }
 
 #[cfg(test)]

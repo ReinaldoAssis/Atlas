@@ -1,4 +1,4 @@
-# Handoff — Atlas · sync P2P (P1 + P2)
+# Handoff — Atlas · sync P2P (P1–P3)
 
 > Para o próximo agente. **Não duplique specs/planos/PRs**: referencie por caminho.
 > Escopo: `docs/MVP.md` · UI: `docs/DESIGN.md` · plano: `docs/ROADMAP.md` (§7 = ordem das fatias) ·
@@ -15,7 +15,7 @@
 | **P2c** | Commands (`start/stop/now/status`) + evento `atlas://sync-applied` + allowlist | ✅ |
 | P3–P5 | Pareamento SAS, descoberta iOS (Bonjour), UI de Sincronização | — (ver `docs/SYNC.md` §4) |
 
-Testes: **121** (`npm test`); Rust: **37** (`cargo test`, era 2 no começo do P2).
+Testes: **121** (`npm test`); Rust: **41** (`cargo test`, era 2 no começo do P2).
 CI: `frontend` (ubuntu+windows), `rust`, `windows-installer`, `release`.
 
 ## P2a — o que entrou (`src-tauri/src/sync/`)
@@ -33,6 +33,12 @@ CI: `frontend` (ubuntu+windows), `rust`, `windows-installer`, `release`.
   anúncios repetidos do mDNS.
 - Cargo: `iroh 1.3`/`mdns-sd 0.21`/`tokio` só desktop (`cfg(not(ios/android))`);
   `rust-version` 1.90 → **1.91** (MSRV do iroh).
+- **P3** (`pair.rs` + commands): ALPN `atlas/pair/1`, SAS de 6 dígitos por
+  SHA-256 com nonces dos dois, TTL 2 min, 3 tentativas. Commands
+  `sync_discovered`/`sync_pair_begin`/`sync_pair_confirm`/`sync_unpair`; eventos
+  `atlas://sync-pair-request` e `atlas://sync-paired`. Pareamento exige sync
+  ligado; endereço manual é `ip:porta`. Aceitador e sync compartilham um único
+  loop de `accept` roteando por ALPN.
 - **P2c** (`commands.rs`): `sync_start`/`sync_stop`/`sync_now`/`sync_status`/
   `sync_cursors`; opt-in em `app_settings.sync_enabled`; allowlist de
   `sync_peers` checada antes do hello; evento `atlas://sync-applied`; banco de
@@ -93,9 +99,17 @@ CI: `frontend` (ubuntu+windows), `rust`, `windows-installer`, `release`.
 
 ## Pendências (usuário)
 
-- **P3 (próximo)**: pareamento SAS de 6 dígitos + allowlist/store de pares com
-  UI mínima da lista de descobertos; depois **P4** (Bonjour no iOS) e **P5**
-  (UI de Sincronização + reload no evento + cópia de nota em conflito).
+- **P4 (próximo)**: descoberta no iOS via Bonjour nativo (`NWBrowser`/
+  `NSNetService`), `NSBonjourServices` + `NSLocalNetworkUsageDescription` +
+  `InfoPlist.strings` (pt-BR), bridge Swift e reuso do mesmo protocolo.
+- **P5**: UI de Sincronização (toggle, lista de pares, parear com SAS,
+  desemparelhar), backup/resumo do 1º sync, reload no `atlas://sync-applied`
+  preservando rascunho, rótulo de nota em conflito.
+- **Verificação manual do P3** (Mac, console do WebView):
+  `invoke('sync_start', { db: 'sqlite:atlas.db' })` em dois app; no A
+  `invoke('sync_discovered', ...)` → `invoke('sync_pair_begin', { db, peer })`;
+  no B o evento `atlas://sync-pair-request` traz o SAS → `invoke('sync_pair_confirm', { peer, accept: true })`;
+  no A confirme também. Depois `invoke('sync_status', ...)` mostra o par.
 - **Windows (P2c em diante)**: aceitar o prompt do Firewall (UDP de entrada) e
   rodar o `sync_poc` em duas máquinas Windows quando houver par disponível.
 - iPhone (S9) e Windows (S7/S8b): checklists em `docs/IOS-SIDELOAD.md` e

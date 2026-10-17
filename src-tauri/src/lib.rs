@@ -70,7 +70,11 @@ pub fn run() {
       sync::commands::sync_stop,
       sync::commands::sync_now,
       sync::commands::sync_status,
-      sync::commands::sync_cursors
+      sync::commands::sync_cursors,
+      sync::commands::sync_discovered,
+      sync::commands::sync_pair_begin,
+      sync::commands::sync_pair_confirm,
+      sync::commands::sync_unpair
     ]);
 
   #[cfg(any(target_os = "android", target_os = "ios"))]

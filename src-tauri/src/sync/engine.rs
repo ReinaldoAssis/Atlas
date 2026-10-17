@@ -120,18 +120,11 @@ pub async fn dial(endpoint: &Endpoint, peer: EndpointAddr, local: &LocalNode) ->
   .map_err(|_| "timeout no hello".to_string())?
 }
 
-/// Aceita uma conexão e troca hello. `None` quando o endpoint foi fechado.
+/// Aceita uma conexão e devolve o ALPN negociado, sem validar.
 ///
-/// `cursors_by_peer` indexa os cursores por EndpointID: o acceptor só sabe com
-/// quem está falando depois de aceitar, e o hello já precisa ir com eles.
-pub async fn accept(
-  endpoint: &Endpoint,
-  local: &LocalNode,
-  cursors_by_peer: &BTreeMap<String, Vec<Cursor>>,
-  // `None` = aceitar qualquer par (só o PoC manual usa; o app sempre passa a
-  // allowlist de `sync_peers`).
-  allowlist: Option<&BTreeSet<String>>,
-) -> Result<Option<Session>, String> {
+/// O roteamento (sync × pareamento) fica com quem chama: um único loop de
+/// `accept` por endpoint; dois loops competindo pegariam conexões aleatórias.
+pub async fn accept_raw(endpoint: &Endpoint) -> Result<Option<(Connection, Vec<u8>)>, String> {
   timeout(HELLO_TIMEOUT, async {
     let Some(incoming) = endpoint.accept().await else {
       return Ok(None);
@@ -143,27 +136,54 @@ pub async fn accept(
       .alpn()
       .await
       .map_err(|error| format!("alpn: {error}"))?;
-    if alpn.as_slice() != protocol::ALPN {
-      return Err(format!("alpn inesperado: {}", String::from_utf8_lossy(&alpn)));
-    }
     let conn = accepting
       .await
       .map_err(|error| format!("conexão entrante: {error}"))?;
-    let remote = conn.remote_id();
-    let mut hello = local.hello();
-    hello.cursors = cursors_by_peer.get(&remote.to_string()).cloned().unwrap_or_default();
-    let (send, recv, _, hello) = exchange(&conn, hello, Role::Acceptor, allowlist).await?;
-    Ok(Some(Session {
-      conn,
-      send,
-      recv,
-      remote,
-      hello,
-      role: Role::Acceptor,
-    }))
+    Ok(Some((conn, alpn)))
   })
   .await
-  .map_err(|_| "timeout no hello".to_string())?
+  .map_err(|_| "timeout no accept".to_string())?
+}
+
+/// Handshake de sync numa conexão já aceita (lado acceptor).
+pub async fn accept_handshake(
+  conn: Connection,
+  local: &LocalNode,
+  cursors: Vec<Cursor>,
+  allowlist: Option<&BTreeSet<String>>,
+) -> Result<Session, String> {
+  let mut hello = local.hello();
+  hello.cursors = cursors;
+  let (send, recv, remote, hello) = exchange(&conn, hello, Role::Acceptor, allowlist).await?;
+  Ok(Session {
+    conn,
+    send,
+    recv,
+    remote,
+    hello,
+    role: Role::Acceptor,
+  })
+}
+
+/// Aceita uma conexão de sync. `None` quando o endpoint foi fechado.
+pub async fn accept(
+  endpoint: &Endpoint,
+  local: &LocalNode,
+  cursors_by_peer: &BTreeMap<String, Vec<Cursor>>,
+  // `None` = aceitar qualquer par (só o PoC manual usa; o app sempre passa a
+  // allowlist de `sync_peers`).
+  allowlist: Option<&BTreeSet<String>>,
+) -> Result<Option<Session>, String> {
+  let Some((conn, alpn)) = accept_raw(endpoint).await? else {
+    return Ok(None);
+  };
+  if alpn.as_slice() != protocol::ALPN {
+    conn.close(0u32.into(), b"alpn");
+    return Err(format!("alpn inesperado: {}", String::from_utf8_lossy(&alpn)));
+  }
+  let remote = conn.remote_id();
+  let cursors = cursors_by_peer.get(&remote.to_string()).cloned().unwrap_or_default();
+  accept_handshake(conn, local, cursors, allowlist).await.map(Some)
 }
 
 /// Troca de hello no mesmo stream bidi: quem disca escreve primeiro.
