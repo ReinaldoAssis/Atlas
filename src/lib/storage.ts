@@ -238,13 +238,23 @@ async function purgeTombstones(db: Database): Promise<void> {
 	}
 }
 
-/** Carrega o carimbo HLC guardado (uma vez por banco ativo). */
+/**
+ * Lê o carimbo HLC guardado.
+ *
+ * **Sempre relê**: o merge do sync roda no Rust e sobe `hlc_last` por fora do
+ * cache do JS. Se esta função confiasse no valor em memória, uma edição feita
+ * durante/após um sync poderia sair com carimbo menor que o recebido e perder no
+ * LWW. A query é uma linha por chave primária — barata perto do lote de escrita.
+ */
 async function ensureHlcLast(db: Database): Promise<void> {
 	const name = activeDbName();
-	if (hlcDb === name) return;
+	if (hlcDb !== name) {
+		hlcDb = name;
+		hlcLast = 0;
+	}
 	const rows = await db.select<Array<{ value: string }>>('SELECT value FROM app_settings WHERE key = $1', [HLC_KEY]);
-	hlcLast = rows.length ? Number(JSON.parse(rows[0].value)) || 0 : 0;
-	hlcDb = name;
+	const stored = rows.length ? Number(JSON.parse(rows[0].value)) || 0 : 0;
+	hlcLast = Math.max(hlcLast, stored);
 }
 
 /**

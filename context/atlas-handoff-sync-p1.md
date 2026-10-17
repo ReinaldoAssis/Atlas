@@ -1,4 +1,4 @@
-# Handoff — Atlas · sync P2P (P1 + P2a + P2b)
+# Handoff — Atlas · sync P2P (P1 + P2)
 
 > Para o próximo agente. **Não duplique specs/planos/PRs**: referencie por caminho.
 > Escopo: `docs/MVP.md` · UI: `docs/DESIGN.md` · plano: `docs/ROADMAP.md` (§7 = ordem das fatias) ·
@@ -12,10 +12,10 @@
 | **P1** | Metadados de sync (migração **v6** + HLC + gravação só da linha alterada + purga por par) | ✅ |
 | **P2a** | PoC E0a: identidade Ed25519, endpoint iroh LAN, DNS-SD, hello | ✅ (macOS + CI) |
 | **P2b** | Protocolo por cursor + merge LWW + testes de convergência | ✅ |
-| **P2c** | Commands (`start/stop/now/status`) + evento `atlas://sync-applied` + allowlist | — |
+| **P2c** | Commands (`start/stop/now/status`) + evento `atlas://sync-applied` + allowlist | ✅ |
 | P3–P5 | Pareamento SAS, descoberta iOS (Bonjour), UI de Sincronização | — (ver `docs/SYNC.md` §4) |
 
-Testes: **121** (`npm test`); Rust: **31** (`cargo test`, era 2 no começo do P2).
+Testes: **121** (`npm test`); Rust: **37** (`cargo test`, era 2 no começo do P2).
 CI: `frontend` (ubuntu+windows), `rust`, `windows-installer`, `release`.
 
 ## P2a — o que entrou (`src-tauri/src/sync/`)
@@ -33,6 +33,10 @@ CI: `frontend` (ubuntu+windows), `rust`, `windows-installer`, `release`.
   anúncios repetidos do mDNS.
 - Cargo: `iroh 1.3`/`mdns-sd 0.21`/`tokio` só desktop (`cfg(not(ios/android))`);
   `rust-version` 1.90 → **1.91** (MSRV do iroh).
+- **P2c** (`commands.rs`): `sync_start`/`sync_stop`/`sync_now`/`sync_status`/
+  `sync_cursors`; opt-in em `app_settings.sync_enabled`; allowlist de
+  `sync_peers` checada antes do hello; evento `atlas://sync-applied`; banco de
+  teste recusado. Front: `nextWriteStamp` relê `hlc_last` a cada gravação.
 - **P2b** (`store.rs`/`session.rs`): delta por origem × cursor, merge LWW
   payload-agnóstico com schema lido de `PRAGMA table_info`, cursores +
   `last_sync_at` só no fim, `hlc_last` sobe com o maior carimbo recebido.
@@ -89,9 +93,9 @@ CI: `frontend` (ubuntu+windows), `rust`, `windows-installer`, `release`.
 
 ## Pendências (usuário)
 
-- **P2c (próximo)**: commands `sync_start`/`sync_stop`/`sync_now`/`sync_status`,
-  allowlist de `sync_peers`, evento `atlas://sync-applied` e `nextWriteStamp`
-  relendo `hlc_last` do banco.
+- **P3 (próximo)**: pareamento SAS de 6 dígitos + allowlist/store de pares com
+  UI mínima da lista de descobertos; depois **P4** (Bonjour no iOS) e **P5**
+  (UI de Sincronização + reload no evento + cópia de nota em conflito).
 - **Windows (P2c em diante)**: aceitar o prompt do Firewall (UDP de entrada) e
   rodar o `sync_poc` em duas máquinas Windows quando houver par disponível.
 - iPhone (S9) e Windows (S7/S8b): checklists em `docs/IOS-SIDELOAD.md` e

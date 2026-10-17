@@ -88,6 +88,10 @@ O CI garante que o `.exe` **compila**; o resto só se vê instalando:
       **encerra e reabre sozinho** — e os dados continuam lá;
 - [ ] abrir anexo de nota abre no app padrão do Windows;
 - [ ] notificações locais (lembretes) pedem permissão e aparecem;
+- [ ] **sync (P2c em diante)**: ao ligar a sincronização (hoje pelo console do
+      WebView até a UI do P5), o Windows mostra o prompt do **Firewall** para UDP
+      de entrada; aceite. Dois Atlas na mesma Wi‑Fi precisam aceitar nos dois
+      lados — sem isso o anúncio aparece mas a sessão não conecta;
 - [ ] desinstalar remove o app e deixa os dados em `%APPDATA%` (confirmar).
 
 ## SmartScreen — o que esperar

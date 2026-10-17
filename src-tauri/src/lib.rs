@@ -60,8 +60,23 @@ pub fn run() {
     .plugin(tauri_plugin_updater::Builder::new().build())
     .plugin(tauri_plugin_process::init());
 
+  // Os commands de sync só existem no desktop; o iOS entra em P4.
+  #[cfg(not(any(target_os = "android", target_os = "ios")))]
+  let builder = builder
+    .manage(sync::commands::SyncState::default())
+    .invoke_handler(tauri::generate_handler![
+      db_batch,
+      sync::commands::sync_start,
+      sync::commands::sync_stop,
+      sync::commands::sync_now,
+      sync::commands::sync_status,
+      sync::commands::sync_cursors
+    ]);
+
+  #[cfg(any(target_os = "android", target_os = "ios"))]
+  let builder = builder.invoke_handler(tauri::generate_handler![db_batch]);
+
   builder
-    .invoke_handler(tauri::generate_handler![db_batch])
     .plugin(tauri_plugin_sql::Builder::default().build())
     .plugin(tauri_plugin_notification::init())
     .plugin(tauri_plugin_dialog::init())

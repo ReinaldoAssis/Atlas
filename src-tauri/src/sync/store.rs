@@ -116,6 +116,22 @@ pub async fn load_schema(pool: &SqlitePool) -> Result<Vec<TableSchema>, String> 
   Ok(schemas)
 }
 
+/// EndpointIDs pareados (allowlist). Nada mescla sem estar aqui.
+pub async fn allowlist(pool: &SqlitePool) -> Result<std::collections::BTreeSet<String>, String> {
+  let rows = sqlx::query("SELECT endpoint_id FROM sync_peers")
+    .fetch_all(pool)
+    .await
+    .map_err(|error| format!("allowlist: {error}"))?;
+  rows
+    .into_iter()
+    .map(|row| {
+      row
+        .try_get::<String, _>("endpoint_id")
+        .map_err(|error| format!("allowlist: {error}"))
+    })
+    .collect()
+}
+
 /// Cursores que este lado tem para um par (peer → origens).
 pub async fn cursors_for(pool: &SqlitePool, peer_id: &str) -> Result<Vec<Cursor>, String> {
   let rows = sqlx::query(
@@ -131,6 +147,32 @@ pub async fn cursors_for(pool: &SqlitePool, peer_id: &str) -> Result<Vec<Cursor>
       Ok(Cursor {
         owner: row.try_get("owner").map_err(|error| error.to_string())?,
         updated_at: row.try_get("updated_at").map_err(|error| error.to_string())?,
+      })
+    })
+    .collect()
+}
+
+/// Par confiável, como a UI/status vê.
+#[derive(Debug, Clone)]
+pub struct PeerRecord {
+  pub endpoint_id: String,
+  pub name: String,
+  pub last_sync_at: i64,
+}
+
+/// Pares pareados (a allowlist) com o último sync.
+pub async fn peers(pool: &SqlitePool) -> Result<Vec<PeerRecord>, String> {
+  let rows = sqlx::query("SELECT endpoint_id, name, last_sync_at FROM sync_peers ORDER BY name, endpoint_id")
+    .fetch_all(pool)
+    .await
+    .map_err(|error| format!("pares: {error}"))?;
+  rows
+    .into_iter()
+    .map(|row| {
+      Ok(PeerRecord {
+        endpoint_id: row.try_get("endpoint_id").map_err(|error| error.to_string())?,
+        name: row.try_get("name").map_err(|error| error.to_string())?,
+        last_sync_at: row.try_get("last_sync_at").map_err(|error| error.to_string())?,
       })
     })
     .collect()
