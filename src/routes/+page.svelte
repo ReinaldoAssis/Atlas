@@ -1193,6 +1193,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const next = cloneSnapshot();
 		const editingId = financeCategoryForm.id;
 		const isIncome = financeCategoryForm.type === 'income';
+		let createdId: string | null = null;
 		if (editingId) {
 			const found = next.categories.find((item) => item.id === editingId);
 			if (found) {
@@ -1203,6 +1204,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			}
 		} else {
 			const newId = id();
+			createdId = newId;
 			next.categories.push({
 				id: newId, module: 'finance', name, color: financeCategoryForm.color, custom: true,
 				kind: isIncome ? 'in' : 'out',
@@ -1210,7 +1212,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			});
 			if (financeCategoryForm.back) financeEntry = { ...financeEntry, open: true, type: isIncome ? 'income' : 'expense', categoryId: newId };
 		}
-		const targetId = editingId ?? (next.categories[next.categories.length - 1]?.id ?? '');
+		const targetId = editingId ?? createdId ?? '';
 		const sound = snapshot.preferences.soundEnabled;
 		financeCategoryForm = { ...financeCategoryForm, open: false, id: null, name: '', back: false };
 		await commit(next);
@@ -1576,7 +1578,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	/** Abre o menu do card de hábito (segurar no toque / botão direito / ⋯). */
 	function openHabitMenu(habit: Habit, x: number, y: number) {
-		habitMenu = { habit, x: Math.min(x, window.innerWidth - 200), y: Math.min(y, window.innerHeight - 170) };
+		habitMenu = { habit, x: Math.min(x, window.innerWidth - 200), y: Math.min(y, window.innerHeight - 210) };
 	}
 
 	function startHabitPress(event: PointerEvent, habit: Habit) {
@@ -3638,6 +3640,10 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 						inputmode="numeric"
 						aria-label="Meta de hábitos por dia"
 						value={dayGoalDraft}
+						oninput={(event) => {
+							const value = Number(event.currentTarget.value);
+							if (Number.isInteger(value) && value >= 1 && value <= 12) dayGoalDraft = value;
+						}}
 						onchange={(event) => setDayGoalDraft(Number(event.currentTarget.value))}
 						onkeydown={(event) => {
 							if (event.key === 'Enter') event.currentTarget.blur();
