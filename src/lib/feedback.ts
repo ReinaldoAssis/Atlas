@@ -4,6 +4,39 @@ type FeedbackTone = 'tap' | 'success' | 'erase' | 'paint';
 
 let audio: AudioContext | undefined;
 
+/**
+ * “Thock” de digitação: pulso grave, filtrado e curto. A variação sutil evita
+ * o efeito metralhadora sem chamar atenção.
+ */
+export function playTypingThock(enabled = true): void {
+	if (!enabled || typeof window === 'undefined') return;
+	try {
+		audio ??= new AudioContext();
+		if (audio.state === 'suspended') void audio.resume();
+		const now = audio.currentTime;
+		const base = 155 + Math.random() * 35;
+		const oscillator = audio.createOscillator();
+		const filter = audio.createBiquadFilter();
+		const gain = audio.createGain();
+		oscillator.type = 'triangle';
+		oscillator.frequency.setValueAtTime(base, now);
+		oscillator.frequency.exponentialRampToValueAtTime(base * 0.72, now + 0.035);
+		filter.type = 'lowpass';
+		filter.frequency.setValueAtTime(460, now);
+		filter.Q.setValueAtTime(0.7, now);
+		gain.gain.setValueAtTime(0.0001, now);
+		gain.gain.exponentialRampToValueAtTime(0.016, now + 0.004);
+		gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.045);
+		oscillator.connect(filter);
+		filter.connect(gain);
+		gain.connect(audio.destination);
+		oscillator.start(now);
+		oscillator.stop(now + 0.06);
+	} catch {
+		// Audio is best effort; a browser may deny playback before a user gesture.
+	}
+}
+
 export function playFeedback(tone: FeedbackTone, enabled = true, variation = 0): void {
 	if (!enabled || typeof window === 'undefined') return;
 	try {

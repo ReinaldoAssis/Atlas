@@ -24,10 +24,10 @@ Regras e atalhos para quem (agente ou humano) mexe neste repositório.
 
 ## Docs que valem ler
 
-- `docs/ROADMAP.md` (escopo, fatias e ordem) · `docs/MVP.md` · `docs/DESIGN.md`
-- `docs/RELEASES.md` (release/updater) · `docs/IDEAS.md` (ideias fora do ciclo)
-- `docs/ANIM-NOTE-BUBBLE.md` (briefing das bolhas de tempo)
-- `context/atlas-handoff-*.md` (estado da última sessão)
+- `docs/README.md` (índice) · `docs/ROADMAP.md` (escopo, fatias e ordem)
+- `docs/MVP.md` · `docs/DESIGN.md` · `docs/SYNC.md` · `docs/IDEAS.md`
+- `docs/RELEASES.md` (release/updater) · `docs/ANIM-NOTE-BUBBLE.md`
+  (briefing das bolhas de tempo)
 
 ## Gotchas do ambiente
 

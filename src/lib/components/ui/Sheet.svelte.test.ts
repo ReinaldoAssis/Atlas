@@ -82,6 +82,17 @@ describe('Sheet', () => {
 		expect(onpullup).toHaveBeenCalledTimes(1);
 	});
 
+	it('acompanha o dedo durante o arrasto', async () => {
+		const { container } = render(Sheet, {
+			props: { title: 'Nota', closeLabel: 'Fechar', onclose: vi.fn(), onpullup: vi.fn() }
+		});
+		const sheet = container.querySelector('.sheet') as HTMLElement;
+		const body = container.querySelector('.body') as HTMLElement;
+		await fireEvent.touchStart(body, { touches: [{ clientX: 180, clientY: 500 }] });
+		await fireEvent.touchMove(body, { touches: [{ clientX: 180, clientY: 400 }] });
+		expect(sheet.style.transform).toContain('translateY(');
+	});
+
 	it('não dispara onpullup ao começar num botão', async () => {
 		const onpullup = vi.fn();
 		render(Sheet, {

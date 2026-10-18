@@ -1,46 +1,118 @@
 # Atlas
 
-Atlas é um espaço pessoal local-first para acompanhar finanças, hábitos e tempo. O dashboard organiza os registros e suas tendências; notas, grafo de planejamento e IA ficam para etapas posteriores.
+> **IMAGEM AQUI — logo do Atlas**  
+> Substituir por `docs/assets/logo.png` (quadrado, fundo transparente, ~512 px).
+
+<p>
+  <a href="https://github.com/ReinaldoAssis/Atlas/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ReinaldoAssis/Atlas/actions/workflows/ci.yml/badge.svg" /></a>
+  <a href="https://github.com/ReinaldoAssis/Atlas/releases"><img alt="Release" src="https://img.shields.io/github/v/release/ReinaldoAssis/Atlas" /></a>
+  <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-blue" /></a>
+  <img alt="Platforms" src="https://img.shields.io/badge/platforms-iOS%20%7C%20macOS%20%7C%20Windows-8d968a" />
+</p>
+
+**Atlas is a local-first personal space for finances, habits, time, notes, and the connections between them.** No account, no cloud, no subscription — your data stays on your device and can sync directly between paired devices on the same network.
+
+> **IMAGEM AQUI — banner do Atlas**  
+> Substituir por `docs/assets/banner.png` (1600×640, dashboard + iPhone).
+
+<p align="center">
+  <em>Português? Leia o <a href="README.pt-BR.md">README em pt-BR</a>.</em>
+</p>
+
+## Why Atlas
+
+- **One place for the day.** Finances, habits, time blocks, notes, and a life graph share the same local snapshot.
+- **Fast to capture.** One gesture or short form; feedback with motion, sound, and haptics.
+- **Local-first by design.** SQLite on device, manual backups, optional encrypted backup.
+- **Private sync.** Direct device-to-device pairing over the LAN with a 6-digit SAS; no relay.
+- **Built to be owned.** GPL-3.0, open source, no telemetry.
+
+## Features
+
+- **Dashboard** — balance, habits, time allocation, goals, streaks, and life-force progress.
+- **Finances** — income/expense entries, categories, monthly limits, savings goal, undo.
+- **Habits** — boolean, count, duration and weekly habits; history, streaks, and XP.
+- **Trackers** — weight, mood, sleep, measurements; multiple entries per day.
+- **Time planner** — paint time blocks, 7-day rolling window, range calendar (up to 14 days), notes per block.
+- **Notes** — Markdown editor (Carta), folders, tags, wiki-links, backlinks, attachments, trash, Markdown export.
+- **Life graph** — domains, nodes, and edges tied to real records.
+- **Sync** — LAN peer discovery, SAS pairing, cursor deltas, LWW merge, conflict copies.
+- **Feedback** — sound/haptics preferences, reduced-motion support, test mode with a separate database.
+
+## Screenshots
+
+> **IMAGEM AQUI — screenshot 1** (`docs/assets/dashboard.png`) — dashboard on iPhone.  
+> **IMAGEM AQUI — screenshot 2** (`docs/assets/time.png`) — time planner and range calendar.  
+> **IMAGEM AQUI — screenshot 3** (`docs/assets/notes.png`) — note editor and preview.
 
 ## Stack
 
-- SvelteKit, Svelte 5 e TypeScript em build estático
-- Tauri 2 para iOS, macOS e Windows
-- SQLite no aplicativo instalado; armazenamento local do navegador apenas na prévia web
-- Sem conta, sincronização ou serviços remotos no MVP
+- **SvelteKit + Svelte 5 + TypeScript**, static build
+- **Tauri 2** for iOS, macOS, and Windows
+- **SQLite** in the packaged app; browser storage only in the web preview
+- **Carta** for Markdown rendering, **Paraglide** for pt-BR copy
+- **Vitest** (unit + component) and **Rust** tests
 
-## Rodar a prévia web
+## Getting started
+
+### Web preview
 
 ```sh
 npm install
 npm run dev
 ```
 
-A prévia usa o armazenamento local do navegador e não representa uma instalação nativa.
+The web preview uses browser storage and is meant for UI work; it is not a
+packaged install.
 
-## Rodar o aplicativo Tauri
+### Tauri app
 
 ```sh
 npm run tauri:dev
 ```
 
-O ambiente precisa do toolchain Rust e das dependências nativas indicadas pela documentação do Tauri para cada plataforma. Para iOS, o desenvolvimento e a distribuição também dependem de macOS e Xcode.
+You need the Rust toolchain and the native dependencies for your platform.
+iOS builds require macOS and Xcode.
 
-## Escopo acordado
-
-O escopo funcional, as regras de streak e Life Force, lembretes, privacidade e backup estão descritos em [docs/MVP.md](docs/MVP.md).
-
-## Testes e verificações
+### Checks
 
 ```sh
-npm run check    # svelte-check (+ sync e i18n)
-npm test         # Vitest: projetos `unit` (node) e `components` (jsdom)
+npm run check                 # svelte-check + sync + i18n
+npm test                      # Vitest: node unit + jsdom components
 cargo test --manifest-path src-tauri/Cargo.toml --locked
-npm run build && npm run csp:check   # CSP do app empacotado, num Chromium real
+npm run build && npm run csp:check
 ```
 
-## Distribuição
+## Platforms
 
-- **Windows**: instalador NSIS per-user, sem code signing — [docs/WINDOWS-INSTALLER.md](docs/WINDOWS-INSTALLER.md).
-- **iOS**: sideload com SideStore, `.ipa` sem assinatura — [docs/IOS-SIDELOAD.md](docs/IOS-SIDELOAD.md).
-- **Versões novas**: tag semver dispara o release assinado e o updater do app — [docs/RELEASES.md](docs/RELEASES.md).
+| Platform | Status | Distribution |
+|---|---|---|
+| **iOS** | Supported | Unsigned `.ipa` via SideStore — [guide](docs/IOS-SIDELOAD.md) |
+| **macOS** | Supported | Local `.app`/`.dmg` build script |
+| **Windows** | Supported | NSIS per-user installer, unsigned — [guide](docs/WINDOWS-INSTALLER.md) |
+
+Releases are semver tags; the Windows updater consumes the signed release
+artifacts. See [docs/RELEASES.md](docs/RELEASES.md).
+
+## Data and privacy
+
+The packaged app stores everything in a local SQLite database. Backups are
+manual and can be plain `.zip` or encrypted JSON. Sync is optional, direct
+between paired devices, and never goes through Atlas servers. The web preview
+uses local browser storage.
+
+## Documentation
+
+Start at [docs/README.md](docs/README.md). Product scope is in
+[docs/MVP.md](docs/MVP.md), UI rules in [docs/DESIGN.md](docs/DESIGN.md), and
+the delivered/upcoming slices in [docs/ROADMAP.md](docs/ROADMAP.md).
+
+## Contributing
+
+The repository is personal but open source. Branch from `main`, keep
+`npm run check`, `npm test`, and `npm run build` green, and open a PR. Read
+[AGENTS.md](AGENTS.md) for conventions and environment gotchas.
+
+## License
+
+[GPL-3.0](LICENSE).

@@ -3,6 +3,8 @@
 	import Sheet from '#lib/components/ui/Sheet.svelte';
 	import { formatClock } from '#lib/duration';
 	import { buildHistoryChart } from '#lib/history-chart';
+	import HistoryList from './HistoryList.svelte';
+	import type { HistoryGroup } from '#lib/history-list';
 	import {
 		HABIT_BOOLEAN_LABELS,
 		booleanLabelOf,
@@ -52,6 +54,15 @@
 	});
 
 	const latest = $derived(filtered[0] ?? null);
+	const groups = $derived.by(() => {
+		const map = new Map<string, HistoryGroup['rows']>();
+		for (const log of filtered) {
+			const rows = map.get(log.date) ?? [];
+			rows.push({ id: log.id, value: valueLabel(log.value) });
+			map.set(log.date, rows);
+		}
+		return [...map].map(([date, rows]) => ({ date, rows }));
+	});
 	const chart = $derived(
 		habit.metric === 'boolean'
 			? null
@@ -103,16 +114,13 @@
 	{/if}
 
 	{#if filtered.length}
-		<ul class="hh-entries">
-			{#each filtered as log (log.id)}
-				<li>
-					<button type="button" onclick={() => onopen(log)}>
-						<span class="hh-when">{dateLabel(log.date)}</span>
-						<b>{valueLabel(log.value)}</b>
-					</button>
-				</li>
-			{/each}
-		</ul>
+		<HistoryList
+			{groups}
+			onopen={(id) => {
+				const log = logs.find((item) => item.id === id);
+				if (log) onopen(log);
+			}}
+		/>
 	{:else}
 		<p class="hh-empty">Nenhum registro no período.</p>
 	{/if}
@@ -178,36 +186,6 @@
 	}
 	.hh-dot {
 		fill: var(--lime);
-	}
-	.hh-entries {
-		display: grid;
-		gap: 2px;
-		margin: 14px 0 0;
-		padding: 0;
-		list-style: none;
-	}
-	.hh-entries button {
-		display: flex;
-		width: 100%;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: 12px;
-		padding: 12px 8px;
-		border: 0;
-		border-radius: 8px;
-		background: transparent;
-		color: var(--tx);
-		font: inherit;
-		text-align: left;
-		cursor: pointer;
-	}
-	.hh-entries button:active {
-		background: var(--s2);
-	}
-	.hh-when {
-		color: var(--mu);
-		font-size: 13px;
-		font-weight: 600;
 	}
 	.hh-empty {
 		margin: 18px 0 4px;

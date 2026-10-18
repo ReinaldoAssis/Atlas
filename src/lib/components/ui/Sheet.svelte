@@ -35,16 +35,44 @@
 		let startX = 0;
 		let active = false;
 		let armed = false;
+		let exitTimer: ReturnType<typeof setTimeout> | undefined;
+		let settleTimer: ReturnType<typeof setTimeout> | undefined;
+		const backdrop = node.parentElement;
+		const reduced = () =>
+			typeof window.matchMedia !== 'function' || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+		function settle() {
+			node.style.transition = 'transform .28s cubic-bezier(.3,1.2,.5,1)';
+			node.style.transform = '';
+			if (backdrop) {
+				backdrop.style.transition = 'opacity .22s ease-out';
+				backdrop.style.opacity = '1';
+			}
+			settleTimer = setTimeout(() => {
+				node.style.transition = '';
+				node.style.willChange = '';
+				if (backdrop) backdrop.style.transition = '';
+			}, 300);
+		}
+
 		const down = (event: TouchEvent) => {
 			if (!callback || event.touches.length !== 1) return;
 			const target = event.target as HTMLElement | null;
 			if (target?.closest('button, a, input, textarea, select, [contenteditable="true"], [role="button"]')) return;
 			const body = node.querySelector<HTMLElement>('.body');
 			if (body && body.scrollTop > 0) return;
+			if (exitTimer) clearTimeout(exitTimer);
+			if (settleTimer) clearTimeout(settleTimer);
 			startY = event.touches[0].clientY;
 			startX = event.touches[0].clientX;
 			active = true;
 			armed = false;
+			node.style.transition = 'none';
+			node.style.willChange = 'transform';
+			if (backdrop) {
+				backdrop.style.transition = 'none';
+				backdrop.style.opacity = '1';
+			}
 		};
 		const move = (event: TouchEvent) => {
 			if (!active || !callback || event.touches.length !== 1) return;
@@ -52,22 +80,45 @@
 			const dx = event.touches[0].clientX - startX;
 			if (!armed && Math.abs(dx) > Math.abs(dy)) {
 				active = false;
+				settle();
 				return;
 			}
 			if (!armed && dy < -12) armed = true;
-			if (armed && event.cancelable) event.preventDefault();
+			if (!armed) return;
+			if (event.cancelable) event.preventDefault();
+			// O sheet acompanha o dedo com resistência; o backdrop escurece menos.
+			const pull = Math.max(0, -dy);
+			node.style.transform = `translateY(${-Math.min(130, pull * 0.55)}px)`;
+			if (backdrop) backdrop.style.opacity = String(Math.max(0.35, 1 - pull / 320));
 		};
 		const end = (event: TouchEvent) => {
 			if (!active || !callback) return;
 			const touch = event.changedTouches[0];
 			const dy = touch ? touch.clientY - startY : 0;
 			active = false;
-			if (armed && dy <= -48) callback();
+			const triggered = armed && dy <= -48;
 			armed = false;
+			if (!triggered) {
+				settle();
+				return;
+			}
+			if (reduced()) {
+				callback();
+				return;
+			}
+			node.style.transition = 'transform .2s cubic-bezier(.4,0,1,1)';
+			node.style.transform = 'translateY(-110%)';
+			if (backdrop) {
+				backdrop.style.transition = 'opacity .2s ease-in';
+				backdrop.style.opacity = '0';
+			}
+			exitTimer = setTimeout(callback, 190);
 		};
 		const cancel = () => {
+			if (!active) return;
 			active = false;
 			armed = false;
+			settle();
 		};
 		node.addEventListener('touchstart', down, { passive: true });
 		node.addEventListener('touchmove', move, { passive: false });
@@ -75,6 +126,8 @@
 		node.addEventListener('touchcancel', cancel);
 		return {
 			destroy() {
+				if (exitTimer) clearTimeout(exitTimer);
+				if (settleTimer) clearTimeout(settleTimer);
 				node.removeEventListener('touchstart', down);
 				node.removeEventListener('touchmove', move);
 				node.removeEventListener('touchend', end);

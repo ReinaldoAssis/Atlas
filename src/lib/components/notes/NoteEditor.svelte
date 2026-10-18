@@ -21,7 +21,7 @@
 		type Note,
 		type NoteFolder
 	} from '#lib/notes';
-	import { playTone, prefersReducedMotion, pulseHaptic } from '#lib/feedback';
+	import { playTone, playTypingThock, prefersReducedMotion, pulseHaptic } from '#lib/feedback';
 	import { decorateTempoRefs } from '#lib/tempo-ref';
 	import { TimeBubble } from '#lib/bubble';
 	import type { TimeBlock } from '#lib/atlas';
@@ -101,7 +101,7 @@
 	}
 
 	function typingClick() {
-		if (typingSound) playTone(950 + Math.random() * 250, 0.03, 'square', 0.03, sound);
+		playTypingThock(typingSound && sound);
 	}
 
 	/* ---------- persistência ---------- */
