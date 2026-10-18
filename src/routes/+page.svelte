@@ -452,6 +452,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let financeCatPressTimer: ReturnType<typeof setTimeout> | undefined;
 	let financeCatPressOrigin = { x: 0, y: 0 };
 	let financeCatPressSuppress = false;
+	/** Um toque que abriu o sheet via long press não pode fechá-lo no mesmo gesto. */
+	let finOverlayDown = false;
 	let habitCelebration = $state<number | null>(null);
 	let effectsCanvas = $state<HTMLCanvasElement | null>(null);
 	let financeEntry = $state<{ open: boolean; type: 'income' | 'expense'; categoryId: string; amountMinor: number; description: string }>({ open: false, type: 'expense', categoryId: '', amountMinor: 0, description: '' });
@@ -1143,6 +1145,20 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		financeEntry = { ...financeEntry, open: false };
 		financeCategoryForm = { open: true, id: null, type: back ? financeEntry.type : 'expense', name: '', color: FINANCE_COLORS[1], limitMinor: 50000, back };
 		playTone(380, 0.1, 'sine', 0.05, snapshot?.preferences.soundEnabled ?? true);
+	}
+
+	/**
+	 * Backdrop dos sheets de Finanças. O clique só fecha se o gesto começou no
+	 * próprio backdrop — assim o `click` sintetizado no fim de um long press que
+	 * abriu o sheet não o fecha imediatamente.
+	 */
+	function onFinOverlayPointerDown(event: PointerEvent) {
+		finOverlayDown = event.target === event.currentTarget;
+	}
+
+	function onFinOverlayClick(event: MouseEvent, close: () => void) {
+		if (finOverlayDown && event.target === event.currentTarget) close();
+		finOverlayDown = false;
 	}
 
 	/** Long press (mobile) / clique direito (desktop) no tile de categoria. */
@@ -3785,7 +3801,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	{/if}
 
 	{#if financeEntry.open}
-		<div class="fin-overlay" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) financeEntry = { ...financeEntry, open: false }; }}>
+		<div class="fin-overlay" role="presentation" onpointerdown={onFinOverlayPointerDown} onclick={(event) => onFinOverlayClick(event, () => (financeEntry = { ...financeEntry, open: false }))}>
 			<div class="fin-sheet" role="dialog" aria-modal="true" aria-label="Novo lançamento">
 				<div class="fin-grip"></div>
 				<div class="fin-seg"><button class:on={financeEntry.type === 'expense'} onclick={() => setFinanceEntryType('expense')}>Despesa</button><button class:on={financeEntry.type === 'income'} onclick={() => setFinanceEntryType('income')}>Receita</button></div>
@@ -3799,7 +3815,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	{/if}
 
 	{#if financeCategoryForm.open}
-		<div class="fin-overlay" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) financeCategoryForm = { ...financeCategoryForm, open: false }; }}>
+		<div class="fin-overlay" role="presentation" onpointerdown={onFinOverlayPointerDown} onclick={(event) => onFinOverlayClick(event, () => (financeCategoryForm = { ...financeCategoryForm, open: false }))}>
 			<div class="fin-sheet" role="dialog" aria-modal="true" aria-label={financeCategoryForm.id ? 'Editar categoria' : 'Nova categoria'}>
 				<div class="fin-grip"></div>
 				{#if !financeCategoryForm.id}
@@ -3831,7 +3847,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	{/if}
 
 	{#if financeGoalSheet.open}
-		<div class="fin-overlay" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) financeGoalSheet = { ...financeGoalSheet, open: false }; }}>
+		<div class="fin-overlay" role="presentation" onpointerdown={onFinOverlayPointerDown} onclick={(event) => onFinOverlayClick(event, () => (financeGoalSheet = { ...financeGoalSheet, open: false }))}>
 			<div class="fin-sheet" role="dialog" aria-modal="true" aria-label="Meta de economia">
 				<div class="fin-grip"></div>
 				<div class="fin-amt">{money(financeGoalSheet.amountMinor, currency())}</div>

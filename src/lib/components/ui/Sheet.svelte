@@ -25,20 +25,35 @@
 		children?: Snippet;
 	} = $props();
 
-	/** Gesto da alça: arma após 12 px e abre após 48 px para cima. */
+	/**
+	 * Gesto de arrastar para cima em qualquer ponto do sheet (alça, cabeçalho ou
+	 * conteúdo quando o scroll está no topo). Arma após 12 px e abre após 48 px.
+	 * Controles interativos e conteúdo já rolado não iniciam o gesto.
+	 */
 	function pullUp(node: HTMLElement, callback?: () => void) {
 		let startY = 0;
+		let startX = 0;
 		let active = false;
 		let armed = false;
 		const down = (event: TouchEvent) => {
 			if (!callback || event.touches.length !== 1) return;
+			const target = event.target as HTMLElement | null;
+			if (target?.closest('button, a, input, textarea, select, [contenteditable="true"], [role="button"]')) return;
+			const body = node.querySelector<HTMLElement>('.body');
+			if (body && body.scrollTop > 0) return;
 			startY = event.touches[0].clientY;
+			startX = event.touches[0].clientX;
 			active = true;
 			armed = false;
 		};
 		const move = (event: TouchEvent) => {
 			if (!active || !callback || event.touches.length !== 1) return;
 			const dy = event.touches[0].clientY - startY;
+			const dx = event.touches[0].clientX - startX;
+			if (!armed && Math.abs(dx) > Math.abs(dy)) {
+				active = false;
+				return;
+			}
 			if (!armed && dy < -12) armed = true;
 			if (armed && event.cancelable) event.preventDefault();
 		};
@@ -128,8 +143,8 @@
 </script>
 
 <div class="backdrop" role="presentation" onclick={onBackdrop}>
-	<div class="sheet" role="dialog" aria-modal="true" aria-labelledby={titleId} bind:this={panel} tabindex="-1">
-		<div class="grip" class:pull={Boolean(onpullup)} aria-hidden="true" use:pullUp={onpullup}></div>
+	<div class="sheet" role="dialog" aria-modal="true" aria-labelledby={titleId} bind:this={panel} tabindex="-1" use:pullUp={onpullup}>
+		<div class="grip" class:pull={Boolean(onpullup)} aria-hidden="true"></div>
 		<header class="head">
 			<h2 id={titleId}>{title}</h2>
 			<button type="button" class="close" aria-label={closeLabel} onclick={onclose}>
@@ -176,8 +191,9 @@
 	}
 	.grip.pull {
 		position: relative;
-		height: 20px;
-		margin: 0 auto 6px;
+		width: 64px;
+		height: 24px;
+		margin: -4px auto 2px;
 		background: transparent;
 		touch-action: none;
 		cursor: grab;
@@ -185,8 +201,11 @@
 	.grip.pull::before {
 		content: '';
 		position: absolute;
-		inset: 8px 0 auto;
+		top: 8px;
+		left: 50%;
+		width: 40px;
 		height: 4px;
+		margin-left: -20px;
 		border-radius: 2px;
 		background: var(--ln);
 	}

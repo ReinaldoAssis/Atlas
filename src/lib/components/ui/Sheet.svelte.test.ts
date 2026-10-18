@@ -70,6 +70,30 @@ describe('Sheet', () => {
 		expect(onpullup).toHaveBeenCalledTimes(1);
 	});
 
+	it('dispara onpullup ao arrastar o conteúdo para cima', async () => {
+		const onpullup = vi.fn();
+		const { container } = render(Sheet, {
+			props: { title: 'Nota', closeLabel: 'Fechar', onclose: vi.fn(), onpullup }
+		});
+		const body = container.querySelector('.body') as HTMLElement;
+		await fireEvent.touchStart(body, { touches: [{ clientX: 180, clientY: 500 }] });
+		await fireEvent.touchMove(body, { touches: [{ clientX: 180, clientY: 440 }] });
+		await fireEvent.touchEnd(body, { changedTouches: [{ clientX: 180, clientY: 440 }] });
+		expect(onpullup).toHaveBeenCalledTimes(1);
+	});
+
+	it('não dispara onpullup ao começar num botão', async () => {
+		const onpullup = vi.fn();
+		render(Sheet, {
+			props: { title: 'Nota', closeLabel: 'Fechar', onclose: vi.fn(), onpullup }
+		});
+		const close = screen.getByRole('button', { name: 'Fechar' });
+		await fireEvent.touchStart(close, { touches: [{ clientX: 320, clientY: 60 }] });
+		await fireEvent.touchMove(close, { touches: [{ clientX: 320, clientY: 10 }] });
+		await fireEvent.touchEnd(close, { changedTouches: [{ clientX: 320, clientY: 10 }] });
+		expect(onpullup).not.toHaveBeenCalled();
+	});
+
 	it('não dispara onpullup em arrasto curto', async () => {
 		const onpullup = vi.fn();
 		const { container } = render(Sheet, {
