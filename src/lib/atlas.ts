@@ -208,7 +208,7 @@ export function createEmptySnapshot(): AtlasSnapshot {
 		dailyGoal: DAILY_GOAL_DEFAULT,
 		preferences: {
 			currency: 'BRL',
-			notificationsEnabled: false,
+			notificationsEnabled: true,
 			soundEnabled: true,
 			typingSoundEnabled: true,
 		hapticsEnabled: true,

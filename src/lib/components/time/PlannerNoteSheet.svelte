@@ -4,7 +4,11 @@
 	import type { Note } from '#lib/notes';
 
 	/** Leitura da nota aberta a partir do dialog do planejador, sem sair do Tempo. */
-	let { note, onclose }: { note: Note; onclose: () => void } = $props();
+	let {
+		note,
+		onopenfull,
+		onclose
+	}: { note: Note; onopenfull: (note: Note) => void; onclose: () => void } = $props();
 
 	const carta = getCarta();
 	let bodyEl = $state<HTMLElement | null>(null);
@@ -28,7 +32,7 @@
 	});
 </script>
 
-<Sheet title={note.title || 'Sem título'} closeLabel="Fechar" {onclose}>
+<Sheet title={note.title || 'Sem título'} closeLabel="Fechar" {onclose} onpullup={() => onopenfull(note)}>
 	{#if note.tags.length}
 		<div class="pn-tags">
 			{#each note.tags as tag (tag)}<span>#{tag}</span>{/each}

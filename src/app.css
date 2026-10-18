@@ -261,7 +261,10 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .fin-sw { display: flex; gap: 10px; justify-content: center; margin: 6px 0 14px; }
 .fin-sw button { width: 34px; height: 34px; border-radius: 50%; background: var(--cc); transition: transform .15s; }
 .fin-sw button.on { box-shadow: 0 0 0 3px var(--fp-s), 0 0 0 5px var(--fp-tx); transform: scale(1.1); }
-.fin-lim { font-size: 34px; font-weight: 800; letter-spacing: -.04em; text-align: center; margin: 4px 0 12px; }
+.fin-lim { font-size: 34px; font-weight: 800; letter-spacing: -.04em; text-align: center; margin: 4px 0 12px; display: flex; align-items: baseline; justify-content: center; gap: 6px; }
+.fin-lim span { color: var(--fp-mu); font-size: 16px; font-weight: 700; }
+.fin-lim-input { width: 5.6em; padding: 0; border: 0; background: transparent; color: var(--fp-tx); font: inherit; text-align: right; outline: none; }
+.fin-lim-input:focus { border-bottom: 2px solid var(--fp-acc); }
 .fin-sheet input[type='range'] { -webkit-appearance: none; appearance: none; width: 100%; height: 16px; border-radius: 8px; background: linear-gradient(to right, var(--fp-acc) var(--f,0%), var(--fp-s2) 0); outline: 0; margin: 0; }
 .fin-sheet input[type='range']::-webkit-slider-thumb { -webkit-appearance: none; width: 36px; height: 36px; border-radius: 50%; background: var(--fp-tx); border: 5px solid var(--fp-acc); }
 .fin-sheet input[type='range']::-moz-range-thumb { width: 26px; height: 26px; border-radius: 50%; background: var(--fp-tx); border: 5px solid var(--fp-acc); }
