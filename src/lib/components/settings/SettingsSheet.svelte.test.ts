@@ -18,8 +18,6 @@ function setup(overrides: Record<string, unknown> = {}) {
 		onpreference: vi.fn(),
 		oncurrency: vi.fn(async () => true),
 		ontestmode: vi.fn(),
-		onaddcategory: vi.fn(),
-		onrenamecategory: vi.fn(),
 		onpause: vi.fn(),
 		onexport: vi.fn(),
 		onimport: vi.fn(),
@@ -100,6 +98,26 @@ describe('SettingsSheet', () => {
 		expect(props.onsyncinterval).toHaveBeenCalledWith(5);
 	});
 
+	it('esconde o avançado atrás de um spoiler recolhido', () => {
+		setup({
+			syncAvailable: true,
+			sync: {
+				enabled: true,
+				running: true,
+				endpointId: 'abc',
+				peers: [],
+				pendingPairs: [],
+				autoSync: true,
+				intervalSecs: 2,
+				discovery: { state: 'browsing', found: 0, message: null }
+			}
+		});
+		expect(screen.getByText('Avançado')).toBeTruthy();
+		const spoiler = document.querySelector('details.advanced') as HTMLDetailsElement;
+		expect(spoiler).toBeTruthy();
+		expect(spoiler.open).toBe(false);
+	});
+
 	it('explica a permissão de Rede Local negada', () => {
 		setup({
 			syncAvailable: true,
@@ -140,21 +158,6 @@ describe('SettingsSheet', () => {
 
 		await fireEvent.click(toggle);
 		expect(props.ontestmode).toHaveBeenCalledWith(false);
-	});
-
-	it('cria categoria com módulo, nome e cor da paleta', async () => {
-		const props = setup();
-
-		await fireEvent.click(screen.getByRole('radio', { name: 'Tempo' }));
-		await fireEvent.input(screen.getByLabelText('Nova categoria'), { target: { value: 'Estudo' } });
-		await fireEvent.click(screen.getByRole('button', { name: '#c6a8ff' }));
-		await fireEvent.click(screen.getByRole('button', { name: 'Adicionar categoria' }));
-
-		expect(props.onaddcategory).toHaveBeenCalledWith({
-			module: 'time',
-			name: 'Estudo',
-			color: '#c6a8ff'
-		});
 	});
 
 	it('manda pausar o Atlas', async () => {

@@ -10,6 +10,7 @@
 	import ValueSheet from '../ui/ValueSheet.svelte';
 	import { playTone, pulseHaptic } from '#lib/feedback';
 	import { formatClock } from '#lib/duration';
+	import { buildHistoryChart } from '#lib/history-chart';
 	import {
 		TRACKER_BOOLEAN_LABELS,
 		booleanLabelOf,
@@ -195,7 +196,8 @@
 
 	function sheetMax(tracker: Tracker): number {
 		const base = Math.max(tracker.target ?? 0, ...entriesOf(tracker.id).map((entry) => entry.value), 1);
-		return tracker.metric === 'duration' ? Math.max(180, base * 3) : Math.max(base * 2, base + 1);
+		// O maior valor já usado vira o teto; o ValueSheet expande se digitar mais.
+		return base;
 	}
 
 	function sheetStep(tracker: Tracker): number {
@@ -220,21 +222,9 @@
 		const cutoff = chartRange === 'all' ? '' : dateOffset(today, chartRange === '7' ? -6 : -29);
 		const points = list
 			.filter((entry) => !cutoff || entry.date >= cutoff)
-			.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
-		if (!points.length) return null;
-		const width = 320;
-		const height = 120;
-		const pad = 12;
-		const scale = tracker.target == null ? points.map((entry) => entry.value) : [...points.map((entry) => entry.value), tracker.target];
-		const min = Math.min(...scale);
-		const max = Math.max(...scale);
-		const span = max - min || 1;
-		const x = (index: number) => (points.length === 1 ? width / 2 : pad + (index / (points.length - 1)) * (width - pad * 2));
-		const y = (value: number) => height - pad - ((value - min) / span) * (height - pad * 2);
-		const coords = points.map((entry, index) => [x(index), y(entry.value)] as const);
-		const line = coords.map(([px, py], index) => `${index ? 'L' : 'M'}${px.toFixed(1)} ${py.toFixed(1)}`).join(' ');
-		const area = `${line} L${coords[coords.length - 1][0].toFixed(1)} ${height} L${coords[0][0].toFixed(1)} ${height} Z`;
-		return { width, height, line, area, coords, targetY: tracker.target == null ? null : y(tracker.target) };
+			.sort((a, b) => sortKey(a).localeCompare(sortKey(b)))
+			.map((entry) => ({ date: entry.date, value: entry.value }));
+		return buildHistoryChart(points, tracker.target);
 	}
 
 	const chart = $derived(detailTracker && detailTracker.metric !== 'boolean' ? chartData(detailTracker, detailEntries) : null);
@@ -650,8 +640,6 @@
 			/>
 		{/if}
 
-		<Button onclick={openNewEntry}><Plus size={16} /> Registrar</Button>
-
 		{#if detailEntries.length}
 			<ul class="tk-entries">
 				{#each detailEntries as entry (entry.id)}
@@ -665,14 +653,6 @@
 				{/each}
 			</ul>
 		{/if}
-
-		<div class="tk-actions">
-			<Button variant="secondary" onclick={() => openEditTracker(tracker)}><Pencil size={15} /> Editar</Button>
-			<Button variant="secondary" onclick={() => toggleArchive(tracker)}>
-				{#if tracker.active}<Archive size={15} /> Arquivar{:else}<ArchiveRestore size={15} /> Reativar{/if}
-			</Button>
-			<Button variant="danger" onclick={() => removeTracker(tracker)}>Excluir</Button>
-		</div>
 	</Sheet>
 {/if}
 
@@ -895,7 +875,6 @@
 	.tk-entries b { font-weight: 700; }
 	.tk-entries small { grid-column: 1 / -1; color: var(--mu); font-size: 12px; }
 	.tk-e-when { color: var(--mu); font-size: 12px; font-weight: 600; align-self: center; }
-	.tk-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
 	@media (min-width: 900px) {
 		.tk { max-width: none; }

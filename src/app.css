@@ -56,7 +56,7 @@
 }
 
 * { box-sizing: border-box; }
-html, body { min-width: 360px; min-height: 100%; margin: 0; overflow-x: hidden; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; overscroll-behavior-x: none; }
+html, body { min-width: 360px; min-height: 100%; margin: 0; overflow-x: hidden; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; overscroll-behavior-x: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 body { background: var(--bg); }
 button, input, select { font: inherit; }
 button { color: inherit; }
@@ -305,6 +305,8 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .goal-stepper { display: flex; align-items: center; justify-content: center; gap: 18px; }
 .goal-stepper button { width: 44px; height: 44px; border: 0; border-radius: 12px; background: var(--s2); color: var(--text); font-size: 22px; font-weight: 700; cursor: pointer; }
 .goal-stepper strong { min-width: 56px; color: var(--text); font-size: 44px; font-weight: 800; letter-spacing: -.04em; text-align: center; }
+.goal-stepper input { width: 88px; min-height: 52px; padding: 0 6px; border: 0; border-radius: 10px; background: transparent; color: var(--text); font-size: 44px; font-weight: 800; letter-spacing: -.04em; text-align: center; }
+.goal-stepper input:focus { outline: 2px solid var(--lime); outline-offset: 2px; }
 .goal-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 .goal-chips button { min-width: 42px; padding: 9px 12px; border: 0; border-radius: 10px; background: var(--s2); color: var(--text); font-size: 14px; font-weight: 700; cursor: pointer; }
 .goal-chips button.on { background: var(--lime); color: #141a0a; }
@@ -1028,28 +1030,8 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 	.nt-menu { animation: none; }
 }
 
-/* Texto de superfícies de long-press não seleciona (iOS incluído). */
-.hcard,
-.hcard-more,
-.habit-prototype-card,
-.habit-prototype-pips,
-.habit-prototype-pip,
-.nt-row,
-.nt-fo,
-.nt-pin,
-.nt-row-actions,
-.nt-menu,
-.tbb-r,
-.pn-row,
-.cm,
-.cm button {
-	user-select: none;
-	-webkit-user-select: none;
-	-webkit-touch-callout: none;
-}
-
-/* Conteúdo editável/preview continua selecionável. */
-:where(input, textarea, select, [contenteditable='true'], .nt-ti, .nt-bd, .nt-pv, .markdown-body, .carta-theme__default) {
+/* Toda a UI é não-selecionável; só conteúdo editável/preview libera. */
+:where(input, textarea, select, option, [contenteditable='true'], [data-selectable], .nt-ti, .nt-bd, .nt-pv, .markdown-body, .carta-theme__default, pre, code) {
 	user-select: text;
 	-webkit-user-select: text;
 	-webkit-touch-callout: default;

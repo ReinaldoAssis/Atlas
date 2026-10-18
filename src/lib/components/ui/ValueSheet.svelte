@@ -54,8 +54,12 @@
 
 	function clamp(input: number): number {
 		if (!Number.isFinite(input)) return min;
-		return Math.min(max, Math.max(min, input));
+		return Math.max(min, input);
 	}
+
+	// O teto do slider acompanha o maior valor já usado: digitar acima do
+	// `max` original expande o range em vez de cortar o número.
+	const ceiling = $derived(Math.max(max, min, value));
 
 	let draft = $state(untrack(() => formatNumber(value)));
 
@@ -141,10 +145,10 @@
 			aria-label={`Slider de ${title}`}
 			type="range"
 			{min}
-			{max}
+			max={ceiling}
 			{step}
-			value={value}
-			style={`--sheet-progress:${max > min ? ((value - min) / (max - min)) * 100 : 0}%`}
+			value={Math.min(value, ceiling)}
+			style={`--sheet-progress:${ceiling > min ? ((value - min) / (ceiling - min)) * 100 : 0}%`}
 			oninput={(event) => onchange(clamp(Number(event.currentTarget.value)))}
 		/>
 		{#if presets.length}

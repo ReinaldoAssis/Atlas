@@ -3,7 +3,7 @@
 	import { isTauri } from '@tauri-apps/api/core';
 	import {
 		Archive, ArchiveRestore, CalendarDays, Check, ChevronLeft,
-		Flame, FlaskConical, LayoutDashboard, Menu, MoreHorizontal, NotebookPen, Pencil, Plus, Route, Settings2, Target,
+		Flame, FlaskConical, History, LayoutDashboard, Menu, MoreHorizontal, NotebookPen, Pencil, Plus, Route, Settings2, Target,
 		Wallet, X, type LucideIcon
 	} from '@lucide/svelte';
 	import {
@@ -53,6 +53,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	import GraphView from '#lib/components/graph/GraphView.svelte';
 	import NotesView from '#lib/components/notes/NotesView.svelte';
 	import TrackersView from '#lib/components/habits/TrackersView.svelte';
+	import HabitHistorySheet from '#lib/components/habits/HabitHistorySheet.svelte';
 	import PlannerNotesSheet from '#lib/components/time/PlannerNotesSheet.svelte';
 	import PlannerNoteSheet from '#lib/components/time/PlannerNoteSheet.svelte';
 	import SettingsSheet from '#lib/components/settings/SettingsSheet.svelte';
@@ -264,14 +265,14 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			const paused = isPausedOn(date, data);
 			const planned = paused ? [] : habitsForDate(data, date);
 			const done = planned.filter((habit) => habitDoneOn(data, habit, date)).length;
-			return { date, label: ['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom'][index], done, planned: planned.length, goal: paused ? 0 : dailyGoalOf(data), paused };
+			return { date, label: ['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom'][index], done, planned: planned.length, goal: paused ? 0 : Math.min(dailyGoalOf(data), planned.length), paused };
 		});
 	});
 	let prototypeTodayHabits = $derived.by(() => (snapshot ? habitsForDate(snapshot, today) : []));
 	let prototypeTodayDone = $derived(
 		snapshot ? prototypeTodayHabits.filter((habit) => habitDoneOn(snapshot!, habit, today)).length : 0
 	);
-	let prototypeTodayGoal = $derived(dailyGoalOf(snapshot));
+	let prototypeTodayGoal = $derived(Math.min(dailyGoalOf(snapshot), prototypeTodayHabits.length));
 	let habitDayStreak = $derived.by(() => getHabitDayStreak(snapshot));
 	let levelProgress = $derived(experienceProgress(snapshot?.experience.totalXp ?? 0));
 	let levelPercent = $derived(levelProgress.nextLevelXp ? Math.min(1, levelProgress.currentXp / levelProgress.nextLevelXp) : 0);
@@ -442,13 +443,19 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let habitValues = $state<Record<string, string>>({});
 	let habitSheet = $state<Habit | null>(null);
 	let habitSheetValue = $state(0);
+	let habitHistory = $state<Habit | null>(null);
+	let habitLogEdit = $state<{ habit: Habit; log: HabitLog } | null>(null);
+	let habitLogEditValue = $state(0);
 	let dayGoalSheet = $state(false);
 	let dayGoalDraft = $state(3);
 	let financeGoalSheet = $state<{ open: boolean; amountMinor: number }>({ open: false, amountMinor: 0 });
+	let financeCatPressTimer: ReturnType<typeof setTimeout> | undefined;
+	let financeCatPressOrigin = { x: 0, y: 0 };
+	let financeCatPressSuppress = false;
 	let habitCelebration = $state<number | null>(null);
 	let effectsCanvas = $state<HTMLCanvasElement | null>(null);
 	let financeEntry = $state<{ open: boolean; type: 'income' | 'expense'; categoryId: string; amountMinor: number; description: string }>({ open: false, type: 'expense', categoryId: '', amountMinor: 0, description: '' });
-	let financeCategoryForm = $state<{ open: boolean; type: 'income' | 'expense'; name: string; color: string; limitMinor: number; back: boolean }>({ open: false, type: 'expense', name: '', color: '#9cc8ff', limitMinor: 50000, back: false });
+	let financeCategoryForm = $state<{ open: boolean; id: string | null; type: 'income' | 'expense'; name: string; color: string; limitMinor: number; back: boolean }>({ open: false, id: null, type: 'expense', name: '', color: '#9cc8ff', limitMinor: 50000, back: false });
 	let financeCelebration = $state<number | null>(null);
 	let timeSelected = $state('deep-work');
 	let timeScroll = $state<HTMLElement | null>(null);
@@ -462,7 +469,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let timePaintSnapshot = '';
 	let timePaintLastCell: [number, number] | null = null;
 	let timePaintPending: { day: number; slot: number } | null = null;
-	let timePaintTimer: ReturnType<typeof setTimeout> | null = null;
+	let timeLongPressTimer: ReturnType<typeof setTimeout> | null = null;
+	let timeLongPressSuppress = false;
 	let timePaintStart: [number, number] = [0, 0];
 	let timeCategorySheet = $state<{ open: boolean; id: string | null; name: string; color: string; goalHours: number }>({ open: false, id: null, name: '', color: '#9cc8ff', goalHours: 0 });
 	let timeSummaryOpen = $state(false);
@@ -871,7 +879,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const habits = habitsForDate(data, date);
 		return {
 			done: habits.filter((habit) => habitDoneOn(data, habit, date)).length,
-			goal: dailyGoalOf(data)
+			// Meta efetiva: hábito que não incide no dia não entra na conta.
+			goal: Math.min(dailyGoalOf(data), habits.length)
 		};
 	}
 
@@ -893,7 +902,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 				continue;
 			}
 			const done = eligible.filter((habit) => habitDoneOn(data, habit, date)).length;
-			if (done < dailyGoalOf(data)) break;
+			const goal = Math.min(dailyGoalOf(data), eligible.length);
+			if (done < goal) break;
 			streak += 1;
 			date = dateOffset(date, -1);
 		}
@@ -911,8 +921,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function prototypeSheetMax(habit: Habit): number {
-		if (habit.metric === 'duration') return Math.max(180, habit.target * 3);
-		return Math.max(habit.target * 2, habit.target + 1);
+		const values = snapshot?.habitLogs.filter((log) => log.habitId === habit.id).map((log) => log.value) ?? [];
+		// O maior valor já usado (meta ou lançamento) é o teto do slider.
+		return Math.max(habit.target, ...values, 1);
 	}
 
 	function prototypeSheetStep(habit: Habit): number {
@@ -1119,8 +1130,50 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	function openFinanceCategory(back: boolean) {
 		financeEntry = { ...financeEntry, open: false };
-		financeCategoryForm = { open: true, type: back ? financeEntry.type : 'expense', name: '', color: FINANCE_COLORS[1], limitMinor: 50000, back };
+		financeCategoryForm = { open: true, id: null, type: back ? financeEntry.type : 'expense', name: '', color: FINANCE_COLORS[1], limitMinor: 50000, back };
 		playTone(380, 0.1, 'sine', 0.05, snapshot?.preferences.soundEnabled ?? true);
+	}
+
+	/** Long press (mobile) / clique direito (desktop) no tile de categoria. */
+	function openFinanceCategoryEdit(category: Category) {
+		financeCategoryForm = {
+			open: true,
+			id: category.id,
+			type: category.kind === 'in' ? 'income' : 'expense',
+			name: category.name,
+			color: category.color,
+			limitMinor: category.limitMinor ?? 50000,
+			back: false
+		};
+		financeCatPressSuppress = true;
+		playTone(380, 0.1, 'sine', 0.05, snapshot?.preferences.soundEnabled ?? true);
+		pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 12);
+	}
+
+	function startFinanceCatPress(event: PointerEvent, category: Category) {
+		if (event.button !== 0 || event.pointerType === 'mouse') return;
+		financeCatPressSuppress = false;
+		financeCatPressOrigin = { x: event.clientX, y: event.clientY };
+		clearTimeout(financeCatPressTimer);
+		financeCatPressTimer = setTimeout(() => openFinanceCategoryEdit(category), 460);
+	}
+
+	function moveFinanceCatPress(event: PointerEvent) {
+		if (!financeCatPressTimer) return;
+		if (Math.hypot(event.clientX - financeCatPressOrigin.x, event.clientY - financeCatPressOrigin.y) > 9) {
+			clearTimeout(financeCatPressTimer);
+			financeCatPressTimer = undefined;
+		}
+	}
+
+	function cancelFinanceCatPress() {
+		clearTimeout(financeCatPressTimer);
+		financeCatPressTimer = undefined;
+	}
+
+	function openFinanceCategoryContext(event: MouseEvent, category: Category) {
+		event.preventDefault();
+		openFinanceCategoryEdit(category);
 	}
 
 	function setFinanceCategoryType(type: 'income' | 'expense') {
@@ -1138,20 +1191,38 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const name = financeCategoryForm.name.trim();
 		if (!name) return;
 		const next = cloneSnapshot();
-		const newId = id();
+		const editingId = financeCategoryForm.id;
 		const isIncome = financeCategoryForm.type === 'income';
-		next.categories.push({
-			id: newId, module: 'finance', name, color: financeCategoryForm.color, custom: true,
-			kind: isIncome ? 'in' : 'out',
-			limitMinor: isIncome ? undefined : financeCategoryForm.limitMinor
-		});
-		const back = financeCategoryForm.back;
-		financeCategoryForm = { ...financeCategoryForm, open: false, name: '', back: false };
-		await commit(next);
-		if (back) financeEntry = { ...financeEntry, open: true, type: isIncome ? 'income' : 'expense', categoryId: newId };
-		const tile = document.querySelector<HTMLElement>(`[data-fin-cat="${newId}"]`);
-		if (tile) popElement(tile);
+		let createdId: string | null = null;
+		if (editingId) {
+			const found = next.categories.find((item) => item.id === editingId);
+			if (found) {
+				found.name = name;
+				found.color = financeCategoryForm.color;
+				found.kind = isIncome ? 'in' : 'out';
+				found.limitMinor = isIncome ? undefined : financeCategoryForm.limitMinor;
+			}
+		} else {
+			const newId = id();
+			createdId = newId;
+			next.categories.push({
+				id: newId, module: 'finance', name, color: financeCategoryForm.color, custom: true,
+				kind: isIncome ? 'in' : 'out',
+				limitMinor: isIncome ? undefined : financeCategoryForm.limitMinor
+			});
+			if (financeCategoryForm.back) financeEntry = { ...financeEntry, open: true, type: isIncome ? 'income' : 'expense', categoryId: newId };
+		}
+		const targetId = editingId ?? createdId ?? '';
 		const sound = snapshot.preferences.soundEnabled;
+		financeCategoryForm = { ...financeCategoryForm, open: false, id: null, name: '', back: false };
+		await commit(next);
+		if (editingId) {
+			toastMessage('Categoria atualizada.');
+			playTone(660, 0.12, 'triangle', 0.06, sound);
+			return;
+		}
+		const tile = document.querySelector<HTMLElement>(`[data-fin-cat="${targetId}"]`);
+		if (tile) popElement(tile);
 		burstAt(window.innerWidth / 2, window.innerHeight * 0.45, 16, { color: financeCategoryForm.color });
 		playTone(660, 0.15, 'triangle', 0.06, sound);
 		setTimeout(() => playTone(880, 0.18, 'triangle', 0.06, sound), 90);
@@ -1224,6 +1295,44 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		toastMessage('Meta de economia atualizada.');
 	}
 
+	function openHabitHistory(habit: Habit) {
+		habitMenu = null;
+		habitHistory = habit;
+		playTone(520, 0.06, 'sine', 0.04, snapshot?.preferences.soundEnabled ?? true);
+		pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 8);
+	}
+
+	function openHabitLogEdit(habit: Habit, log: HabitLog) {
+		habitLogEdit = { habit, log };
+		habitLogEditValue = log.value;
+	}
+
+	async function saveHabitLogEdit() {
+		if (!habitLogEdit) return;
+		const { habit, log } = habitLogEdit;
+		habitLogEdit = null;
+		// Histórico não concede XP de novo nem dispara celebração de hoje.
+		await saveHabitLog(habit, habitLogEditValue, false, log.date, undefined, false);
+	}
+
+	async function deleteHabitLogEdit() {
+		if (!habitLogEdit || !snapshot) return;
+		const { habit, log } = habitLogEdit;
+		const ok = await askConfirm({
+			title: 'Excluir registro',
+			message: `Excluir o registro de ${log.date}?`,
+			confirmLabel: 'Excluir',
+			danger: true
+		});
+		if (!ok) return;
+		const next = cloneSnapshot();
+		next.habitLogs = next.habitLogs.filter((item) => item.id !== log.id);
+		if (log.experienceAwarded) next.experience.totalXp = Math.max(0, next.experience.totalXp - 10);
+		habitLogEdit = null;
+		await commit(next);
+		toastMessage('Registro excluído.');
+	}
+
 	function openHabitSheet(habit: Habit) {
 		const current = snapshot?.habitLogs.find((item) => item.habitId === habit.id && item.date === today)?.value ?? 0;
 		habitSheet = habit;
@@ -1235,7 +1344,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	function updateHabitSheetValue(value: number) {
 		if (!habitSheet) return;
 		const previous = habitSheetValue;
-		habitSheetValue = Math.min(prototypeSheetMax(habitSheet), Math.max(0, value));
+		habitSheetValue = Math.max(0, value);
 		if (previous !== habitSheetValue) {
 			playFeedback('paint', snapshot?.preferences.soundEnabled, habitSheetValue);
 			pulseHaptic(snapshot?.preferences.hapticsEnabled, 3);
@@ -1469,7 +1578,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	/** Abre o menu do card de hábito (segurar no toque / botão direito / ⋯). */
 	function openHabitMenu(habit: Habit, x: number, y: number) {
-		habitMenu = { habit, x: Math.min(x, window.innerWidth - 200), y: Math.min(y, window.innerHeight - 170) };
+		habitMenu = { habit, x: Math.min(x, window.innerWidth - 200), y: Math.min(y, window.innerHeight - 210) };
 	}
 
 	function startHabitPress(event: PointerEvent, habit: Habit) {
@@ -1682,14 +1791,14 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		});
 	}
 
-	async function saveHabitLog(habit: Habit, value: number, created: boolean, date = today, coords?: [number, number]) {
+	async function saveHabitLog(habit: Habit, value: number, created: boolean, date = today, coords?: [number, number], award = true) {
 		if (!snapshot) return;
 		const beforeDailyGoal = getDailyHabitGoal(snapshot);
 		const next = cloneSnapshot();
 		const existingIndex = next.habitLogs.findIndex((item) => item.habitId === habit.id && item.date === date);
 		const existingLog = existingIndex >= 0 ? next.habitLogs[existingIndex] : null;
 		const qualifies = didMeetTarget(habit, value);
-		const awardExperience = qualifies && !existingLog?.experienceAwarded;
+		const awardExperience = award && qualifies && !existingLog?.experienceAwarded;
 		const log: HabitLog = {
 			id: existingLog?.id ?? habitLogId(habit.id, date), habitId: habit.id, date, value,
 			completed: habit.metric === 'boolean' ? qualifies : value > 0,
@@ -2051,6 +2160,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		autoDwellUnlockAt = Date.now() + 500;
 	}
 
+	/* Auto-dwell por tempo removido no mobile; descomente para voltar.
 	// Abre o dialog das notas quando a tela do planejador fica parada.
 	$effect(() => {
 		const grid = timeGridEl;
@@ -2119,6 +2229,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			cancelAutoDwell();
 		};
 	});
+	*/
 
 	// Qualquer sheet aberto suspende o auto-dwell.
 	$effect(() => {
@@ -2325,32 +2436,70 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		applyTimePaint(cell.day, cell.slot);
 	}
 
+	/** Long press sem movimento: notas do bloco ou categoria (fallback). */
+	function openPlannerBlockDialog(day: number, slot: number) {
+		const blockId = timeGridBlocks[day]?.[slot] ?? '';
+		const block = blockId ? snapshot?.timeBlocks.find((item) => item.id === blockId) : null;
+		if (blockId) {
+			const items = plannerNoteItems([blockId]);
+			if (items.length) {
+				plannerNotesItems = items;
+				plannerNotesOpen = true;
+				pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 10);
+				playTone(660, 0.08, 'sine', 0.04, snapshot?.preferences.soundEnabled ?? true);
+				return;
+			}
+			if (block?.categoryId) {
+				pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 10);
+				openTimeCategorySheet(block.categoryId);
+				return;
+			}
+		}
+		if (timeSelected !== 'x') {
+			pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 10);
+			openTimeCategorySheet(timeSelected);
+			return;
+		}
+		pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 6);
+	}
+
 	function beginTimePaint(event: PointerEvent) {
 		if (event.button !== 0 || !snapshot) return;
 		const cell = timeCellFromEvent(event);
 		if (!cell) return;
 		timePaintStart = [event.clientX, event.clientY];
 		cancelAutoDwell();
+		timeLongPressSuppress = false;
+		clearTimeout(timeLongPressTimer ?? undefined);
+		timeLongPressTimer = null;
 		if (event.pointerType === 'mouse') {
 			startTimePaint(cell);
 			return;
 		}
+		// Mobile: pressiona e, se não mover, abre o dialog; mover pinta.
 		timePaintPending = cell;
-		timePaintTimer = setTimeout(() => {
-			timePaintTimer = null;
-			if (timePaintPending) {
-				startTimePaint(timePaintPending);
-				timePaintPending = null;
-			}
-		}, 200);
+		timeLongPressTimer = setTimeout(() => {
+			timeLongPressTimer = null;
+			if (!timePaintPending) return;
+			const pending = timePaintPending;
+			timePaintPending = null;
+			timeLongPressSuppress = true;
+			openPlannerBlockDialog(pending.day, pending.slot);
+		}, 460);
 	}
 
 	function continueTimePaint(event: PointerEvent) {
+		if (timeLongPressSuppress) return;
 		if (timePaintPending) {
 			if (Math.hypot(event.clientX - timePaintStart[0], event.clientY - timePaintStart[1]) > 8) {
-				if (timePaintTimer) clearTimeout(timePaintTimer);
-				timePaintTimer = null;
+				clearTimeout(timeLongPressTimer ?? undefined);
+				timeLongPressTimer = null;
+				const pending = timePaintPending;
 				timePaintPending = null;
+				// Pressionar + mover começa a pintar na célula inicial.
+				startTimePaint(pending);
+				const cell = timeCellFromEvent(event);
+				if (cell) applyTimePaint(cell.day, cell.slot);
 			}
 			return;
 		}
@@ -2365,13 +2514,19 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	async function finishTimePaint(event?: PointerEvent) {
-		if (timePaintTimer) {
-			clearTimeout(timePaintTimer);
-			timePaintTimer = null;
+		if (timeLongPressTimer) {
+			clearTimeout(timeLongPressTimer);
+			timeLongPressTimer = null;
+		}
+		if (timeLongPressSuppress) {
+			// Long press já abriu o dialog; o pointerup não pode pintar.
+			timeLongPressSuppress = false;
+			return;
 		}
 		if (timePaintPending) {
 			const pending = timePaintPending;
 			timePaintPending = null;
+			// Toque curto sem movimento pinta uma célula.
 			if (!event || event.type === 'pointerup') startTimePaint(pending);
 		}
 		if (!timePainting || !snapshot) return;
@@ -2698,29 +2853,6 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		if (!confirmed) return false;
 		await updatePreferences({ currency: value });
 		return true;
-	}
-
-	async function addCategory(input: { module: 'finance' | 'time'; name: string; color: string }) {
-		if (!snapshot || !input.name.trim()) return;
-		const next = cloneSnapshot();
-		next.categories.push({ id: id(), module: input.module, name: input.name.trim(), color: input.color, custom: true });
-		await commit(next);
-		toastMessage('Categoria adicionada.');
-	}
-
-	async function renameCategory(category: Category) {
-		const name = await askText({
-			title: 'Renomear categoria',
-			label: 'Nome da categoria',
-			value: category.name,
-			confirmLabel: 'Salvar'
-		});
-		const trimmed = name?.trim();
-		if (!trimmed || !snapshot) return;
-		const next = cloneSnapshot();
-		const found = next.categories.find((item) => item.id === category.id);
-		if (found) found.name = trimmed;
-		await commit(next);
 	}
 
 	async function startPause(event: SubmitEvent) {
@@ -3150,12 +3282,12 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 								{@const limit = category.limitMinor ?? 0}
 								{@const over = limit > 0 && total > limit}
 								{#if isIncome}
-									<button class="fin-card fin-cat-card in" data-fin-cat={category.id} style={`--cc:${category.color};--cc-soft:${hexToRgba(category.color, 0.26)}`} onclick={() => openFinanceEntry('income', category.id)}>
+									<button class="fin-card fin-cat-card in" data-fin-cat={category.id} style={`--cc:${category.color};--cc-soft:${hexToRgba(category.color, 0.26)}`} onclick={() => { if (!financeCatPressSuppress) openFinanceEntry('income', category.id); }} onpointerdown={(event) => startFinanceCatPress(event, category)} onpointermove={moveFinanceCatPress} onpointerup={cancelFinanceCatPress} onpointercancel={cancelFinanceCatPress} oncontextmenu={(event) => openFinanceCategoryContext(event, category)}>
 										<b><i></i>{category.name}</b>
 										<span><span class="v">+{money(total, currency())}</span></span>
 									</button>
 								{:else}
-									<button class:over class="fin-card fin-cat-card" data-fin-cat={category.id} style={`--cc:${category.color};--cc-soft:${hexToRgba(category.color, 0.26)};--p:${limit > 0 ? Math.min(1, total / limit) : 0}`} onclick={() => openFinanceEntry('expense', category.id)}>
+									<button class:over class="fin-card fin-cat-card" data-fin-cat={category.id} style={`--cc:${category.color};--cc-soft:${hexToRgba(category.color, 0.26)};--p:${limit > 0 ? Math.min(1, total / limit) : 0}`} onclick={() => { if (!financeCatPressSuppress) openFinanceEntry('expense', category.id); }} onpointerdown={(event) => startFinanceCatPress(event, category)} onpointermove={moveFinanceCatPress} onpointerup={cancelFinanceCatPress} onpointercancel={cancelFinanceCatPress} oncontextmenu={(event) => openFinanceCategoryContext(event, category)}>
 										<b><i></i>{category.name}</b>
 										<span><span class="v">{money(total, currency())}</span>{#if limit > 0}<br /><span class="sm">{over ? `+${money(total - limit, currency())} acima` : `restam ${money(limit - total, currency())}`}</span>{/if}</span>
 									</button>
@@ -3434,13 +3566,89 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		/>
 	{/if}
 
+	{#if habitHistory}
+		<HabitHistorySheet
+			habit={habitHistory}
+			logs={snapshot?.habitLogs.filter((log) => log.habitId === habitHistory!.id) ?? []}
+			onopen={(log) => openHabitLogEdit(habitHistory!, log)}
+			onclose={() => {
+				habitHistory = null;
+				habitLogEdit = null;
+			}}
+		/>
+	{/if}
+
+	{#if habitLogEdit}
+		{@const editHabit = habitLogEdit.habit}
+		{#if editHabit.metric === 'boolean'}
+			<Sheet title="Editar registro" closeLabel="Fechar" onclose={() => (habitLogEdit = null)}>
+				<form
+					class="sheet-form"
+					onsubmit={(event) => {
+						event.preventDefault();
+						void saveHabitLogEdit();
+					}}
+				>
+					<Segmented
+						label="Registro"
+						options={[
+							{ value: '1', label: booleanLabelOf(editHabit, 1, HABIT_BOOLEAN_LABELS) },
+							{ value: '0', label: booleanLabelOf(editHabit, 0, HABIT_BOOLEAN_LABELS) }
+						]}
+						value={String(habitLogEditValue)}
+						onchange={(value) => (habitLogEditValue = value === '0' ? 0 : 1)}
+					/>
+					<div class="sheet-actions">
+						<Button variant="danger" onclick={() => void deleteHabitLogEdit()}>Excluir</Button>
+						<Button variant="secondary" onclick={() => (habitLogEdit = null)}>Cancelar</Button>
+						<Button type="submit">Salvar</Button>
+					</div>
+				</form>
+			</Sheet>
+		{:else}
+			<ValueSheet
+				title={`Editar ${editHabit.name}`}
+				value={habitLogEditValue}
+				max={prototypeSheetMax(editHabit)}
+				step={prototypeSheetStep(editHabit)}
+				unit={editHabit.metric === 'duration' ? '' : editHabit.unit}
+				duration={editHabit.metric === 'duration'}
+				hint={`Meta ${prototypeValue(editHabit, editHabit.target)}`}
+				presets={editHabit.metric === 'weekly' ? [] : prototypePresets(editHabit).map((preset) => ({
+					value: preset,
+					label: prototypeValue(editHabit, preset)
+				}))}
+				saveLabel="Salvar"
+				onchange={(value) => (habitLogEditValue = value)}
+				onsave={() => void saveHabitLogEdit()}
+				ondelete={() => void deleteHabitLogEdit()}
+				onclose={() => (habitLogEdit = null)}
+			/>
+		{/if}
+	{/if}
+
 	{#if dayGoalSheet}
 		<Sheet title="Meta do dia" closeLabel="Fechar" onclose={() => (dayGoalSheet = false)}>
 			<div class="sheet-form">
 				<p class="goal-hint">Quantos hábitos concluir por dia? Conta também os semanais.</p>
 				<div class="goal-stepper">
 					<button type="button" aria-label="Diminuir meta" onclick={() => setDayGoalDraft(dayGoalDraft - 1)}>−</button>
-					<strong>{dayGoalDraft}</strong>
+					<input
+						type="number"
+						min="1"
+						max="12"
+						inputmode="numeric"
+						aria-label="Meta de hábitos por dia"
+						value={dayGoalDraft}
+						oninput={(event) => {
+							const value = Number(event.currentTarget.value);
+							if (Number.isInteger(value) && value >= 1 && value <= 12) dayGoalDraft = value;
+						}}
+						onchange={(event) => setDayGoalDraft(Number(event.currentTarget.value))}
+						onkeydown={(event) => {
+							if (event.key === 'Enter') event.currentTarget.blur();
+						}}
+					/>
 					<button type="button" aria-label="Aumentar meta" onclick={() => setDayGoalDraft(dayGoalDraft + 1)}>+</button>
 				</div>
 				<div class="goal-chips">
@@ -3462,6 +3670,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			y={habitMenu.y}
 			onclose={() => (habitMenu = null)}
 			items={[
+				{ label: 'Histórico', icon: History, action: () => openHabitHistory(habitMenu!.habit) },
 				{ label: 'Editar', icon: Pencil, action: () => openHabit(habitMenu!.habit) },
 				{
 					label: habitMenu.habit.active ? 'Arquivar' : 'Reativar',
@@ -3496,9 +3705,11 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	{#if financeCategoryForm.open}
 		<div class="fin-overlay" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) financeCategoryForm = { ...financeCategoryForm, open: false }; }}>
-			<div class="fin-sheet" role="dialog" aria-modal="true" aria-label="Nova categoria">
+			<div class="fin-sheet" role="dialog" aria-modal="true" aria-label={financeCategoryForm.id ? 'Editar categoria' : 'Nova categoria'}>
 				<div class="fin-grip"></div>
-				<div class="fin-seg"><button class:on={financeCategoryForm.type === 'expense'} onclick={() => setFinanceCategoryType('expense')}>Despesa</button><button class:on={financeCategoryForm.type === 'income'} onclick={() => setFinanceCategoryType('income')}>Receita</button></div>
+				{#if !financeCategoryForm.id}
+					<div class="fin-seg"><button class:on={financeCategoryForm.type === 'expense'} onclick={() => setFinanceCategoryType('expense')}>Despesa</button><button class:on={financeCategoryForm.type === 'income'} onclick={() => setFinanceCategoryType('income')}>Receita</button></div>
+				{/if}
 				<input class="fin-inp" placeholder="Nome da categoria" maxlength="20" bind:value={financeCategoryForm.name} />
 				<div class="fin-sw">{#each FINANCE_COLORS as color}<button class:on={financeCategoryForm.color === color} style={`--cc:${color}`} aria-label="Cor" onclick={() => (financeCategoryForm = { ...financeCategoryForm, color })}></button>{/each}</div>
 				{#if financeCategoryForm.type === 'expense'}
@@ -3506,7 +3717,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					<input type="range" min="0" max="3000" step="50" aria-label="Limite mensal" value={financeCategoryForm.limitMinor / 100} style={`--f:${financeCategoryForm.limitMinor / 100 / 30}%`} oninput={(event) => setFinanceLimit(Number(event.currentTarget.value) * 100)} />
 					<div class="fin-chips" style="justify-content:center;margin-top:12px">{#each [200, 500, 1000, 2000] as value}<button class="fin-chip" onclick={() => setFinanceLimit(value * 100)}>{money(value * 100, currency())}</button>{/each}</div>
 				{/if}
-				<button class="fin-btn" onclick={createFinanceCategory}>Criar categoria</button>
+				<button class="fin-btn" onclick={createFinanceCategory}>{financeCategoryForm.id ? 'Salvar' : 'Criar categoria'}</button>
 			</div>
 		</div>
 	{/if}
@@ -3742,8 +3953,6 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			onpreference={setFeedbackPreference}
 			oncurrency={changeCurrency}
 			ontestmode={toggleTestMode}
-			onaddcategory={addCategory}
-			onrenamecategory={renameCategory}
 			onpause={() => (modal = 'pause')}
 			onexport={exportData}
 			onimport={importData}
