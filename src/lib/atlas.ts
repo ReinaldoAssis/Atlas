@@ -151,8 +151,20 @@ export interface AtlasSnapshot {
 	lifeForce: LifeForceState;
 	experience: ExperienceState;
 	finance: FinanceState;
+	/** Meta padrão de hábitos concluídos por dia (1–12, sincronizada). */
+	dailyGoal: number;
 	preferences: AppPreferences;
 	graph: GraphState;
+}
+
+export const DAILY_GOAL_DEFAULT = 3;
+export const DAILY_GOAL_MIN = 1;
+export const DAILY_GOAL_MAX = 12;
+
+export function normalizeDailyGoal(value: unknown): number {
+	const number = Number(value);
+	if (!Number.isFinite(number)) return DAILY_GOAL_DEFAULT;
+	return Math.min(DAILY_GOAL_MAX, Math.max(DAILY_GOAL_MIN, Math.round(number)));
 }
 
 const today = () => localDate();
@@ -193,6 +205,7 @@ export function createEmptySnapshot(): AtlasSnapshot {
 			lastNoteDate: ''
 		},
 		finance: { savingsGoalMinor: 0, streak: 0, lastEntryDate: '', goalHit: false },
+		dailyGoal: DAILY_GOAL_DEFAULT,
 		preferences: {
 			currency: 'BRL',
 			notificationsEnabled: false,

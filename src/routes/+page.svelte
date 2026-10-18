@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { isTauri } from '@tauri-apps/api/core';
 	import {
 		Archive, ArchiveRestore, CalendarDays, Check, ChevronLeft,
@@ -7,7 +7,7 @@
 		Wallet, X, type LucideIcon
 	} from '@lucide/svelte';
 	import {
-		HABIT_BOOLEAN_LABELS, booleanLabelOf, currentStreak, dateOffset, didMeetTarget, formatMinutes, habitLogId, id, localDate, money, nextBooleanLog, positiveValueOf, weekStartDate, WEEK_MAX,
+		HABIT_BOOLEAN_LABELS, booleanLabelOf, currentStreak, dateOffset, didMeetTarget, formatMinutes, habitLogId, id, localDate, money, nextBooleanLog, normalizeDailyGoal, positiveValueOf, weekStartDate, WEEK_MAX,
 		TIME_SLOT_START_HOUR, TIME_SLOT_COUNT, TIME_SLOT_MINUTES,
 		experienceProgress, type AppPreferences, type AtlasSnapshot, type Category, type Habit, type HabitLog,
 		type NavigationKey, type TimeBlock, type Tracker, type TrackerEntry, type Transaction
@@ -62,6 +62,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	import Button from '#lib/components/ui/Button.svelte';
 	import CardMenu from '#lib/components/ui/CardMenu.svelte';
 	import Chip from '#lib/components/ui/Chip.svelte';
+	import DurationField from '#lib/components/ui/DurationField.svelte';
 	import Field from '#lib/components/ui/Field.svelte';
 	import Segmented from '#lib/components/ui/Segmented.svelte';
 	import Sheet from '#lib/components/ui/Sheet.svelte';
@@ -70,6 +71,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		burstAt, centerOf, confetti, floatValue, playFeedback, playTone, popElement,
 		prefersReducedMotion, pulseHaptic, vibrate
 	} from '#lib/feedback';
+	import { formatClock } from '#lib/duration';
 	import '../app.css';
 
 	type Period = 'week' | 'month' | 'custom';
@@ -97,6 +99,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	/** Sub-aba do módulo Hábitos: hábitos recorrentes ou trackers. */
 	let habitView = $state<'habits' | 'trackers'>('habits');
 	let habitPagerEl = $state<HTMLDivElement>();
+	let habitPagerMounted: HTMLDivElement | undefined;
+	let habitScrollTimer: ReturnType<typeof setTimeout> | undefined;
+	let habitScrollSide = 0;
 	let notesState = $state<NotesState>({ notes: [], folders: [] });
 	let notesVersion = $state(0);
 	/** Pede ao NotesView para reler do banco (merge de outro aparelho). */
@@ -256,27 +261,17 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const start = weekStart(today);
 		return Array.from({ length: 7 }, (_, index) => {
 			const date = dateOffset(start, index);
-			const weekday = new Date(`${date}T12:00:00`).getDay();
 			const paused = isPausedOn(date, data);
-			const planned = paused ? [] : data.habits.filter((habit) => habit.active && habit.scheduledDays.includes(weekday));
-			const done = planned.filter((habit) => {
-				const log = snapshot?.habitLogs.find((item) => item.habitId === habit.id && item.date === date);
-				return Boolean(log && didMeetTarget(habit, log.value));
-			}).length;
-			return { date, label: ['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom'][index], done, planned: planned.length, goal: Math.min(3, planned.length), paused };
+			const planned = paused ? [] : habitsForDate(data, date);
+			const done = planned.filter((habit) => habitDoneOn(data, habit, date)).length;
+			return { date, label: ['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom'][index], done, planned: planned.length, goal: paused ? 0 : dailyGoalOf(data), paused };
 		});
 	});
-	let prototypeTodayHabits = $derived.by(() => {
-		if (!snapshot) return [] as Habit[];
-		const weekday = new Date(`${today}T12:00:00`).getDay();
-		return snapshot.habits.filter((habit) => habit.active && (habit.metric === 'weekly' || habit.scheduledDays.includes(weekday)));
-	});
-	let prototypeTodayDone = $derived(prototypeTodayHabits.filter((habit) => {
-		if (habit.metric === 'weekly') return weeklyValue(habit) >= habit.target;
-		const log = snapshot?.habitLogs.find((item) => item.habitId === habit.id && item.date === today);
-		return Boolean(log && didMeetTarget(habit, log.value));
-	}).length);
-	let prototypeTodayGoal = $derived(Math.min(3, prototypeTodayHabits.length));
+	let prototypeTodayHabits = $derived.by(() => (snapshot ? habitsForDate(snapshot, today) : []));
+	let prototypeTodayDone = $derived(
+		snapshot ? prototypeTodayHabits.filter((habit) => habitDoneOn(snapshot!, habit, today)).length : 0
+	);
+	let prototypeTodayGoal = $derived(dailyGoalOf(snapshot));
 	let habitDayStreak = $derived.by(() => getHabitDayStreak(snapshot));
 	let levelProgress = $derived(experienceProgress(snapshot?.experience.totalXp ?? 0));
 	let levelPercent = $derived(levelProgress.nextLevelXp ? Math.min(1, levelProgress.currentXp / levelProgress.nextLevelXp) : 0);
@@ -447,6 +442,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let habitValues = $state<Record<string, string>>({});
 	let habitSheet = $state<Habit | null>(null);
 	let habitSheetValue = $state(0);
+	let dayGoalSheet = $state(false);
+	let dayGoalDraft = $state(3);
+	let financeGoalSheet = $state<{ open: boolean; amountMinor: number }>({ open: false, amountMinor: 0 });
 	let habitCelebration = $state<number | null>(null);
 	let effectsCanvas = $state<HTMLCanvasElement | null>(null);
 	let financeEntry = $state<{ open: boolean; type: 'income' | 'expense'; categoryId: string; amountMinor: number; description: string }>({ open: false, type: 'expense', categoryId: '', amountMinor: 0, description: '' });
@@ -852,32 +850,50 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		return Boolean(currentPause || previousPause);
 	}
 
+	/** Hábitos que contam no dia: weekly sempre, os demais pelo dia da semana. */
+	function habitsForDate(data: AtlasSnapshot, date: string): Habit[] {
+		const weekday = new Date(`${date}T12:00:00`).getDay();
+		return data.habits.filter((habit) => habit.active && (habit.metric === 'weekly' || habit.scheduledDays.includes(weekday)));
+	}
+
+	/** Weekly fecha na semana (log no início dela); os outros fecham no dia. */
+	function habitDoneOn(data: AtlasSnapshot, habit: Habit, date: string): boolean {
+		const logDate = habit.metric === 'weekly' ? weekStartDate(date) : date;
+		const log = data.habitLogs.find((item) => item.habitId === habit.id && item.date === logDate);
+		return Boolean(log && didMeetTarget(habit, log.value));
+	}
+
+	function dailyGoalOf(data: AtlasSnapshot | null): number {
+		return normalizeDailyGoal(data?.dailyGoal);
+	}
+
+	function dailyProgress(data: AtlasSnapshot, date = today): { done: number; goal: number } {
+		const habits = habitsForDate(data, date);
+		return {
+			done: habits.filter((habit) => habitDoneOn(data, habit, date)).length,
+			goal: dailyGoalOf(data)
+		};
+	}
+
 	function getHabitDayStreak(data: AtlasSnapshot | null): number {
 		if (!data) return 0;
 		let date = today;
-		const todayHabits = data.habits.filter((habit) => habit.active && habit.scheduledDays.includes(new Date(`${today}T12:00:00`).getDay()));
-		const todayDone = todayHabits.filter((habit) => {
-			const log = data.habitLogs.find((item) => item.habitId === habit.id && item.date === today);
-			return Boolean(log && didMeetTarget(habit, log.value));
-		}).length;
-		if (todayHabits.length === 0 || todayDone < Math.min(3, todayHabits.length)) date = dateOffset(today, -1);
+		const todayHabits = habitsForDate(data, today);
+		const todayProgress = dailyProgress(data, today);
+		if (todayHabits.length === 0 || todayProgress.done < todayProgress.goal) date = dateOffset(today, -1);
 		let streak = 0;
 		for (let index = 0; index < 730; index += 1) {
 			if (isPausedOn(date, data)) {
 				date = dateOffset(date, -1);
 				continue;
 			}
-			const weekday = new Date(`${date}T12:00:00`).getDay();
-			const eligible = data.habits.filter((habit) => habit.active && habit.scheduledDays.includes(weekday));
+			const eligible = habitsForDate(data, date);
 			if (!eligible.length) {
 				date = dateOffset(date, -1);
 				continue;
 			}
-			const done = eligible.filter((habit) => {
-				const log = data.habitLogs.find((item) => item.habitId === habit.id && item.date === date);
-				return Boolean(log && didMeetTarget(habit, log.value));
-			}).length;
-			if (done < Math.min(3, eligible.length)) break;
+			const done = eligible.filter((habit) => habitDoneOn(data, habit, date)).length;
+			if (done < dailyGoalOf(data)) break;
 			streak += 1;
 			date = dateOffset(date, -1);
 		}
@@ -885,21 +901,11 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function getDailyHabitGoal(data: AtlasSnapshot, date = today): { done: number; goal: number } {
-		const weekday = new Date(`${date}T12:00:00`).getDay();
-		const habits = data.habits.filter((habit) => habit.active && habit.scheduledDays.includes(weekday));
-		const done = habits.filter((habit) => {
-			const log = data.habitLogs.find((item) => item.habitId === habit.id && item.date === date);
-			return Boolean(log && didMeetTarget(habit, log.value));
-		}).length;
-		return { done, goal: Math.min(3, habits.length) };
+		return dailyProgress(data, date);
 	}
 
 	function prototypeValue(habit: Habit, value: number): string {
-		if (habit.metric === 'duration') {
-			const hours = Math.floor(value / 60);
-			const minutes = value % 60;
-			return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-		}
+		if (habit.metric === 'duration') return formatClock(value);
 		if (habit.unit.toLowerCase() === 'ml' && value >= 1000) return `${(value / 1000).toFixed(2).replace(/\.?0+$/, '')} L`;
 		return habit.metric === 'count' ? `${value} ${habit.unit}` : value ? 'Feito' : 'Hoje';
 	}
@@ -1158,6 +1164,64 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		confetti(effectsCanvas, 150, { colors: ['#ffd45a', '#d4f25a', '#ffb347', '#fff3b0'], fromTop: true });
 		[523, 659, 784, 1047, 1319].forEach((frequency, index) => setTimeout(() => playTone(frequency, 0.3, 'triangle', 0.07, sound), index * 100));
 		vibrate([20, 40, 20, 40, 70]);
+	}
+
+	function openDayGoal() {
+		if (!snapshot) return;
+		dayGoalDraft = normalizeDailyGoal(snapshot.dailyGoal);
+		dayGoalSheet = true;
+	}
+
+	function setDayGoalDraft(value: number) {
+		dayGoalDraft = normalizeDailyGoal(value);
+		playTone(320 + dayGoalDraft * 36, 0.05, 'sine', 0.04, snapshot?.preferences.soundEnabled ?? true);
+		pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 4);
+	}
+
+	async function saveDayGoal() {
+		if (!snapshot) return;
+		const next = cloneSnapshot();
+		next.dailyGoal = normalizeDailyGoal(dayGoalDraft);
+		dayGoalSheet = false;
+		await commit(next);
+		toastMessage(`Meta do dia: ${next.dailyGoal} hábito${next.dailyGoal === 1 ? '' : 's'}`);
+	}
+
+	function openFinanceGoal() {
+		if (!snapshot) return;
+		financeGoalSheet = { open: true, amountMinor: snapshot.finance.savingsGoalMinor };
+	}
+
+	function financeGoalKey(key: string) {
+		if (!financeGoalSheet.open) return;
+		const previous = financeGoalSheet.amountMinor;
+		const amountMinor =
+			key === '⌫'
+				? Math.floor(previous / 10)
+				: Math.min(99999999, previous * (key === '00' ? 100 : 10) + (key === '00' ? 0 : Number(key)));
+		financeGoalSheet = { ...financeGoalSheet, amountMinor };
+		playTone(key === '⌫' ? 220 : 300 + (Number(key) || 0) * 34, 0.05, 'sine', 0.04, snapshot?.preferences.soundEnabled ?? true);
+		pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 4);
+	}
+
+	function setFinanceGoalPreset(minor: number) {
+		financeGoalSheet = { ...financeGoalSheet, amountMinor: minor };
+		playTone(520, 0.06, 'sine', 0.05, snapshot?.preferences.soundEnabled ?? true);
+		pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 5);
+	}
+
+	async function saveFinanceGoal() {
+		if (!snapshot) return;
+		const next = cloneSnapshot();
+		next.finance = {
+			...next.finance,
+			savingsGoalMinor: financeGoalSheet.amountMinor,
+			// Meta nova recomeça a celebração da meta batida.
+			goalHit: false
+		};
+		financeGoalSheet = { open: false, amountMinor: 0 };
+		await commit(next);
+		toastMessage('Meta de economia atualizada.');
 	}
 
 	function openHabitSheet(habit: Habit) {
@@ -1428,28 +1492,60 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	function changeHabitView(next: 'habits' | 'trackers') {
 		habitView = next;
 		if (!habitPagerEl) return;
+		habitScrollSide = next === 'trackers' ? 1 : 0;
 		habitPagerEl.scrollTo({
-			left: (next === 'trackers' ? 1 : 0) * habitPagerEl.clientWidth,
+			left: habitScrollSide * habitPagerEl.clientWidth,
 			behavior: prefersReducedMotion() ? 'auto' : 'smooth'
 		});
+	}
+
+	function finishHabitScroll() {
+		clearTimeout(habitScrollTimer);
+		if (!habitPagerEl) return;
+		const width = habitPagerEl.clientWidth;
+		if (!width) return;
+		const next = Math.round(habitPagerEl.scrollLeft / width) >= 1 ? 'trackers' : 'habits';
+		if (next !== habitView) habitView = next;
 	}
 
 	function onHabitScroll() {
 		if (!habitPagerEl) return;
 		const width = habitPagerEl.clientWidth;
 		if (!width) return;
-		const next = Math.round(habitPagerEl.scrollLeft / width) === 1 ? 'trackers' : 'habits';
-		if (next === habitView) return;
-		habitView = next;
-		pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 4);
+		const side = Math.round(habitPagerEl.scrollLeft / width) >= 1 ? 1 : 0;
+		if (side !== habitScrollSide) {
+			habitScrollSide = side;
+			pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 4);
+		}
+		// Só troca o painel ativo quando o snap nativo assenta; trocar no meio do
+		// gesto fazia o efeito abaixo puxar o scroll e dar a sensação de jitter.
+		clearTimeout(habitScrollTimer);
+		habitScrollTimer = setTimeout(finishHabitScroll, 140);
 	}
 
-	// Mantém o scroll alinhado quando a aba muda por fora (Segmented, reload).
+	/** `scrollend` acelera o fim; o debounce acima é o fallback. */
+	function scrollEnd(node: HTMLElement) {
+		const handler = () => finishHabitScroll();
+		node.addEventListener('scrollend', handler);
+		return {
+			destroy() {
+				node.removeEventListener('scrollend', handler);
+				clearTimeout(habitScrollTimer);
+			}
+		};
+	}
+
+	// Alinha só quando o pager nasce (troca de aba/reload). Não depende de
+	// `habitView` no gesto, então o swipe termina no snap nativo.
 	$effect(() => {
 		const pager = habitPagerEl;
-		if (!pager) return;
-		const target = (habitView === 'trackers' ? 1 : 0) * pager.clientWidth;
-		if (Math.abs(pager.scrollLeft - target) > 4) pager.scrollLeft = target;
+		if (!pager || pager === habitPagerMounted) return;
+		habitPagerMounted = pager;
+		untrack(() => {
+			const side = habitView === 'trackers' ? 1 : 0;
+			habitScrollSide = side;
+			if (Math.abs(pager.scrollLeft - side * pager.clientWidth) > 4) pager.scrollLeft = side * pager.clientWidth;
+		});
 	});
 
 	async function deleteHabit(habit: Habit) {
@@ -2966,10 +3062,10 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 								<svg class="dash-cat-svg" viewBox="0 0 120 100"><path class="bd" d="M16 42L20 6L54 26Z" /><path class="bd" d="M104 42L100 6L66 26Z" /><ellipse class="bd" cx="60" cy="60" rx="48" ry="38" /><path class="cl" d="M31 58q10 8 20 0M69 58q10 8 20 0" /><path d="M55 69h10l-5 6z" fill="#f1a5c5" /><path d="M60 75q-6 7-12 2M60 75q6 7 12 2" fill="none" stroke="#8d968a" stroke-width="2" stroke-linecap="round" /><text class="z" x="100" y="22">z</text></svg>
 								<b>Invocar</b><small>Em breve</small>
 							</div>
-							<article class="dash-card dash-goal">
+							<button type="button" class="dash-card dash-goal" aria-label="Definir meta do dia" onclick={openDayGoal}>
 								<div class="dash-ring"><svg width="96" height="96" viewBox="0 0 96 96" aria-hidden="true"><circle cx="48" cy="48" r="39" fill="none" stroke="var(--panel-2)" stroke-width="10" /><circle cx="48" cy="48" r="39" fill="none" stroke="var(--lime)" stroke-width="10" stroke-linecap="round" stroke-dasharray="245" stroke-dashoffset={245 * (1 - dashGoalPercent)} /></svg><div class="dash-ring-center">{Math.min(prototypeTodayDone, prototypeTodayGoal)}/{prototypeTodayGoal}</div></div>
 								<small>Meta do dia</small>
-							</article>
+							</button>
 							<article class="dash-card dash-w2">
 								<h3>Saldo · {dashPeriodLabel}</h3>
 								<div class="dash-big">{money(dashBalance, currency())}</div>
@@ -3037,13 +3133,13 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 									<div class:neg={financeBalance < 0} class="fin-big">{money(financeBalance, currency())}</div>
 									<small>+ {money(financeIncome, currency())}<br />− {money(financeExpense, currency())}</small>
 								</div>
-								<div class="fin-ring-wrap">
+								<button type="button" class="fin-ring-wrap" aria-label="Definir meta de economia" onclick={openFinanceGoal}>
 									<div class="fin-ring">
 										<svg viewBox="0 0 92 92" aria-hidden="true"><circle cx="46" cy="46" r="37" class="fin-ring-track"/><circle cx="46" cy="46" r="37" class="fin-ring-value" style={`stroke-dashoffset:${233 * (1 - financeGoalPercent)}`}/></svg>
 										<div class="fin-ring-center">{Math.round(financeGoalPercent * 100)}%</div>
 									</div>
 									<small class="fin-ring-caption">meta {money(financeGoal, currency())}</small>
-								</div>
+								</button>
 							</div>
 						</div>
 						<p class="fin-cats-label">Categorias · {financeGreenCount} de {financeExpenseCategories.length} no verde</p>
@@ -3104,6 +3200,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 							aria-label="Hábitos e trackers"
 							bind:this={habitPagerEl}
 							onscroll={onHabitScroll}
+							use:scrollEnd
 						>
 							<div class="habit-pane" aria-hidden={habitView !== 'habits'} inert={habitView !== 'habits'}>
 									<section class="habit-prototype" aria-label="Hábitos">
@@ -3112,10 +3209,10 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 										</div>
 
 										<div class="habit-prototype-grid">
-											<section class="habit-prototype-card habit-prototype-wide habit-prototype-hero">
+											<button type="button" class="habit-prototype-card habit-prototype-wide habit-prototype-hero" aria-label="Definir meta do dia" onclick={openDayGoal}>
 												<div class="habit-prototype-ring"><svg width="84" height="84" viewBox="0 0 84 84" aria-hidden="true"><circle cx="42" cy="42" r="34" class="habit-prototype-ring-track"/><circle cx="42" cy="42" r="34" class="habit-prototype-ring-value" style={`stroke-dashoffset:${214 * (1 - (prototypeTodayGoal ? Math.min(prototypeTodayDone, prototypeTodayGoal) / prototypeTodayGoal : 0))}`}/></svg><strong>{Math.min(prototypeTodayDone, prototypeTodayGoal)}<small>/{prototypeTodayGoal}</small></strong></div>
 												<div><h2>{prototypeTodayGoal > 0 && prototypeTodayDone >= prototypeTodayGoal ? 'Meta concluída' : 'Meta do dia'}</h2><p>{prototypeTodayGoal > 0 && prototypeTodayDone >= prototypeTodayGoal ? 'Continue se quiser ir além' : `Faltam ${Math.max(0, prototypeTodayGoal - prototypeTodayDone)}`}</p></div>
-											</section>
+											</button>
 											<section class="habit-prototype-card habit-prototype-wide habit-prototype-week" aria-label="Sequência da semana">
 												{#each habitWeekDays as day, index}
 													{@const reached = day.goal > 0 && day.done >= day.goal}
@@ -3302,6 +3399,10 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		<PlannerNotesSheet
 			items={plannerNotesItems}
 			onopen={openPlannerNote}
+			onopenfull={(note) => {
+				closePlannerNotes();
+				openNoteFromPlanner(note.id);
+			}}
 			onclose={closePlannerNotes}
 		/>
 	{/if}
@@ -3317,7 +3418,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			value={habitSheetValue}
 			max={prototypeSheetMax(sheetHabit)}
 			step={prototypeSheetStep(sheetHabit)}
-			unit={sheetHabit.unit}
+			unit={sheetHabit.metric === 'duration' ? '' : sheetHabit.unit}
+			duration={sheetHabit.metric === 'duration'}
 			hint={`Meta ${prototypeValue(sheetHabit, sheetHabit.target)}`}
 			accentAt={sheetHabit.target}
 			saveLabel="Registrar"
@@ -3330,6 +3432,28 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			onsave={saveHabitSheet}
 			onclose={() => (habitSheet = null)}
 		/>
+	{/if}
+
+	{#if dayGoalSheet}
+		<Sheet title="Meta do dia" closeLabel="Fechar" onclose={() => (dayGoalSheet = false)}>
+			<div class="sheet-form">
+				<p class="goal-hint">Quantos hábitos concluir por dia? Conta também os semanais.</p>
+				<div class="goal-stepper">
+					<button type="button" aria-label="Diminuir meta" onclick={() => setDayGoalDraft(dayGoalDraft - 1)}>−</button>
+					<strong>{dayGoalDraft}</strong>
+					<button type="button" aria-label="Aumentar meta" onclick={() => setDayGoalDraft(dayGoalDraft + 1)}>+</button>
+				</div>
+				<div class="goal-chips">
+					{#each [1, 2, 3, 4, 5, 6, 7] as value}
+						<button type="button" class:on={dayGoalDraft === value} aria-label={`Meta ${value}`} onclick={() => setDayGoalDraft(value)}>{value}</button>
+					{/each}
+				</div>
+				<div class="sheet-actions">
+					<Button variant="secondary" onclick={() => (dayGoalSheet = false)}>Cancelar</Button>
+					<Button onclick={saveDayGoal}>Salvar</Button>
+				</div>
+			</div>
+		</Sheet>
 	{/if}
 
 	{#if habitMenu}
@@ -3383,6 +3507,19 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					<div class="fin-chips" style="justify-content:center;margin-top:12px">{#each [200, 500, 1000, 2000] as value}<button class="fin-chip" onclick={() => setFinanceLimit(value * 100)}>{money(value * 100, currency())}</button>{/each}</div>
 				{/if}
 				<button class="fin-btn" onclick={createFinanceCategory}>Criar categoria</button>
+			</div>
+		</div>
+	{/if}
+
+	{#if financeGoalSheet.open}
+		<div class="fin-overlay" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) financeGoalSheet = { ...financeGoalSheet, open: false }; }}>
+			<div class="fin-sheet" role="dialog" aria-modal="true" aria-label="Meta de economia">
+				<div class="fin-grip"></div>
+				<div class="fin-amt">{money(financeGoalSheet.amountMinor, currency())}</div>
+				<small class="fin-goal-hint">Saldo do mês ÷ meta</small>
+				<div class="fin-chips">{#each [500, 1000, 2000, 5000] as value}<button class:on={financeGoalSheet.amountMinor === value * 100} class="fin-chip" onclick={() => setFinanceGoalPreset(value * 100)}>{money(value * 100, currency())}</button>{/each}</div>
+				<div class="fin-kp">{#each ['1', '2', '3', '4', '5', '6', '7', '8', '9', '00', '0', '⌫'] as key}<button onclick={() => financeGoalKey(key)}>{key}</button>{/each}</div>
+				<button class="fin-btn" onclick={saveFinanceGoal}>Salvar meta</button>
 			</div>
 		</div>
 	{/if}
@@ -3506,33 +3643,13 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 						</select>
 					</Field>
 					{#if habitForm.metric === 'duration'}
-						<div class="sheet-row">
-							<Field label="Horas">
-								<input
-									type="number"
-									min="0"
-									value={Math.floor(Number(habitForm.target) / 60)}
-									oninput={(event) => {
-										const hours = Number(event.currentTarget.value) || 0;
-										const minutes = Number(habitForm.target) % 60;
-										habitForm.target = String(hours * 60 + minutes);
-									}}
-								/>
-							</Field>
-							<Field label="Minutos">
-								<input
-									type="number"
-									min="0"
-									max="59"
-									value={Number(habitForm.target) % 60}
-									oninput={(event) => {
-										const hours = Math.floor(Number(habitForm.target) / 60);
-										const minutes = Number(event.currentTarget.value) || 0;
-										habitForm.target = String(hours * 60 + Math.min(59, minutes));
-									}}
-								/>
-							</Field>
-						</div>
+						<Field label="Duração" hint="HH:MM">
+							<DurationField
+								value={Number(habitForm.target) > 0 ? Number(habitForm.target) : null}
+								ariaLabel="Duração do hábito"
+								onchange={(minutes) => (habitForm.target = String(minutes ?? 0))}
+							/>
+						</Field>
 					{:else if habitForm.metric === 'weekly'}
 						<div class="sheet-row">
 							<Field label="Dias por semana">

@@ -6,8 +6,10 @@
 	import Field from '../ui/Field.svelte';
 	import Toggle from '../ui/Toggle.svelte';
 	import CardMenu from '../ui/CardMenu.svelte';
+	import DurationField from '../ui/DurationField.svelte';
 	import ValueSheet from '../ui/ValueSheet.svelte';
 	import { playTone, pulseHaptic } from '#lib/feedback';
+	import { formatClock } from '#lib/duration';
 	import {
 		TRACKER_BOOLEAN_LABELS,
 		booleanLabelOf,
@@ -130,6 +132,7 @@
 	}
 
 	function formatValue(tracker: Tracker, value: number): string {
+		if (tracker.metric === 'duration') return formatClock(value);
 		const text = formatNumber(value);
 		return tracker.unit ? `${text} ${tracker.unit}` : text;
 	}
@@ -201,7 +204,7 @@
 	}
 
 	function presets(tracker: Tracker): { value: number; label: string; additive?: boolean }[] {
-		if (tracker.metric === 'duration') return [15, 30, 45, 60].map((value) => ({ value, label: `${value} min` }));
+		if (tracker.metric === 'duration') return [15, 30, 45, 60].map((value) => ({ value, label: formatClock(value) }));
 		if (tracker.unit.toLowerCase() === 'ml') return [250, 500, 1000].map((value) => ({ value, label: `+${value} ml`, additive: true }));
 		if (tracker.target) {
 			return [Math.max(1, Math.round(tracker.target / 2)), tracker.target, Math.round(tracker.target * 1.5)].map((value) => ({
@@ -290,7 +293,12 @@
 			name: tracker.name,
 			metric: tracker.metric,
 			unit: tracker.unit,
-			target: tracker.target == null ? '' : formatNumber(tracker.target),
+			target:
+				tracker.target == null
+					? ''
+					: tracker.metric === 'duration'
+						? String(Math.round(tracker.target))
+						: formatNumber(tracker.target),
 			direction: tracker.targetDirection,
 			askTime: tracker.askTime,
 			positiveLabel: tracker.positiveLabel?.trim() || TRACKER_BOOLEAN_LABELS.positive,
@@ -554,7 +562,7 @@
 									Toque para registrar
 								{/if}
 							{:else}
-								{tracker.target == null ? 'sem meta' : `meta ${formatValue(tracker, tracker.target)}`}{#if trend} · <em class:good={trend.good} class:bad={!trend.good}>{trend.arrow} {formatNumber(trend.average)}</em>{/if}
+								{tracker.target == null ? 'sem meta' : `meta ${formatValue(tracker, tracker.target)}`}{#if trend} · <em class:good={trend.good} class:bad={!trend.good}>{trend.arrow} {tracker.metric === 'duration' ? formatClock(trend.average) : formatNumber(trend.average)}</em>{/if}
 							{/if}
 						</small>
 					</span>
@@ -675,7 +683,8 @@
 		value={entryValue}
 		max={sheetMax(tracker)}
 		step={sheetStep(tracker)}
-		unit={tracker.unit}
+		unit={tracker.metric === 'duration' ? '' : tracker.unit}
+		duration={tracker.metric === 'duration'}
 		hint={tracker.target == null ? '' : `Meta ${formatValue(tracker, tracker.target)}`}
 		presets={presets(tracker)}
 		saveLabel={editingEntry ? 'Salvar' : 'Registrar'}
@@ -754,18 +763,24 @@
 					/>
 				</div>
 			{:else}
-				<div class="sheet-row">
-					<Field label="Meta" hint="opcional">
-						<input bind:value={trackerForm.target} inputmode="decimal" placeholder="0" />
+				{#if trackerForm.metric === 'duration'}
+					<Field label="Meta" hint="opcional · HH:MM">
+						<DurationField
+							value={Number(trackerForm.target) > 0 ? Number(trackerForm.target) : null}
+							ariaLabel="Meta do tracker"
+							onchange={(minutes) => (trackerForm.target = minutes && minutes > 0 ? String(minutes) : '')}
+						/>
 					</Field>
-					<Field label="Unidade">
-						{#if trackerForm.metric === 'count'}
+				{:else}
+					<div class="sheet-row">
+						<Field label="Meta" hint="opcional">
+							<input bind:value={trackerForm.target} inputmode="decimal" placeholder="0" />
+						</Field>
+						<Field label="Unidade">
 							<input bind:value={trackerForm.unit} placeholder="kg, h, mmHg…" maxlength="12" />
-						{:else}
-							<span class="static">minutos</span>
-						{/if}
-					</Field>
-				</div>
+						</Field>
+					</div>
+				{/if}
 				{#if trackerForm.target.trim()}
 					<div class="sheet-days">
 						<span class="sheet-days-label">Como atingir a meta</span>
@@ -848,6 +863,8 @@
 	.tk * { box-sizing: border-box; }
 	.tk button { border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 	.tk-card b { color: inherit; }
+	.tk-card.done { color: #141a0a; }
+	.tk-card.done b { color: #141a0a; }
 	.tk-card .idle { color: var(--hp-muted); }
 	.tk-card em { font-style: normal; font-weight: 700; }
 	.tk-card em.good { color: var(--hp-accent); }

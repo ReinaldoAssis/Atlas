@@ -10,6 +10,7 @@ import {
 	habitLogId,
 	localDate,
 	money,
+	normalizeDailyGoal,
 	nextBooleanLog,
 	positiveValueOf,
 	weekStartDate,
@@ -210,6 +211,15 @@ describe('createEmptySnapshot', () => {
 		expect(snapshot.graph.nodes).toHaveLength(1);
 		expect(snapshot.graph.nodes[0].origin).toBe(true);
 		expect(snapshot.graph.edges).toEqual([]);
+	});
+
+	it('meta do dia nasce em 3 e é limitada a 1–12', () => {
+		expect(createEmptySnapshot().dailyGoal).toBe(3);
+		expect(normalizeDailyGoal(undefined)).toBe(3);
+		expect(normalizeDailyGoal(0)).toBe(1);
+		expect(normalizeDailyGoal(7.6)).toBe(8);
+		expect(normalizeDailyGoal(99)).toBe(12);
+		expect(normalizeDailyGoal('5')).toBe(5);
 	});
 });
 

@@ -7,6 +7,8 @@ Regras e atalhos para quem (agente ou humano) mexe neste repositório.
 - Com o usuário: **pt-BR**, curto (ele costuma estar em "modo caveman" até dizer
   "normal mode"). Decisões de produto/design são dele: pergunte pela tool
   `question` (CLI), nunca decida silenciosamente.
+- **Grilling**: as rodadas de perguntas também vão pela tool `question` (com
+  opções e a recomendada primeiro), não como texto solto.
 - **Commits, títulos/corpos de PR e nomes de branch em inglês.** Identificadores
   no código em inglês. Copy de UI em **pt-BR**.
 - Mensagem de commit: convencional (`feat:`, `fix:`, `docs:`), corpo em bullets
