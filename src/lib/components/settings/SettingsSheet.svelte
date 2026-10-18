@@ -1,8 +1,7 @@
 <script lang="ts">
-	import { Bell, CircleDollarSign, FlaskConical, Keyboard, Volume2, Vibrate, ArrowDownRight, ArrowUpRight, Plus, Flame, RefreshCw, Wifi, Link2, Smartphone, Timer } from '@lucide/svelte';
-	import type { AtlasSnapshot, Category } from '#lib/atlas';
+	import { Bell, CircleDollarSign, FlaskConical, Keyboard, Volume2, Vibrate, ArrowDownRight, ArrowUpRight, Flame, RefreshCw, Wifi, Link2, Smartphone, Timer } from '@lucide/svelte';
+	import type { AtlasSnapshot } from '#lib/atlas';
 	import { m } from '#lib/paraglide/messages.js';
-	import Segmented from '#lib/components/ui/Segmented.svelte';
 	import Sheet from '#lib/components/ui/Sheet.svelte';
 	import Toggle from '#lib/components/ui/Toggle.svelte';
 	import { lastSyncLabel, type SyncPeerStatus, type SyncStatus, type SyncDiscoveryStatus } from '#lib/sync';
@@ -26,8 +25,6 @@
 		onpreference,
 		oncurrency,
 		ontestmode,
-		onaddcategory,
-		onrenamecategory,
 		onpause,
 		onexport,
 		onimport,
@@ -56,8 +53,6 @@
 		) => void;
 		oncurrency: (value: string) => Promise<boolean>;
 		ontestmode: (enabled: boolean) => void;
-		onaddcategory: (input: { module: 'finance' | 'time'; name: string; color: string }) => void;
-		onrenamecategory: (category: Category) => void;
 		onpause: () => void;
 		onexport: () => void;
 		onimport: () => void;
@@ -72,17 +67,6 @@
 	} = $props();
 
 	/** Paleta de categorias do guia (`docs/DESIGN.md` §2). */
-	const PALETTE = ['#d4f25a', '#9cc8ff', '#ffb347', '#c6a8ff', '#f1a5c5', '#7fe3c4'];
-
-	let categoryName = $state('');
-	let categoryModule = $state<'finance' | 'time'>('finance');
-	let categoryColor = $state(PALETTE[0]);
-
-	const modules = $derived([
-		{ value: 'finance', label: m.settings_module_finance() },
-		{ value: 'time', label: m.settings_module_time() }
-	]);
-
 	async function handleCurrency(event: Event) {
 		const select = event.currentTarget as HTMLSelectElement;
 		if (!(await oncurrency(select.value))) select.value = snapshot.preferences.currency;
@@ -127,14 +111,6 @@
 		const clamped = Math.min(300, Math.max(1, value));
 		input.value = String(clamped);
 		if (clamped !== current) onsyncinterval(clamped);
-	}
-
-	function submitCategory(event: SubmitEvent) {
-		event.preventDefault();
-		const name = categoryName.trim();
-		if (!name) return;
-		onaddcategory({ module: categoryModule, name, color: categoryColor });
-		categoryName = '';
 	}
 </script>
 
@@ -296,8 +272,9 @@
 
 		{#if syncAvailable}
 			<section>
-				<h3>{m.settings_section_advanced()}</h3>
-				<div class="tile">
+				<details class="advanced">
+					<summary>{m.settings_section_advanced()}</summary>
+					<div class="tile">
 					<div class="row">
 						<span class="lead"><Timer size={17} /></span>
 						<span class="text">
@@ -332,7 +309,8 @@
 							/>
 						</div>
 					{/if}
-				</div>
+					</div>
+				</details>
 			</section>
 		{/if}
 
@@ -376,51 +354,6 @@
 			</section>
 		{/if}
 
-		<section>
-			<h3>{m.settings_categories_title()}</h3>
-			<div class="tile">
-				<form class="new-category" onsubmit={submitCategory}>
-					<Segmented
-						label={m.settings_categories_title()}
-						options={modules}
-						bind:value={categoryModule}
-					/>
-					<div class="new-category-line">
-						<input
-							class="input"
-							aria-label={m.settings_categories_new()}
-							placeholder={m.settings_categories_new()}
-							bind:value={categoryName}
-						/>
-						<button type="submit" class="add" aria-label={m.settings_categories_add()}>
-							<Plus size={16} />
-						</button>
-					</div>
-					<div class="swatches" role="group" aria-label={m.settings_categories_color()}>
-						{#each PALETTE as color (color)}
-							<button
-								type="button"
-								class="swatch"
-								style={`--c:${color}`}
-								aria-pressed={color === categoryColor}
-								aria-label={color}
-								onclick={() => (categoryColor = color)}
-							></button>
-						{/each}
-					</div>
-				</form>
-				<div class="categories">
-					{#each snapshot.categories as category (category.id)}
-						<button type="button" class="category" onclick={() => onrenamecategory(category)}>
-							<i style={`background:${category.color}`}></i>
-							{category.name}
-							<span>{category.module === 'finance' ? m.settings_module_finance() : m.settings_module_time()}</span>
-						</button>
-					{/each}
-				</div>
-			</div>
-		</section>
-
 		<button type="button" class="pause" onclick={onpause}>
 			<Flame size={16} />
 			{m.settings_pause()}
@@ -448,6 +381,33 @@
 		font-size: 12px;
 		font-weight: 600;
 	}
+	.advanced summary {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		margin: 0;
+		padding: 0 2px;
+		color: var(--mu);
+		font-size: 12px;
+		font-weight: 600;
+		list-style: none;
+		cursor: pointer;
+	}
+	.advanced summary::-webkit-details-marker {
+		display: none;
+	}
+	.advanced summary::after {
+		content: '+';
+		color: var(--mu);
+		font-size: 16px;
+		font-weight: 400;
+	}
+	.advanced[open] summary::after {
+		content: '−';
+	}
+	.advanced .tile {
+		margin-top: 8px;
+	}
 	.tile {
 		padding: 4px 14px;
 		border-radius: 10px;
@@ -462,8 +422,7 @@
 		border-top: 1px solid var(--ln);
 	}
 	.row:first-child,
-	.tile > .actions:first-child,
-	.tile > .new-category:first-child {
+	.tile > .actions:first-child {
 		border-top: 0;
 	}
 	.lead {
@@ -546,92 +505,6 @@
 		font-size: 12px;
 		line-height: 1.45;
 	}
-	.new-category {
-		display: grid;
-		gap: 10px;
-		padding: 10px 0;
-	}
-	.new-category-line {
-		display: flex;
-		gap: 8px;
-	}
-	.input {
-		flex: 1;
-		min-height: 40px;
-		padding: 0 12px;
-		border: 1px solid var(--ln);
-		border-radius: 10px;
-		background: var(--s2);
-		color: var(--tx);
-		font-size: 14px;
-		outline: none;
-	}
-	.input:focus {
-		border-color: var(--acc);
-	}
-	.input::placeholder {
-		color: var(--mu);
-	}
-	.add {
-		flex: none;
-		width: 40px;
-		height: 40px;
-		display: grid;
-		place-items: center;
-		padding: 0;
-		border: 0;
-		border-radius: 10px;
-		background: var(--acc);
-		color: var(--on-acc);
-		cursor: pointer;
-	}
-	.swatches {
-		display: flex;
-		gap: 8px;
-	}
-	.swatch {
-		width: 28px;
-		height: 28px;
-		padding: 0;
-		border: 0;
-		border-radius: 50%;
-		background: var(--c);
-		cursor: pointer;
-		opacity: 0.5;
-		transition: opacity 0.15s var(--ease-smooth), transform 0.15s var(--ease-spring);
-	}
-	.swatch[aria-pressed='true'] {
-		opacity: 1;
-		transform: scale(1.12);
-	}
-	.categories {
-		display: grid;
-	}
-	.category {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		min-height: 46px;
-		padding: 0;
-		border: 0;
-		border-top: 1px solid var(--ln);
-		background: transparent;
-		color: var(--tx);
-		font-size: 14px;
-		text-align: left;
-		cursor: pointer;
-	}
-	.category i {
-		width: 10px;
-		height: 10px;
-		flex: none;
-		border-radius: 50%;
-	}
-	.category span {
-		margin-left: auto;
-		color: var(--mu);
-		font-size: 12px;
-	}
 	.pause {
 		min-height: 48px;
 		display: inline-flex;
@@ -652,10 +525,5 @@
 		font-size: 11px;
 		text-align: center;
 		letter-spacing: 0.02em;
-	}
-	@media (prefers-reduced-motion: reduce) {
-		.swatch {
-			transition: none;
-		}
 	}
 </style>
