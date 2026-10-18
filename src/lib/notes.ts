@@ -311,3 +311,26 @@ export function highlightHtml(text: string, query: string): string {
 		return escaped;
 	}
 }
+
+/**
+ * Conteúdo do `.md` exportado: garante o título como heading, mantém o corpo
+ * como está e acrescenta as tags no fim.
+ */
+export function noteMarkdown(title: string, body: string, tags: string[]): string {
+	const cleanTitle = title.trim() || 'Sem título';
+	const trimmed = body.trim();
+	const firstLine = trimmed.split('\n')[0]?.replace(/^#+\s+/, '').trim().toLowerCase() ?? '';
+	const content = firstLine === cleanTitle.toLowerCase() ? trimmed : `# ${cleanTitle}\n\n${trimmed}`.trim();
+	const tagLine = tags.length ? tags.map((tag) => `#${normalizeTag(tag)}`).filter((tag) => tag !== '#').join(' ') : '';
+	return `${content}${tagLine ? `\n\n${tagLine}` : ''}\n`;
+}
+
+/** Nome de arquivo seguro e legível para a nota exportada. */
+export function noteExportFileName(title: string): string {
+	const slug = deaccent(title)
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '')
+		.slice(0, 60);
+	return `${slug || 'nota'}.md`;
+}

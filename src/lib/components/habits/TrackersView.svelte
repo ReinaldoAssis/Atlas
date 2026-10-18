@@ -11,6 +11,8 @@
 	import { playTone, pulseHaptic } from '#lib/feedback';
 	import { formatClock } from '#lib/duration';
 	import { buildHistoryChart } from '#lib/history-chart';
+	import HistoryList from './HistoryList.svelte';
+	import type { HistoryGroup } from '#lib/history-list';
 	import {
 		TRACKER_BOOLEAN_LABELS,
 		booleanLabelOf,
@@ -97,6 +99,29 @@
 	const visibleTrackers = $derived(showArchived ? trackers : activeTrackers);
 	const detailTracker = $derived(detailId ? trackers.find((tracker) => tracker.id === detailId) ?? null : null);
 	const detailEntries = $derived(detailId ? entriesOf(detailId) : []);
+	const detailGroups = $derived.by(() => {
+		const tracker = detailTracker;
+		if (!tracker) return [] as HistoryGroup[];
+		const map = new Map<string, HistoryGroup['rows']>();
+		for (const entry of detailEntries) {
+			const rows = map.get(entry.date) ?? [];
+			const value =
+				tracker.metric === 'boolean'
+					? booleanLabelOf(tracker, entry.value, TRACKER_BOOLEAN_LABELS)
+					: formatValue(tracker, entry.value);
+			const tone =
+				tracker.metric === 'boolean'
+					? isPositive(tracker, entry.value)
+						? 'ok'
+						: 'bad'
+					: goalMet(tracker, entry.value)
+						? 'ok'
+						: null;
+			rows.push({ id: entry.id, value, meta: entry.time || undefined, note: entry.note || undefined, tone });
+			map.set(entry.date, rows);
+		}
+		return [...map].map(([date, rows]) => ({ date, rows }));
+	});
 
 	function tone(frequency: number, duration = 0.08, type: OscillatorType = 'sine', volume = 0.05) {
 		playTone(frequency, duration, type, volume, sound);
@@ -141,13 +166,6 @@
 	function formatWhen(entry: TrackerEntry): string {
 		const [, month, day] = entry.date.split('-');
 		return entry.time ? `${day}/${month} · ${entry.time}` : `${day}/${month}`;
-	}
-
-	function dateLabel(date: string): string {
-		if (date === today) return 'Hoje';
-		if (date === dateOffset(today, -1)) return 'Ontem';
-		const [year, month, day] = date.split('-');
-		return `${day}/${month}${year !== today.slice(0, 4) ? `/${year}` : ''}`;
 	}
 
 	function isPositive(tracker: Tracker, value: number): boolean {
@@ -641,17 +659,13 @@
 		{/if}
 
 		{#if detailEntries.length}
-			<ul class="tk-entries">
-				{#each detailEntries as entry (entry.id)}
-					<li>
-						<button onclick={() => openEntry(entry)}>
-							<span class="tk-e-when">{dateLabel(entry.date)}{entry.time ? ` · ${entry.time}` : ''}</span>
-							<b>{tracker.metric === 'boolean' ? booleanLabelOf(tracker, entry.value, TRACKER_BOOLEAN_LABELS) : formatValue(tracker, entry.value)}</b>
-							{#if entry.note}<small>{entry.note}</small>{/if}
-						</button>
-					</li>
-				{/each}
-			</ul>
+			<HistoryList
+				groups={detailGroups}
+				onopen={(id) => {
+					const entry = detailEntries.find((item) => item.id === id);
+					if (entry) openEntry(entry);
+				}}
+			/>
 		{/if}
 	</Sheet>
 {/if}
@@ -870,11 +884,6 @@
 	.tk-dot { fill: var(--acc); }
 	.tk-target { stroke: var(--mu); stroke-width: 1.4; stroke-dasharray: 5 4; }
 
-	.tk-entries { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
-	.tk-entries button { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; width: 100%; padding: 10px 12px; border-radius: 10px; background: var(--s2); color: var(--tx); }
-	.tk-entries b { font-weight: 700; }
-	.tk-entries small { grid-column: 1 / -1; color: var(--mu); font-size: 12px; }
-	.tk-e-when { color: var(--mu); font-size: 12px; font-weight: 600; align-self: center; }
 
 	@media (min-width: 900px) {
 		.tk { max-width: none; }

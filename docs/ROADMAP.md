@@ -1,7 +1,7 @@
 # Atlas — roadmap planejado
 
 Plano para as seis frentes pedidas, com pesquisa já feita e decisões recomendadas.
-Escopo do produto: `docs/MVP.md`. UI: `docs/DESIGN.md`. Estado do iOS: `context/atlas-ios-handoff.md`.
+Escopo do produto: `docs/MVP.md`. UI: `docs/DESIGN.md`. Estado do iOS: `docs/IOS-SIDELOAD.md`.
 
 > Esforço em **dias-dev** (1 dev, foco parcial). Ranges são estimativas, não compromisso.
 > IDs de tarefa (`A1`, `B3`, …) para rastrear em issues/commits.
@@ -16,7 +16,7 @@ Escopo do produto: `docs/MVP.md`. UI: `docs/DESIGN.md`. Estado do iOS: `context/
 - Ritmo **5–10 h/semana**; **feature branch + PR**, CI obrigatório; fatias sempre verdes.
 
 **Plataformas**
-- Ciclo atual: **iOS + Windows** (macOS depois). Máquina de trabalho atual: **macOS** (Xcode 27) — o Mac faz iOS; Windows só via CI/parceiro.
+- Ciclo atual: **iOS + Windows + macOS**. Máquina de trabalho atual: **macOS** (Xcode 27) — o Mac faz iOS e macOS; Windows só via CI/parceiro.
 - Windows: **NSIS, per-user, x64**, instalador **sem code signing** (SmartScreen aparece). **O build do instalador roda no job Windows do CI**, não na máquina local (macOS não gera NSIS). A verificação manual do instalador continua exigindo uma máquina Windows.
 - **Updater** via **GitHub Releases**, **só Windows**; release por **tag semver**, versão **automática pela tag**.
   - O instalador do release sai **assinado** (minisign) e o `latest.json` é publicado no mesmo release; a chave privada só existe nos secrets do repositório (`docs/RELEASES.md`).
@@ -33,7 +33,7 @@ Escopo do produto: `docs/MVP.md`. UI: `docs/DESIGN.md`. Estado do iOS: `context/
 - Migrações **versionadas (`PRAGMA user_version`)**; fim do `DELETE`-all → **upsert por linha**; **tombstones 30 dias**; **device_id + epoch ms**.
 - **Notas** ganham tombstone (anexos seguem no disco); **grafo em tabelas** `nodes/edges/domains`.
 - **Boot vazio**: só categorias padrão, grafo só com origem, XP/streak/Life Force nos valores base; **limpeza automática** dos `demo-*` na migração (a instalação atual só tem dados demo).
-- **Modo de teste**: banco separado `atlas.test.db`, flag em `localStorage`, **device_id próprio**, fixtures de **todos os módulos**, banner; desligar volta ao `atlas.db`.
+- **Modo de teste**: banco separado `atlas.test.db`, flag em `localStorage`, **device_id próprio**, fixtures de **todos os módulos**; sair pelo menu **Mais**. Desligar volta ao `atlas.db`.
 
 **UI / i18n / hardening**
 - i18n com **Paraglide**, **só pt-BR** por ora, migração **incremental**.
@@ -51,7 +51,9 @@ Escopo do produto: `docs/MVP.md`. UI: `docs/DESIGN.md`. Estado do iOS: `context/
 
 ## 0. Fatos do repositório que condicionam tudo
 
-Levantamento do código atual (relevante para as features abaixo):
+> **Registro histórico:** este levantamento é de antes do ciclo S1 e ficou
+> mantido como justificativa das decisões. O estado atual está na seção 7
+> (fatias entregues) e no topo deste arquivo.
 
 | # | Achado | Onde | Impacto |
 |---|---|---|---|
@@ -105,7 +107,7 @@ Fatos-chave da pesquisa:
 | D4 | Adicionar `PrivacyInfo.xcprivacy` (fs usa file timestamp) | arquivo no bundle | 0.5 |
 | D5 | Regenerar ícone de fonte 1024×1024 **sem alpha** (`npx tauri icon`) | `src-tauri/icons/*` + `Assets.xcassets` | 0.5 |
 | D6 | *(Opcional, se assinar US$99)* Fluxo Ad Hoc/AltStore PAL: notarização, source JSON, host do ADP | doc + source | 2–3 |
-| D7 | Registrar decisão usada/limites/renovação em `context/` | nota curta | 0.5 |
+| D7 | Registrar decisão usada/limites/renovação em `docs/IOS-SIDELOAD.md` | nota curta | 0.5 |
 
 ### 1.4 Aceite
 - App abre no iPhone e **sobrevive à janela de 7 dias** sem intervenção manual (SideStore), **ou** há `ipa` notarizado que não expira (pago).
@@ -338,19 +340,29 @@ Ordem aprovada numa sessão de alinhamento: polimentos/bugs → Notas → Tracke
 | Fatia | Conteúdo | Estado |
 |---|---|---|
 | **S11** | Criar hábito persistente (a ação sumia após o 1º hábito) · FAB de Finanças fora do `#pg` (o `transform` da troca de aba virava containing block do `position: fixed`) · rótulo "Pausar Atlas" · **Vida → Planejamento** · Notas com `+ Nota`/`+ Pasta` (FAB `+` removido) | ✅ #17 |
-| **S12** | Notas: arrastar nota/pasta para o path (raiz = "Notas") · **export PDF** por nota (diálogo de impressão do SO + `@media print`) | ✅ #18 |
+| **S12** | Notas: arrastar nota/pasta para o path (raiz = "Notas") · **exportação da nota** (hoje `.md`; PDF nativo adiado) | ✅ #18 |
 | **S13** | **Trackers** — aba em Hábitos, vários registros/dia, meta opcional com direção, gráfico SVG, arquivar/excluir com desfazer; migração v5 (`trackers`, `tracker_entries`) | ✅ #19 |
 | **—** | `docs/IDEAS.md`: split tabs · API de dados p/ artifacts HTML (análise de viabilidade) · TODO de integração de tracker | ✅ #20 |
 | **S14** | Referência `tempo`/`time` na nota (fallbacks no `updatedAt`) · chip + bolha do bloco · indicador no planejador + bolha com as notas + abrir a nota | ✅ #21 |
 
-Detalhes de estado e o que ficou pendente de verificação manual: `context/atlas-handoff-s11-s14.md`.
+Detalhes de estado e o que ficou pendente de verificação manual: git history (handoffs antigos saíram do repo na 0.3.3).
 
-> Segue **S10 (sync P2P)** como próxima fatia, em 5 partes (P1–P5). As decisões,
-> o protocolo e o bloqueador do iOS estão em **`docs/SYNC.md`**; o "spike E0"
-> virou **P2 (PoC Windows↔Windows)** + verificação no iPhone depois de P4.
+### Ciclo pós-sync — v0.3.2 a v0.3.3 (concluído)
 
+| Fatia | Conteúdo | Estado |
+|---|---|---|
+| **#38** | Pareamento LAN, ALPN, descoberta iOS via DNS-SD, dedupe ao re-parear | ✅ |
+| **#39** | Auto-sync a cada 2 s (configurável), toggle em Avançado | ✅ |
+| **#40** | Editores de meta, duração HH:MM, swipe do pager, seleção e label do tile concluído | ✅ |
+| **#41** | Histórico de hábito/tracker, edição de lançamentos, meta efetiva por dia, categorias em Finanças, gestos do planejador | ✅ |
+| **#42** | Gestos do Tempo (scroll vs pintura), pull-up do preview de nota, Test mode em Avançado, lembretes default on, limite financeiro digitável | ✅ |
+| **0.3.3** | Exportação `.md` por nota, menu ⋯ no editor mobile, ícone de pasta, long press em Finanças, estilo inline do limite, som de digitação grave, janela móvel de 7 dias + calendário de range (até 14), histórico redesenhado, saída do modo de teste no menu Mais, docs reorganizados | ✅ |
 
-**Fora do ciclo** (escolhas do usuário): ícone novo (1024 sem alpha), assinatura Windows (Azure Trusted Signing), AltStore PAL/notarização, kit completo + migração dos overlays de lançamento/hábito, i18n em `en`, macOS.
+> **S10 (sync P2P)** e o ciclo S11–S14 estão entregues. O protocolo e as
+> limitações que dependem de device ficam em **`docs/SYNC.md`** e
+> **`docs/IOS-SIDELOAD.md`**.
+
+**Fora do ciclo** (escolhas do usuário): ícone novo (1024 sem alpha), assinatura Windows (Azure Trusted Signing), AltStore PAL/notarização, kit completo + migração dos overlays de lançamento/hábito, i18n em `en`, exportação em PDF nativa.
 
 **Estimativa (1 dev, 5–10 h/sem):** S1–S9 ≈ 30–45 dias-dev; S10 (sync) +15–20 dias-dev.
 
@@ -371,7 +383,7 @@ Ideias registradas mas **não implementadas** (split tabs, API de dados para art
 
 ## 9. Referências
 
-- `docs/MVP.md`, `docs/DESIGN.md`, `context/atlas-ios-handoff.md`
+- `docs/MVP.md`, `docs/DESIGN.md`, `docs/IOS-SIDELOAD.md`
 - AltStore PAL no Brasil (CADE, 18/06/2026) e requisitos de publicação: `9to5mac.com` / `faq.altstore.io/developers/distribute-with-altstore-pal`
 - SideStore (refresh automático): `docs.sidestore.io`
 - iroh 1.0 (P2P, bindings Swift/Kotlin oficiais em jun/2026; local-first sem relay): `www.iroh.computer/blog/v1`, `docs.iroh.computer/connecting/local-address-lookup`

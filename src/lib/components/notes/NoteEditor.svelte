@@ -13,17 +13,19 @@
 	import { isTauri } from '@tauri-apps/api/core';
 	import {
 		findNoteByTitle,
+		noteExportFileName,
+		noteMarkdown,
 		noteTitle,
 		normalizeTag,
 		tagColor,
 		type Note,
 		type NoteFolder
 	} from '#lib/notes';
-	import { playTone, prefersReducedMotion, pulseHaptic } from '#lib/feedback';
+	import { playTone, playTypingThock, prefersReducedMotion, pulseHaptic } from '#lib/feedback';
 	import { decorateTempoRefs } from '#lib/tempo-ref';
 	import { TimeBubble } from '#lib/bubble';
 	import type { TimeBlock } from '#lib/atlas';
-	import { Printer } from '@lucide/svelte';
+	import { Download, MoreHorizontal } from '@lucide/svelte';
 	import FolderIcon from './FolderIcon.svelte';
 	import ArtifactFrame from './ArtifactFrame.svelte';
 
@@ -82,6 +84,8 @@
 	let paneEl = $state<HTMLElement | null>(null);
 	let editorEl = $state<HTMLTextAreaElement | null>(null);
 	let previewEl = $state<HTMLElement | null>(null);
+	let moreEl = $state<HTMLElement | null>(null);
+	let moreOpen = $state(false);
 	/** Bolha de preview do bloco de tempo correspondente a uma referência `tempo`. */
 	let bubble: TimeBubble | null = null;
 	let dirty = false;
@@ -97,7 +101,7 @@
 	}
 
 	function typingClick() {
-		if (typingSound) playTone(950 + Math.random() * 250, 0.03, 'square', 0.03, sound);
+		playTypingThock(typingSound && sound);
 	}
 
 	/* ---------- persistência ---------- */
@@ -352,41 +356,29 @@
 	}
 
 	/**
-	 * Exportar PDF pelo diálogo de impressão do sistema.
-	 *
-	 * Rende a nota pelo pipeline do Carta, clona o preview já decorado (imagens
-	 * de anexo resolvidas em `blob:`) e imprime só esse bloco — o resto do app
-	 * some via regra `@media print` (`.nt-print`). Artefatos (iframe) ficam de fora.
+	 * Exporta a nota como Markdown (`.md`) pelo save/picker do sistema.
+	 * PDF fica para uma implementação nativa futura: `window.print()` não
+	 * funciona no WKWebView do Tauri.
 	 */
-	async function exportPdf() {
+	async function exportMarkdown() {
 		flush();
-		await renderPreview();
-		if (!previewEl) return;
-		const clone = previewEl.cloneNode(true) as HTMLElement;
-		clone.querySelectorAll('[data-atlas-artifact], iframe, script, style').forEach((node) => node.remove());
-		if (!clone.textContent?.trim() && !clone.querySelector('img, svg')) {
-			ontoast('Nada para exportar nesta nota.', { warning: true });
-			return;
-		}
-		const root = document.createElement('div');
-		root.className = 'nt-print markdown-body';
-		const heading = document.createElement('h1');
-		heading.className = 'nt-print-title';
-		heading.textContent = title.trim() || 'Nota';
-		const meta = document.createElement('div');
-		meta.className = 'nt-print-meta';
-		meta.textContent = `${folder?.name ?? 'Notas'} · ${new Date().toLocaleDateString('pt-BR')}`;
-		root.append(heading, meta, clone);
-		document.body.appendChild(root);
-		const cleanup = () => {
-			window.removeEventListener('afterprint', cleanup);
-			root.remove();
-		};
-		window.addEventListener('afterprint', cleanup);
-		setTimeout(cleanup, 120000);
+		const bytes = new TextEncoder().encode(noteMarkdown(title, body, tags));
+		const result = await saveBytes(bytes, noteExportFileName(title), [
+			{ name: 'Nota do Atlas', extensions: ['md'] }
+		]);
+		ontoast(result === 'saved' ? 'Nota exportada.' : 'Exportação cancelada.');
 		tone(560, 0.08, 'triangle', 0.05);
 		pulseHaptic(haptics, 6);
-		window.print();
+	}
+
+	function onDocumentPointerDown(event: PointerEvent) {
+		if (!moreOpen) return;
+		if (!moreEl?.contains(event.target as Node)) moreOpen = false;
+	}
+
+	function toggleMore() {
+		moreOpen = !moreOpen;
+		if (moreOpen) tone(520, 0.05, 'triangle', 0.04);
 	}
 
 	onMount(() => {
@@ -409,6 +401,7 @@
 			if (document.visibilityState === 'hidden') flush();
 		};
 		document.addEventListener('visibilitychange', onVisibility);
+		document.addEventListener('pointerdown', onDocumentPointerDown, true);
 		window.addEventListener('pagehide', flush);
 		if (initialMode === 'write') setTimeout(() => editorEl?.focus(), 350);
 		return () => {
@@ -417,6 +410,7 @@
 			bubble?.destroy();
 			bubble = null;
 			document.removeEventListener('visibilitychange', onVisibility);
+			document.removeEventListener('pointerdown', onDocumentPointerDown, true);
 			window.removeEventListener('pagehide', flush);
 			for (const url of objectUrls) URL.revokeObjectURL(url);
 			objectUrls.length = 0;
@@ -439,9 +433,30 @@
 		<button class="nt-fc" style={`--cc:${folder?.color ?? '#454c45'}`} onclick={onopenfolder}>
 			<FolderIcon color={folder?.color ?? '#454c45'} mini />{folder?.name ?? 'Notas'}
 		</button>
-		<button class="nt-ic" class:on={note.pinned} aria-label={note.pinned ? 'Desafixar' : 'Fixar'} onclick={(event) => onpin(event.currentTarget)}>{note.pinned ? '★' : '☆'}</button>
-		<button class="nt-ic" aria-label="Excluir" onclick={ondeletenote}>⌫</button>
-		<button class="nt-ic nt-export" aria-label="Exportar PDF" title="Exportar PDF" onclick={exportPdf}><Printer size={17} /></button>
+		<div class="nt-actions">
+			<button class="nt-ic" class:on={note.pinned} aria-label={note.pinned ? 'Desafixar' : 'Fixar'} onclick={(event) => onpin(event.currentTarget)}>{note.pinned ? '★' : '☆'}</button>
+			<button class="nt-ic" aria-label="Excluir" onclick={ondeletenote}>⌫</button>
+			<button class="nt-ic nt-export" aria-label="Exportar Markdown" title="Exportar Markdown" onclick={exportMarkdown}><Download size={17} /></button>
+		</div>
+		<div class="nt-more" bind:this={moreEl}>
+			<button class="nt-ic" aria-label="Mais ações" aria-haspopup="menu" aria-expanded={moreOpen} onclick={toggleMore}><MoreHorizontal size={18} /></button>
+			{#if moreOpen}
+				<div class="nt-more-menu" role="menu" aria-label="Ações da nota">
+					<button
+						role="menuitem"
+						onclick={(event) => {
+							const anchor = event.currentTarget;
+							onpin(anchor);
+							moreOpen = false;
+						}}
+					>
+						{note.pinned ? 'Desafixar' : 'Fixar'}
+					</button>
+					<button role="menuitem" class="danger" onclick={() => { moreOpen = false; ondeletenote(); }}>Excluir</button>
+					<button role="menuitem" onclick={() => { moreOpen = false; void exportMarkdown(); }}>Exportar .md</button>
+				</div>
+			{/if}
+		</div>
 		<div class="nt-seg" data-m={mode}>
 			<i></i>
 			<button class:on={mode === 'write'} onclick={() => setMode('write')}>Editar</button>

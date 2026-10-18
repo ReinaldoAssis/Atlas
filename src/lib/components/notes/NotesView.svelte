@@ -42,7 +42,7 @@
 		upsertFolder,
 		upsertNote
 	} from '#lib/notes-store';
-	import { burstAt, centerOf, playTone, prefersReducedMotion, pulseHaptic } from '#lib/feedback';
+	import { burstAt, centerOf, playTone, playTypingThock, prefersReducedMotion, pulseHaptic } from '#lib/feedback';
 	import { m } from '#lib/paraglide/messages.js';
 	import FolderIcon from './FolderIcon.svelte';
 	import NoteEditor from './NoteEditor.svelte';
@@ -329,7 +329,7 @@
 	function onQuery(value: string) {
 		query = value;
 		searchIds = null;
-		if (typingSound) tone(950 + Math.random() * 250, 0.03, 'square', 0.03);
+		if (typingSound) playTypingThock(sound);
 		haptic(2);
 		if (searchTimer) clearTimeout(searchTimer);
 		const target = value;

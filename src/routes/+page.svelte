@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, untrack } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import { isTauri } from '@tauri-apps/api/core';
 	import {
 		Archive, ArchiveRestore, CalendarDays, Check, ChevronLeft,
@@ -47,6 +47,7 @@ import { checkForUpdate, relaunchApp, updaterSupportedHere } from '#lib/updater'
 import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, restoreAttachments } from '#lib/notes-store';
 	import type { Note, NotesState } from '#lib/notes';
 	import { notesForBlock, type NoteRef } from '#lib/tempo-ref';
+	import { addDays, clampRange, defaultRange, rangeLabel } from '#lib/time-range';
 	import { TimeBubble } from '#lib/bubble';
 	import { edgeRatio, isMilestone, nodeReached, type GraphState } from '#lib/graph';
 	import { reconcileGraph } from '#lib/graph-sources';
@@ -56,6 +57,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	import HabitHistorySheet from '#lib/components/habits/HabitHistorySheet.svelte';
 	import PlannerNotesSheet from '#lib/components/time/PlannerNotesSheet.svelte';
 	import PlannerNoteSheet from '#lib/components/time/PlannerNoteSheet.svelte';
+	import TimeRangeSheet from '#lib/components/time/TimeRangeSheet.svelte';
 	import SettingsSheet from '#lib/components/settings/SettingsSheet.svelte';
 	import SyncIntroSheet from '#lib/components/settings/SyncIntroSheet.svelte';
 	import SyncPairSheet from '#lib/components/settings/SyncPairSheet.svelte';
@@ -118,7 +120,10 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let period = $state<Period>('week');
 	let customStart = $state(dateOffset(localDate(), -6));
 	let customEnd = $state(localDate());
-	let timeWeekStart = $state(weekStart(localDate()));
+	const initialRange = defaultRange(localDate());
+	let timeRangeStart = $state(initialRange.start);
+	let timeRangeDays = $state(7);
+	let timeCalendarOpen = $state(false);
 	let currentTime = $state(new Date());
 	let modal = $state<ModalKind>(null);
 	let testModeActive = $state(false);
@@ -178,14 +183,14 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	});
 	let rangeTransactions = $derived(snapshot?.transactions.filter((item) => item.date >= currentRange.start && item.date <= currentRange.end) ?? []);
 	let rangeBlocks = $derived(snapshot?.timeBlocks.filter((item) => item.startAt.slice(0, 10) >= currentRange.start && item.startAt.slice(0, 10) <= currentRange.end) ?? []);
+	let timeRangeEnd = $derived(addDays(timeRangeStart, timeRangeDays - 1));
 	let timeGrid = $derived.by(() => {
-		const grid: (string | null)[][] = Array.from({ length: 7 }, () => Array<string | null>(TIME_SLOT_COUNT).fill(null));
+		const grid: (string | null)[][] = Array.from({ length: timeRangeDays }, () => Array<string | null>(TIME_SLOT_COUNT).fill(null));
 		if (!snapshot) return grid;
-		const weekStartMs = new Date(`${timeWeekStart}T12:00:00`).getTime();
 		for (const block of snapshot.timeBlocks) {
 			if (block.status === 'cancelled') continue;
-			const index = Math.round((new Date(`${block.startAt.slice(0, 10)}T12:00:00`).getTime() - weekStartMs) / 86_400_000);
-			if (index < 0 || index > 6) continue;
+			const index = timeDayIndex(block.startAt.slice(0, 10));
+			if (index < 0 || index >= timeRangeDays) continue;
 			const startMinutes = Number(block.startAt.slice(11, 13)) * 60 + Number(block.startAt.slice(14, 16));
 			const startSlot = Math.round((startMinutes - TIME_SLOT_START_HOUR * 60) / TIME_SLOT_MINUTES);
 			const slots = Math.max(1, Math.round(block.plannedMinutes / TIME_SLOT_MINUTES));
@@ -198,13 +203,12 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	});
 	/** Id do bloco por célula (paralelo ao `timeGrid`) — para marcar quem tem nota. */
 	let timeGridBlocks = $derived.by(() => {
-		const grid: (string | null)[][] = Array.from({ length: 7 }, () => Array<string | null>(TIME_SLOT_COUNT).fill(null));
+		const grid: (string | null)[][] = Array.from({ length: timeRangeDays }, () => Array<string | null>(TIME_SLOT_COUNT).fill(null));
 		if (!snapshot) return grid;
-		const weekStartMs = new Date(`${timeWeekStart}T12:00:00`).getTime();
 		for (const block of snapshot.timeBlocks) {
 			if (block.status === 'cancelled') continue;
-			const index = Math.round((new Date(`${block.startAt.slice(0, 10)}T12:00:00`).getTime() - weekStartMs) / 86_400_000);
-			if (index < 0 || index > 6) continue;
+			const index = timeDayIndex(block.startAt.slice(0, 10));
+			if (index < 0 || index >= timeRangeDays) continue;
 			const startMinutes = Number(block.startAt.slice(11, 13)) * 60 + Number(block.startAt.slice(14, 16));
 			const startSlot = Math.round((startMinutes - TIME_SLOT_START_HOUR * 60) / TIME_SLOT_MINUTES);
 			const slots = Math.max(1, Math.round(block.plannedMinutes / TIME_SLOT_MINUTES));
@@ -215,41 +219,51 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		}
 		return grid;
 	});
-	/** Notas que referenciam cada bloco (`tempo`/`time`) na semana visível. */
+	/** Notas que referenciam cada bloco (`tempo`/`time`) no range visível. */
 	let timeBlockNotes = $derived.by(() => {
 		const map = new Map<string, NoteRef[]>();
 		if (!snapshot) return map;
 		const active = notesState.notes.filter((note) => !note.trashedAt);
 		if (!active.length) return map;
-		const weekEnd = dateOffset(timeWeekStart, 6);
 		for (const block of snapshot.timeBlocks) {
 			if (block.status === 'cancelled') continue;
 			const date = block.startAt.slice(0, 10);
-			if (date < timeWeekStart || date > weekEnd) continue;
+			if (date < timeRangeStart || date > timeRangeEnd) continue;
 			const found = notesForBlock(block, active);
 			if (found.length) map.set(block.id, found);
 		}
 		return map;
 	});
-	let timeTodayIndex = $derived((new Date().getDay() + 6) % 7);
-	let timeHeaderDays = $derived(Array.from({ length: 7 }, (_, index) => {
-		const date = dateOffset(timeWeekStart, index);
-		return { label: ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'][index], dayNumber: Number(date.slice(8, 10)) };
+	let timeTodayIndex = $derived.by(() => {
+		const index = timeDayIndex(today);
+		return index >= 0 && index < timeRangeDays ? index : -1;
+	});
+	const weekdayLabels = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
+	let timeHeaderDays = $derived(Array.from({ length: timeRangeDays }, (_, index) => {
+		const date = addDays(timeRangeStart, index);
+		const weekday = (new Date(`${date}T12:00:00`).getDay() + 6) % 7;
+		return { label: weekdayLabels[weekday], dayNumber: Number(date.slice(8, 10)) };
 	}));
 	let timeWeekBars = $derived.by(() => {
 		const daySlots = timeGrid.map((day) => day.filter(Boolean).length);
 		const max = Math.max(8, ...daySlots);
-		return daySlots.map((slots, index) => ({
-			label: ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'][index],
-			dayNumber: Number(dateOffset(timeWeekStart, index).slice(8, 10)),
-			percent: slots ? (slots / max) * 100 : 0
-		}));
+		return daySlots.map((slots, index) => {
+			const date = addDays(timeRangeStart, index);
+			const weekday = (new Date(`${date}T12:00:00`).getDay() + 6) % 7;
+			return {
+				label: weekdayLabels[weekday],
+				dayNumber: Number(date.slice(8, 10)),
+				percent: slots ? (slots / max) * 100 : 0
+			};
+		});
 	});
 	let timeTotalsLabel = $derived.by(() => {
 		const total = timeGrid.reduce((sum, day) => sum + day.filter(Boolean).length, 0);
-		return `${hmSlots(total)} alocadas · ${hmSlots(7 * TIME_SLOT_COUNT - total)} livres`;
+		const free = Math.max(0, timeRangeDays * TIME_SLOT_COUNT - total);
+		return `${rangeLabel(timeRangeStart, timeRangeEnd)} · ${hmSlots(total)} alocadas · ${hmSlots(free)} livres`;
 	});
 	let timeNow = $derived.by(() => {
+		if (timeTodayIndex < 0) return null;
 		const minutes = currentTime.getHours() * 60 + currentTime.getMinutes();
 		const slot = (minutes - TIME_SLOT_START_HOUR * 60) / TIME_SLOT_MINUTES;
 		if (slot < 0 || slot > TIME_SLOT_COUNT) return null;
@@ -452,6 +466,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let financeCatPressTimer: ReturnType<typeof setTimeout> | undefined;
 	let financeCatPressOrigin = { x: 0, y: 0 };
 	let financeCatPressSuppress = false;
+	/** Um toque que abriu o sheet via long press não pode fechá-lo no mesmo gesto. */
+	let finOverlayDown = false;
 	let habitCelebration = $state<number | null>(null);
 	let effectsCanvas = $state<HTMLCanvasElement | null>(null);
 	let financeEntry = $state<{ open: boolean; type: 'income' | 'expense'; categoryId: string; amountMinor: number; description: string }>({ open: false, type: 'expense', categoryId: '', amountMinor: 0, description: '' });
@@ -459,9 +475,12 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let financeCelebration = $state<number | null>(null);
 	let timeSelected = $state('deep-work');
 	let timeScroll = $state<HTMLElement | null>(null);
+	let timeWeekBarsEl = $state<HTMLElement | null>(null);
 	let timeColumnWidth = $state(100);
 	let timeVisibleCount = $state(7);
 	let timeVisibleStart = $state(0);
+	/** Enquanto false, a grade recentraliza hoje se o container mudar de largura. */
+	let timeUserAdjusted = false;
 	let timePainting = false;
 	let timePaintMode: 'add' | 'del' = 'add';
 	let timePaintSeen = new Set<string>();
@@ -576,16 +595,53 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	$effect(() => {
 		if (activeTab !== 'time') {
 			timeScrollReady = false;
+			timeUserAdjusted = false;
 			return;
 		}
-		if (!timeScroll || timeScrollReady) return;
-		timeScrollReady = true;
-		timeLayout();
-		timeScroll.scrollLeft = Math.min(timeTodayIndex, Math.max(0, 7 - timeVisibleCount)) * timeColumnWidth;
-		const minutes = currentTime.getHours() * 60 + currentTime.getMinutes();
-		const nowSlot = (minutes - TIME_SLOT_START_HOUR * 60) / TIME_SLOT_MINUTES;
-		timeScroll.scrollTop = Math.max(0, (nowSlot - 3) * 28);
-		handleTimeScroll();
+		const scroll = timeScroll;
+		if (!scroll) return;
+		return untrack(() => {
+			if (timeScrollReady) return;
+			timeScrollReady = true;
+			timeUserAdjusted = false;
+			timeLayout();
+			const centerToday = () => {
+				const column = scroll.querySelector<HTMLElement>('.tp-h')?.getBoundingClientRect().width ?? timeColumnWidth;
+				const available = Math.max(0, scroll.clientWidth - 38);
+				const centered = timeTodayIndex >= 0 ? timeTodayIndex * column - (available - column) / 2 : 0;
+				scroll.scrollLeft = Math.max(0, centered);
+				handleTimeScroll();
+			};
+			centerToday();
+			// No primeiro frame o container pode medir mais estreito que o layout final
+			// (barra lateral/transição de aba); recentraliza quando a largura estabiliza.
+			const recenterTimers = [180, 480].map((delay) =>
+				setTimeout(() => {
+					timeLayout();
+					if (!timeUserAdjusted) centerToday();
+				}, delay)
+			);
+			const markAdjusted = () => (timeUserAdjusted = true);
+			scroll.addEventListener('pointerdown', markAdjusted, { passive: true });
+			scroll.addEventListener('wheel', markAdjusted, { passive: true });
+			scroll.addEventListener('touchstart', markAdjusted, { passive: true });
+			const observer = new ResizeObserver(() => {
+				timeLayout();
+				if (!timeUserAdjusted) centerToday();
+			});
+			observer.observe(scroll);
+			const minutes = currentTime.getHours() * 60 + currentTime.getMinutes();
+			const nowSlot = (minutes - TIME_SLOT_START_HOUR * 60) / TIME_SLOT_MINUTES;
+			scroll.scrollTop = Math.max(0, (nowSlot - 3) * 28);
+			handleTimeScroll();
+			return () => {
+				recenterTimers.forEach((timer) => clearTimeout(timer));
+				observer.disconnect();
+				scroll.removeEventListener('pointerdown', markAdjusted);
+				scroll.removeEventListener('wheel', markAdjusted);
+				scroll.removeEventListener('touchstart', markAdjusted);
+			};
+		});
 	});
 
 	/**
@@ -842,6 +898,13 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	function weekStart(date: string): string {
 		const day = new Date(`${date}T12:00:00`).getDay();
 		return dateOffset(date, -((day + 6) % 7));
+	}
+
+	/** Índice do dia dentro do range atual (negativo/fora = não desenhar). */
+	function timeDayIndex(date: string): number {
+		return Math.round(
+			(new Date(`${date}T12:00:00`).getTime() - new Date(`${timeRangeStart}T12:00:00`).getTime()) / 86_400_000
+		);
 	}
 
 	function allPausePeriods(data: AtlasSnapshot) {
@@ -1143,6 +1206,20 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		financeEntry = { ...financeEntry, open: false };
 		financeCategoryForm = { open: true, id: null, type: back ? financeEntry.type : 'expense', name: '', color: FINANCE_COLORS[1], limitMinor: 50000, back };
 		playTone(380, 0.1, 'sine', 0.05, snapshot?.preferences.soundEnabled ?? true);
+	}
+
+	/**
+	 * Backdrop dos sheets de Finanças. O clique só fecha se o gesto começou no
+	 * próprio backdrop — assim o `click` sintetizado no fim de um long press que
+	 * abriu o sheet não o fecha imediatamente.
+	 */
+	function onFinOverlayPointerDown(event: PointerEvent) {
+		finOverlayDown = event.target === event.currentTarget;
+	}
+
+	function onFinOverlayClick(event: MouseEvent, close: () => void) {
+		if (finOverlayDown && event.target === event.currentTarget) close();
+		finOverlayDown = false;
 	}
 
 	/** Long press (mobile) / clique direito (desktop) no tile de categoria. */
@@ -2349,12 +2426,11 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function countSlotsIn(data: AtlasSnapshot, categoryId: string): number {
-		const weekStartMs = new Date(`${timeWeekStart}T12:00:00`).getTime();
 		let slots = 0;
 		for (const block of data.timeBlocks) {
 			if (block.status === 'cancelled' || block.categoryId !== categoryId) continue;
-			const index = Math.round((new Date(`${block.startAt.slice(0, 10)}T12:00:00`).getTime() - weekStartMs) / 86_400_000);
-			if (index < 0 || index > 6) continue;
+			const index = timeDayIndex(block.startAt.slice(0, 10));
+			if (index < 0 || index >= timeRangeDays) continue;
 			slots += Math.max(1, Math.round(block.plannedMinutes / TIME_SLOT_MINUTES));
 		}
 		return slots;
@@ -2363,7 +2439,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	function timeLayout() {
 		if (!timeScroll) return;
 		const width = timeScroll.clientWidth;
-		timeVisibleCount = width < 560 ? 2 : width < 780 ? 3 : width < 1000 ? 5 : 7;
+		const capacity = width < 560 ? 2 : width < 780 ? 3 : width < 1000 ? 5 : 7;
+		timeVisibleCount = Math.max(1, Math.min(timeRangeDays, capacity));
 		timeColumnWidth = Math.max(64, (width - 38) / timeVisibleCount);
 	}
 
@@ -2372,13 +2449,27 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		hideBlockNotes();
 		if (!timeScroll) return;
 		timeVisibleStart = Math.round(timeScroll.scrollLeft / timeColumnWidth);
+		if (timeWeekBarsEl) timeWeekBarsEl.scrollLeft = Math.max(0, timeScroll.scrollLeft - 38);
 	}
 
 	function scrollToDay(index: number) {
 		if (!timeScroll) return;
-		timeScroll.scrollTo({ left: Math.min(index, Math.max(0, 7 - timeVisibleCount)) * timeColumnWidth, behavior: 'smooth' });
+		const max = Math.max(0, timeRangeDays - timeVisibleCount);
+		timeScroll.scrollTo({ left: Math.min(Math.max(0, index), max) * timeColumnWidth, behavior: 'smooth' });
 		playTone(420, 0.05, 'sine', 0.04, snapshot?.preferences.soundEnabled ?? true);
 		pulseHaptic(snapshot?.preferences.hapticsEnabled, 4);
+	}
+
+	/** Aplica o range do calendário e leva a grade para o primeiro dia. */
+	async function applyTimeRange(start: string, end: string) {
+		const range = clampRange(start, end);
+		timeRangeStart = range.start;
+		timeRangeDays = range.days;
+		timeCalendarOpen = false;
+		timeUserAdjusted = true;
+		await tick();
+		timeLayout();
+		scrollToDay(0);
 	}
 
 	function selectTimeCategory(categoryId: string) {
@@ -2416,7 +2507,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		if (timePaintSeen.has(key)) return;
 		timePaintSeen.add(key);
 		timePaintLastCell = [day, slot];
-		const date = dateOffset(timeWeekStart, day);
+		const date = addDays(timeRangeStart, day);
 		const time = slotToTime(slot);
 		const existing = findTimeBlock(date, time);
 		const sound = snapshot.preferences.soundEnabled;
@@ -2460,7 +2551,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		timePaintSnapshot = JSON.stringify(snapshot);
 		timePaintSeen = new Set();
 		timePaintCount = { add: 0, del: 0 };
-		const existing = findTimeBlock(dateOffset(timeWeekStart, cell.day), slotToTime(cell.slot));
+		const existing = findTimeBlock(addDays(timeRangeStart, cell.day), slotToTime(cell.slot));
 		timePaintMode = timeSelected === 'x' || existing?.categoryId === timeSelected ? 'del' : 'add';
 		vibrate(12);
 		playTone(500, 0.06, 'sine', 0.04, snapshot.preferences.soundEnabled);
@@ -2626,8 +2717,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		if (JSON.stringify(snapshot) === timePaintSnapshot) return;
 		const before = JSON.parse(timePaintSnapshot) as AtlasSnapshot;
 		const crossing = timeCategories.find((category) => {
-			const goal = category.weeklyGoalHours ?? 0;
-			if (!goal) return false;
+			const weeklyGoal = category.weeklyGoalHours ?? 0;
+			if (!weeklyGoal) return false;
+			const goal = (weeklyGoal * timeRangeDays) / 7;
 			return countSlotsIn(before, category.id) / 2 < goal && timeCategoryHours(category.id) >= goal;
 		});
 		const snapshotBefore = timePaintSnapshot;
@@ -3517,31 +3609,33 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 						<div class="tp-top">
 							<div><h1>Tempo</h1><small class="tp-info">{timeTotalsLabel}</small></div>
 							<div class="tp-top-actions">
+								<button class="tp-ic" aria-label="Período" title="Selecionar período" onclick={() => (timeCalendarOpen = true)}><CalendarDays size={18} /></button>
 								<button class="tp-ic" aria-label="Resumo" onclick={openTimeSummary}>Σ</button>
 							</div>
 						</div>
-						<div class="tp-wkb">
+						<div class="tp-wkb" bind:this={timeWeekBarsEl}>
 							{#each timeWeekBars as item, index}
-								<button class:td={index === timeTodayIndex} class:vis={index >= timeVisibleStart && index < timeVisibleStart + timeVisibleCount} onclick={() => scrollToDay(index)}>{item.label[0]}<b>{item.dayNumber}</b><span class="tp-bar"><i style={`width:${item.percent}%`}></i></span></button>
+								<button style={`width:${Math.max(36, timeColumnWidth - 4)}px`} class:td={index === timeTodayIndex} class:vis={index >= timeVisibleStart && index < timeVisibleStart + timeVisibleCount} onclick={() => scrollToDay(index)}>{item.label[0]}<b>{item.dayNumber}</b><span class="tp-bar"><i style={`width:${item.percent}%`}></i></span></button>
 							{/each}
 						</div>
 						<div class="tp-pal">
 							{#each timeCategories as category}
 								{@const hours = timeCategoryHours(category.id)}
-								<button class:on={timeSelected === category.id} class="tp-cat" style={`--cc:${category.color}`} onclick={() => selectTimeCategory(category.id)}><i></i>{category.name}{#if (category.weeklyGoalHours ?? 0) > 0}<small>{hmSlots(hours * 2)}/{category.weeklyGoalHours}h</small>{/if}</button>
+								{@const rangeGoal = ((category.weeklyGoalHours ?? 0) * timeRangeDays) / 7}
+								<button class:on={timeSelected === category.id} class="tp-cat" style={`--cc:${category.color}`} onclick={() => selectTimeCategory(category.id)}><i></i>{category.name}{#if rangeGoal > 0}<small>{hmSlots(hours * 2)}/{hmSlots(rangeGoal * 2)}</small>{/if}</button>
 							{/each}
 							<button class:on={timeSelected === 'x'} class="tp-cat" style="--cc:#828d7d" onclick={() => selectTimeCategory('x')}><i></i>Borracha</button>
 							<button class="tp-cat add" onclick={() => openTimeCategorySheet(null)}>+ Categoria</button>
 						</div>
 						<div class="tp-scroll" bind:this={timeScroll} onscroll={handleTimeScroll} style={`--tp-cw:${timeColumnWidth}px`}>
-							<div class="tp-head">
+							<div class="tp-head" style={`grid-template-columns:38px repeat(${timeRangeDays}, var(--tp-cw))`}>
 								<span class="tp-corner"></span>
 								{#each timeHeaderDays as header, index}<span class:td={index === timeTodayIndex} class="tp-h">{header.label}<b>{header.dayNumber}</b></span>{/each}
 							</div>
-							<div class="tp-grid" role="grid" tabindex="0" aria-label="Grade semanal de tempo" bind:this={timeGridEl} onpointerdown={beginTimePaint} oncontextmenu={(event) => event.preventDefault()} use:timeGestures>
+							<div class="tp-grid" role="grid" tabindex="0" aria-label="Grade de tempo" style={`grid-template-columns:38px repeat(${timeRangeDays}, var(--tp-cw))`} bind:this={timeGridEl} onpointerdown={beginTimePaint} oncontextmenu={(event) => event.preventDefault()} use:timeGestures>
 								{#each Array.from({ length: TIME_SLOT_COUNT }, (_, index) => index) as slot}
 									<span class="tp-rl">{slot % 2 === 0 ? `${String(TIME_SLOT_START_HOUR + slot / 2).padStart(2, '0')}:00` : ''}</span>
-									{#each Array.from({ length: 7 }, (_, index) => index) as day}
+									{#each Array.from({ length: timeRangeDays }, (_, index) => index) as day}
 										{@const cell = timeCellData(day, slot)}
 										{@const cellBlock = timeGridBlocks[day]?.[slot] ?? null}
 										{@const hasNotes = cellBlock ? timeBlockNotes.has(cellBlock) : false}
@@ -3605,18 +3699,14 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 				{/if}
 			{/each}
 			<button class="mi hr" style="--i:3" onclick={() => { closeShellMenus(); modal = 'pause'; }}><Flame size={22} />Pausa</button>
-			<button class="mi" style="--i:4" onclick={() => { closeShellMenus(); openSettings(); }}><Settings2 size={22} />Configurações</button>
+			{#if testModeActive}
+				<button class="mi warn" style="--i:4" onclick={() => { closeShellMenus(); void toggleTestMode(false); }}><FlaskConical size={22} />Sair do modo de teste</button>
+			{/if}
+			<button class="mi" style={`--i:${testModeActive ? 5 : 4}`} onclick={() => { closeShellMenus(); openSettings(); }}><Settings2 size={22} />Configurações</button>
 		</div>
 
 		<div id="ov" class:on={quickMenuOpen || moreMenuOpen} role="presentation" onclick={closeShellMenus}></div>
 	</div>
-
-	{#if testModeActive}
-		<div class="test-mode-banner" role="status">
-			<span><FlaskConical size={15} /> Modo de teste</span>
-			<button type="button" onclick={() => toggleTestMode(false)}>Desativar</button>
-		</div>
-	{/if}
 
 	{#if plannerNotesOpen}
 		<PlannerNotesSheet
@@ -3785,7 +3875,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	{/if}
 
 	{#if financeEntry.open}
-		<div class="fin-overlay" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) financeEntry = { ...financeEntry, open: false }; }}>
+		<div class="fin-overlay" role="presentation" onpointerdown={onFinOverlayPointerDown} onclick={(event) => onFinOverlayClick(event, () => (financeEntry = { ...financeEntry, open: false }))}>
 			<div class="fin-sheet" role="dialog" aria-modal="true" aria-label="Novo lançamento">
 				<div class="fin-grip"></div>
 				<div class="fin-seg"><button class:on={financeEntry.type === 'expense'} onclick={() => setFinanceEntryType('expense')}>Despesa</button><button class:on={financeEntry.type === 'income'} onclick={() => setFinanceEntryType('income')}>Receita</button></div>
@@ -3799,7 +3889,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	{/if}
 
 	{#if financeCategoryForm.open}
-		<div class="fin-overlay" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) financeCategoryForm = { ...financeCategoryForm, open: false }; }}>
+		<div class="fin-overlay" role="presentation" onpointerdown={onFinOverlayPointerDown} onclick={(event) => onFinOverlayClick(event, () => (financeCategoryForm = { ...financeCategoryForm, open: false }))}>
 			<div class="fin-sheet" role="dialog" aria-modal="true" aria-label={financeCategoryForm.id ? 'Editar categoria' : 'Nova categoria'}>
 				<div class="fin-grip"></div>
 				{#if !financeCategoryForm.id}
@@ -3831,7 +3921,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	{/if}
 
 	{#if financeGoalSheet.open}
-		<div class="fin-overlay" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) financeGoalSheet = { ...financeGoalSheet, open: false }; }}>
+		<div class="fin-overlay" role="presentation" onpointerdown={onFinOverlayPointerDown} onclick={(event) => onFinOverlayClick(event, () => (financeGoalSheet = { ...financeGoalSheet, open: false }))}>
 			<div class="fin-sheet" role="dialog" aria-modal="true" aria-label="Meta de economia">
 				<div class="fin-grip"></div>
 				<div class="fin-amt">{money(financeGoalSheet.amountMinor, currency())}</div>
@@ -3852,6 +3942,15 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		</div>
 	{/if}
 
+	{#if timeCalendarOpen}
+		<TimeRangeSheet
+			start={timeRangeStart}
+			end={timeRangeEnd}
+			onapply={applyTimeRange}
+			onclose={() => (timeCalendarOpen = false)}
+		/>
+	{/if}
+
 	{#if timeCategorySheet.open}
 		<div class="tp-overlay" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) timeCategorySheet = { ...timeCategorySheet, open: false }; }}>
 			<div class="tp-sheet" role="dialog" aria-modal="true" aria-label={timeCategorySheet.id ? 'Editar categoria' : 'Nova categoria'}>
@@ -3868,15 +3967,15 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	{#if timeSummaryOpen}
 		<div class="tp-overlay" role="presentation" onclick={(event) => { if (event.target === event.currentTarget) timeSummaryOpen = false; }}>
-			<div class="tp-sheet" role="dialog" aria-modal="true" aria-label="Resumo da semana">
+			<div class="tp-sheet" role="dialog" aria-modal="true" aria-label="Resumo do período">
 				<div class="tp-grip"></div>
-				<div class="tp-sr" style="border:0"><div><b>Semana</b><small>{timeTotalsLabel}</small></div></div>
+				<div class="tp-sr" style="border:0"><div><b>Período</b><small>{timeTotalsLabel}</small></div></div>
 				{#each timeCategories as category}
 					{@const categoryHours = timeCategoryHours(category.id)}
-					{@const categoryGoal = category.weeklyGoalHours ?? 0}
+					{@const categoryGoal = ((category.weeklyGoalHours ?? 0) * timeRangeDays) / 7}
 					<div class="tp-sr" style={`--cc:${category.color}`}>
-						<div><span>{category.name}</span><small>{hmSlots(categoryHours * 2)}{categoryGoal ? ` de ${categoryGoal}h` : ''}</small></div>
-						<div class="tp-sbar"><i style={`width:${Math.min(100, categoryGoal ? (categoryHours / categoryGoal) * 100 : (categoryHours / (7 * TIME_SLOT_COUNT * 0.5)) * 400)}%`}></i></div>
+						<div><span>{category.name}</span><small>{hmSlots(categoryHours * 2)}{categoryGoal ? ` de ${hmSlots(categoryGoal * 2)}` : ''}</small></div>
+						<div class="tp-sbar"><i style={`width:${Math.min(100, categoryGoal ? (categoryHours / categoryGoal) * 100 : (categoryHours / (timeRangeDays * TIME_SLOT_COUNT * 0.5)) * 400)}%`}></i></div>
 					</div>
 				{/each}
 				<button class="tp-btn" onclick={() => (timeSummaryOpen = false)}>Fechar</button>

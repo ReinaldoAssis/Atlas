@@ -49,15 +49,25 @@ export function fileNameFromPath(path: string): string {
 	return path.split(/[/\\]/).pop() ?? path;
 }
 
+export interface SaveFilter {
+	name: string;
+	extensions: string[];
+}
+
+const BACKUP_FILTERS: SaveFilter[] = [{ name: 'Backup do Atlas', extensions: ['zip', 'json'] }];
+
 /** Salva os bytes num arquivo escolhido pelo usuário. */
-export async function saveBytes(bytes: Uint8Array, fileName: string): Promise<SaveResult> {
+export async function saveBytes(
+	bytes: Uint8Array,
+	fileName: string,
+	filters: SaveFilter[] = BACKUP_FILTERS
+): Promise<SaveResult> {
 	if (!isTauriApp()) {
 		downloadInBrowser(bytes, fileName);
 		return 'saved';
 	}
 	const dialog = await import('@tauri-apps/plugin-dialog');
 	const fs = await import('@tauri-apps/plugin-fs');
-	const filters = [{ name: 'Backup do Atlas', extensions: ['zip', 'json'] }];
 
 	if (isIOSWebView()) {
 		await fs.writeFile(fileName, bytes, { baseDir: fs.BaseDirectory.Document });
