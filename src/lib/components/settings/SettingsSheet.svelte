@@ -184,14 +184,6 @@
 						<option value="EUR">EUR · Euro</option>
 					</select>
 				</div>
-				<div class="row">
-					<span class="lead"><FlaskConical size={17} /></span>
-					<span class="text">
-						<strong>{m.settings_test_mode_title()}</strong>
-						<small>{m.settings_test_mode_hint()}</small>
-					</span>
-					<Toggle label={m.settings_test_mode_title()} checked={testMode} onchange={ontestmode} />
-				</div>
 			</div>
 		</section>
 
@@ -270,49 +262,57 @@
 			</section>
 		{/if}
 
-		{#if syncAvailable}
-			<section>
-				<details class="advanced">
-					<summary>{m.settings_section_advanced()}</summary>
-					<div class="tile">
+		<section>
+			<details class="advanced">
+				<summary>{m.settings_section_advanced()}</summary>
+				<div class="tile">
 					<div class="row">
-						<span class="lead"><Timer size={17} /></span>
+						<span class="lead"><FlaskConical size={17} /></span>
 						<span class="text">
-							<strong>{m.sync_auto_title()}</strong>
-							<small>{m.sync_auto_hint()}</small>
+							<strong>{m.settings_test_mode_title()}</strong>
+							<small>{m.settings_test_mode_hint()}</small>
 						</span>
-						<Toggle
-							label={m.sync_auto_title()}
-							checked={Boolean(sync?.autoSync)}
-							disabled={syncBusy}
-							onchange={onsyncauto}
-						/>
+						<Toggle label={m.settings_test_mode_title()} checked={testMode} onchange={ontestmode} />
 					</div>
-					{#if sync?.autoSync}
+					{#if syncAvailable}
 						<div class="row">
-							<span class="lead"><RefreshCw size={17} /></span>
+							<span class="lead"><Timer size={17} /></span>
 							<span class="text">
-								<strong>{m.sync_auto_interval()}</strong>
-								<small>{m.sync_auto_interval_hint()}</small>
+								<strong>{m.sync_auto_title()}</strong>
+								<small>{m.sync_auto_hint()}</small>
 							</span>
-							<input
-								class="select interval"
-								type="number"
-								min="1"
-								max="300"
-								step="1"
-								inputmode="numeric"
-								aria-label={m.sync_auto_interval()}
-								value={sync?.intervalSecs ?? 2}
+							<Toggle
+								label={m.sync_auto_title()}
+								checked={Boolean(sync?.autoSync)}
 								disabled={syncBusy}
-								onchange={handleInterval}
+								onchange={onsyncauto}
 							/>
 						</div>
+						{#if sync?.autoSync}
+							<div class="row">
+								<span class="lead"><RefreshCw size={17} /></span>
+								<span class="text">
+									<strong>{m.sync_auto_interval()}</strong>
+									<small>{m.sync_auto_interval_hint()}</small>
+								</span>
+								<input
+									class="select interval"
+									type="number"
+									min="1"
+									max="300"
+									step="1"
+									inputmode="numeric"
+									aria-label={m.sync_auto_interval()}
+									value={sync?.intervalSecs ?? 2}
+									disabled={syncBusy}
+									onchange={handleInterval}
+								/>
+							</div>
+						{/if}
 					{/if}
-					</div>
-				</details>
-			</section>
-		{/if}
+				</div>
+			</details>
+		</section>
 
 		<section>
 			<h3>{m.settings_backup_title()}</h3>

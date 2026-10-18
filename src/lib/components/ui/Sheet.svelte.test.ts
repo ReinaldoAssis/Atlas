@@ -57,4 +57,28 @@ describe('Sheet', () => {
 
 		expect(document.activeElement).toBe(close);
 	});
+
+	it('dispara onpullup ao arrastar a alça para cima', async () => {
+		const onpullup = vi.fn();
+		const { container } = render(Sheet, {
+			props: { title: 'Nota', closeLabel: 'Fechar', onclose: vi.fn(), onpullup }
+		});
+		const grip = container.querySelector('.grip') as HTMLElement;
+		await fireEvent.touchStart(grip, { touches: [{ clientY: 300 }] });
+		await fireEvent.touchMove(grip, { touches: [{ clientY: 240 }] });
+		await fireEvent.touchEnd(grip, { changedTouches: [{ clientY: 240 }] });
+		expect(onpullup).toHaveBeenCalledTimes(1);
+	});
+
+	it('não dispara onpullup em arrasto curto', async () => {
+		const onpullup = vi.fn();
+		const { container } = render(Sheet, {
+			props: { title: 'Nota', closeLabel: 'Fechar', onclose: vi.fn(), onpullup }
+		});
+		const grip = container.querySelector('.grip') as HTMLElement;
+		await fireEvent.touchStart(grip, { touches: [{ clientY: 300 }] });
+		await fireEvent.touchMove(grip, { touches: [{ clientY: 280 }] });
+		await fireEvent.touchEnd(grip, { changedTouches: [{ clientY: 280 }] });
+		expect(onpullup).not.toHaveBeenCalled();
+	});
 });

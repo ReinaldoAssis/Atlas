@@ -468,18 +468,29 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let timePaintCount = { add: 0, del: 0 };
 	let timePaintSnapshot = '';
 	let timePaintLastCell: [number, number] | null = null;
-	let timePaintPending: { day: number; slot: number } | null = null;
-	let timeLongPressTimer: ReturnType<typeof setTimeout> | null = null;
-	let timeLongPressSuppress = false;
-	let timePaintStart: [number, number] = [0, 0];
+	let timeTouch: {
+		x: number;
+		y: number;
+		cell: { day: number; slot: number };
+		armed: boolean;
+		painting: boolean;
+		navigating: boolean;
+	} | null = null;
+	let timeTouchArmTimer: ReturnType<typeof setTimeout> | undefined;
+	let timeTouchDialogTimer: ReturnType<typeof setTimeout> | undefined;
 	let timeCategorySheet = $state<{ open: boolean; id: string | null; name: string; color: string; goalHours: number }>({ open: false, id: null, name: '', color: '#9cc8ff', goalHours: 0 });
 	let timeSummaryOpen = $state(false);
 	let timeScrollReady = false;
 	let pauseForm = $state({ until: dateOffset(localDate(), 7) });
 	onMount(() => {
 		let interval: ReturnType<typeof setInterval> | undefined;
-		const onPointerMove = (event: PointerEvent) => continueTimePaint(event);
-		const onPointerUp = (event: PointerEvent) => void finishTimePaint(event);
+		const onPointerMove = (event: PointerEvent) => {
+			if (event.pointerType !== 'touch') continueTimePaint(event);
+		};
+		const onPointerUp = (event: PointerEvent) => {
+			if (event.pointerType === 'touch') return;
+			void finishTimePaint();
+		};
 		const onClickFeedback = (event: MouseEvent) => {
 			const button = (event.target as HTMLElement | null)?.closest('button');
 			if (!button || button.closest('.graph-view') || button.closest('.gv-sheet') || button.closest('.nt-prototype') || button.closest('.nt-ed') || button.closest('.nt-sh') || button.matches('.tp-c, .tp-cat')) return;
@@ -1184,6 +1195,22 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	function setFinanceLimit(minor: number) {
 		financeCategoryForm = { ...financeCategoryForm, limitMinor: minor };
 		playTone(520, 0.06, 'sine', 0.05, snapshot?.preferences.soundEnabled ?? true);
+	}
+
+	function moneyInput(minor: number): string {
+		return (minor / 100).toFixed(2).replace('.', ',');
+	}
+
+	function handleFinanceLimitInput(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const text = input.value.replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.');
+		const reais = Number(text);
+		if (!Number.isFinite(reais) || reais < 0) {
+			input.value = moneyInput(financeCategoryForm.limitMinor);
+			return;
+		}
+		setFinanceLimit(Math.round(reais * 100));
+		input.value = moneyInput(Math.round(reais * 100));
 	}
 
 	async function createFinanceCategory() {
@@ -2417,10 +2444,14 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		}
 	}
 
-	function timeCellFromEvent(event: PointerEvent): { day: number; slot: number } | null {
-		const element = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-tp-day]');
+	function timeCellAt(x: number, y: number): { day: number; slot: number } | null {
+		const element = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-tp-day]');
 		if (!element || element.dataset.tpSlot === undefined) return null;
 		return { day: Number(element.dataset.tpDay), slot: Number(element.dataset.tpSlot) };
+	}
+
+	function timeCellFromEvent(event: PointerEvent): { day: number; slot: number } | null {
+		return timeCellAt(event.clientX, event.clientY);
 	}
 
 	function startTimePaint(cell: { day: number; slot: number }) {
@@ -2463,46 +2494,121 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 6);
 	}
 
-	function beginTimePaint(event: PointerEvent) {
-		if (event.button !== 0 || !snapshot) return;
-		const cell = timeCellFromEvent(event);
+	function clearTimeTouchTimers() {
+		if (timeTouchArmTimer) clearTimeout(timeTouchArmTimer);
+		if (timeTouchDialogTimer) clearTimeout(timeTouchDialogTimer);
+		timeTouchArmTimer = undefined;
+		timeTouchDialogTimer = undefined;
+	}
+
+	/**
+	 * Toque no planejador (mobile): qualquer arrasto antes de 400 ms rola a
+	 * grade; segurar 400 ms arma a pintura (o movimento seguinte pinta); toque
+	 * curto pinta uma célula; 1 s parado abre notas/categoria.
+	 */
+	function beginTimeTouch(event: TouchEvent) {
+		if (!snapshot || event.touches.length !== 1) return;
+		const touch = event.touches[0];
+		const cell = timeCellAt(touch.clientX, touch.clientY);
 		if (!cell) return;
-		timePaintStart = [event.clientX, event.clientY];
+		clearTimeTouchTimers();
 		cancelAutoDwell();
-		timeLongPressSuppress = false;
-		clearTimeout(timeLongPressTimer ?? undefined);
-		timeLongPressTimer = null;
-		if (event.pointerType === 'mouse') {
-			startTimePaint(cell);
+		timeTouch = { x: touch.clientX, y: touch.clientY, cell, armed: false, painting: false, navigating: false };
+		timeTouchArmTimer = setTimeout(() => {
+			if (!timeTouch || timeTouch.navigating || timeTouch.painting) return;
+			timeTouch.armed = true;
+			vibrate(8);
+		}, 400);
+		timeTouchDialogTimer = setTimeout(() => {
+			if (!timeTouch || timeTouch.navigating || timeTouch.painting) return;
+			const current = timeTouch;
+			timeTouch = null;
+			clearTimeTouchTimers();
+			openPlannerBlockDialog(current.cell.day, current.cell.slot);
+		}, 1000);
+	}
+
+	function moveTimeTouch(event: TouchEvent) {
+		if (!timeTouch || event.touches.length !== 1) return;
+		const touch = event.touches[0];
+		const distance = Math.hypot(touch.clientX - timeTouch.x, touch.clientY - timeTouch.y);
+		if (timeTouch.painting) {
+			if (event.cancelable) event.preventDefault();
+			const cell = timeCellAt(touch.clientX, touch.clientY);
+			if (cell) applyTimePaint(cell.day, cell.slot);
 			return;
 		}
-		// Mobile: pressiona e, se não mover, abre o dialog; mover pinta.
-		timePaintPending = cell;
-		timeLongPressTimer = setTimeout(() => {
-			timeLongPressTimer = null;
-			if (!timePaintPending) return;
-			const pending = timePaintPending;
-			timePaintPending = null;
-			timeLongPressSuppress = true;
-			openPlannerBlockDialog(pending.day, pending.slot);
-		}, 460);
+		if (timeTouch.navigating) return;
+		if (timeTouch.armed && distance > 8) {
+			timeTouch.painting = true;
+			if (timeTouchDialogTimer) clearTimeout(timeTouchDialogTimer);
+			timeTouchDialogTimer = undefined;
+			startTimePaint(timeTouch.cell);
+			if (event.cancelable) event.preventDefault();
+			const cell = timeCellAt(touch.clientX, touch.clientY);
+			if (cell) applyTimePaint(cell.day, cell.slot);
+			return;
+		}
+		if (!timeTouch.armed && distance > 8) {
+			// Antes de armar, o arrasto é navegação nativa.
+			timeTouch.navigating = true;
+			clearTimeTouchTimers();
+		}
+	}
+
+	function endTimeTouch(event: TouchEvent) {
+		clearTimeTouchTimers();
+		const current = timeTouch;
+		timeTouch = null;
+		if (!current) return;
+		if (current.painting) {
+			void finishTimePaint();
+			return;
+		}
+		if (current.navigating) return;
+		// Toque curto (ou segurar sem mover): pinta uma célula.
+		startTimePaint(current.cell);
+		void finishTimePaint();
+	}
+
+	function cancelTimeTouch() {
+		clearTimeTouchTimers();
+		const current = timeTouch;
+		timeTouch = null;
+		if (current?.painting) void finishTimePaint();
+	}
+
+	/** Listeners de toque no grid, não-passivos para poder segurar+arrastar. */
+	function timeGestures(node: HTMLElement) {
+		const start = (event: TouchEvent) => beginTimeTouch(event);
+		const move = (event: TouchEvent) => moveTimeTouch(event);
+		const end = (event: TouchEvent) => endTimeTouch(event);
+		const cancel = () => cancelTimeTouch();
+		node.addEventListener('touchstart', start, { passive: true });
+		node.addEventListener('touchmove', move, { passive: false });
+		node.addEventListener('touchend', end);
+		node.addEventListener('touchcancel', cancel);
+		return {
+			destroy() {
+				node.removeEventListener('touchstart', start);
+				node.removeEventListener('touchmove', move);
+				node.removeEventListener('touchend', end);
+				node.removeEventListener('touchcancel', cancel);
+			}
+		};
+	}
+
+	function beginTimePaint(event: PointerEvent) {
+		if (event.button !== 0 || !snapshot) return;
+		if (event.pointerType !== 'mouse' && event.pointerType !== 'pen') return;
+		const cell = timeCellFromEvent(event);
+		if (!cell) return;
+		cancelAutoDwell();
+		startTimePaint(cell);
 	}
 
 	function continueTimePaint(event: PointerEvent) {
-		if (timeLongPressSuppress) return;
-		if (timePaintPending) {
-			if (Math.hypot(event.clientX - timePaintStart[0], event.clientY - timePaintStart[1]) > 8) {
-				clearTimeout(timeLongPressTimer ?? undefined);
-				timeLongPressTimer = null;
-				const pending = timePaintPending;
-				timePaintPending = null;
-				// Pressionar + mover começa a pintar na célula inicial.
-				startTimePaint(pending);
-				const cell = timeCellFromEvent(event);
-				if (cell) applyTimePaint(cell.day, cell.slot);
-			}
-			return;
-		}
+		if (event.pointerType !== 'mouse' && event.pointerType !== 'pen') return;
 		if (!timePainting) return;
 		const cell = timeCellFromEvent(event);
 		if (cell) applyTimePaint(cell.day, cell.slot);
@@ -2513,22 +2619,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		void saveSnapshot(snapshot);
 	}
 
-	async function finishTimePaint(event?: PointerEvent) {
-		if (timeLongPressTimer) {
-			clearTimeout(timeLongPressTimer);
-			timeLongPressTimer = null;
-		}
-		if (timeLongPressSuppress) {
-			// Long press já abriu o dialog; o pointerup não pode pintar.
-			timeLongPressSuppress = false;
-			return;
-		}
-		if (timePaintPending) {
-			const pending = timePaintPending;
-			timePaintPending = null;
-			// Toque curto sem movimento pinta uma célula.
-			if (!event || event.type === 'pointerup') startTimePaint(pending);
-		}
+	async function finishTimePaint() {
 		if (!timePainting || !snapshot) return;
 		timePainting = false;
 		timePaintSeen = new Set();
@@ -3447,7 +3538,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 								<span class="tp-corner"></span>
 								{#each timeHeaderDays as header, index}<span class:td={index === timeTodayIndex} class="tp-h">{header.label}<b>{header.dayNumber}</b></span>{/each}
 							</div>
-							<div class="tp-grid" role="grid" tabindex="0" aria-label="Grade semanal de tempo" bind:this={timeGridEl} onpointerdown={beginTimePaint} oncontextmenu={(event) => event.preventDefault()}>
+							<div class="tp-grid" role="grid" tabindex="0" aria-label="Grade semanal de tempo" bind:this={timeGridEl} onpointerdown={beginTimePaint} oncontextmenu={(event) => event.preventDefault()} use:timeGestures>
 								{#each Array.from({ length: TIME_SLOT_COUNT }, (_, index) => index) as slot}
 									<span class="tp-rl">{slot % 2 === 0 ? `${String(TIME_SLOT_START_HOUR + slot / 2).padStart(2, '0')}:00` : ''}</span>
 									{#each Array.from({ length: 7 }, (_, index) => index) as day}
@@ -3531,16 +3622,20 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		<PlannerNotesSheet
 			items={plannerNotesItems}
 			onopen={openPlannerNote}
-			onopenfull={(note) => {
-				closePlannerNotes();
-				openNoteFromPlanner(note.id);
-			}}
 			onclose={closePlannerNotes}
 		/>
 	{/if}
 
 	{#if plannerNoteOpen}
-		<PlannerNoteSheet note={plannerNoteOpen} onclose={closePlannerNote} />
+		<PlannerNoteSheet
+			note={plannerNoteOpen}
+			onopenfull={(note) => {
+				closePlannerNote();
+				closePlannerNotes();
+				openNoteFromPlanner(note.id);
+			}}
+			onclose={closePlannerNote}
+		/>
 	{/if}
 
 	{#if habitSheet}
@@ -3713,8 +3808,21 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 				<input class="fin-inp" placeholder="Nome da categoria" maxlength="20" bind:value={financeCategoryForm.name} />
 				<div class="fin-sw">{#each FINANCE_COLORS as color}<button class:on={financeCategoryForm.color === color} style={`--cc:${color}`} aria-label="Cor" onclick={() => (financeCategoryForm = { ...financeCategoryForm, color })}></button>{/each}</div>
 				{#if financeCategoryForm.type === 'expense'}
-					<div class="fin-lim">{money(financeCategoryForm.limitMinor, currency())} / mês</div>
-					<input type="range" min="0" max="3000" step="50" aria-label="Limite mensal" value={financeCategoryForm.limitMinor / 100} style={`--f:${financeCategoryForm.limitMinor / 100 / 30}%`} oninput={(event) => setFinanceLimit(Number(event.currentTarget.value) * 100)} />
+					<div class="fin-lim">
+						<span>R$</span>
+						<input
+							class="fin-lim-input"
+							inputmode="decimal"
+							aria-label="Limite mensal"
+							value={moneyInput(financeCategoryForm.limitMinor)}
+							onchange={handleFinanceLimitInput}
+							onkeydown={(event) => {
+								if (event.key === 'Enter') event.currentTarget.blur();
+							}}
+						/>
+						<span>/ mês</span>
+					</div>
+					<input type="range" min="0" max={Math.max(3000, financeCategoryForm.limitMinor / 100)} step="50" aria-label="Limite mensal (slider)" value={financeCategoryForm.limitMinor / 100} style={`--f:${financeCategoryForm.limitMinor / 100 / Math.max(3000, financeCategoryForm.limitMinor / 100) * 100}%`} oninput={(event) => setFinanceLimit(Number(event.currentTarget.value) * 100)} />
 					<div class="fin-chips" style="justify-content:center;margin-top:12px">{#each [200, 500, 1000, 2000] as value}<button class="fin-chip" onclick={() => setFinanceLimit(value * 100)}>{money(value * 100, currency())}</button>{/each}</div>
 				{/if}
 				<button class="fin-btn" onclick={createFinanceCategory}>{financeCategoryForm.id ? 'Salvar' : 'Criar categoria'}</button>

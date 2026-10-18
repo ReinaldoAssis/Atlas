@@ -153,6 +153,7 @@ describe('SettingsSheet', () => {
 
 	it('segue o estado de modo de teste vindo do pai', async () => {
 		const props = setup({ testMode: true });
+		await fireEvent.click(screen.getByText('Avançado'));
 		const toggle = screen.getByRole('switch', { name: 'Modo de teste' });
 		expect(toggle.getAttribute('aria-checked')).toBe('true');
 

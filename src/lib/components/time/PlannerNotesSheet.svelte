@@ -6,80 +6,22 @@
 	let {
 		items,
 		onopen,
-		onopenfull,
 		onclose
 	}: {
 		items: { note: Note; label: string; color: string }[];
 		onopen: (note: Note) => void;
-		onopenfull: (note: Note) => void;
 		onclose: () => void;
 	} = $props();
 
 	function excerpt(body: string): string {
 		return body.replace(/\s+/g, ' ').trim().slice(0, 90);
 	}
-
-	/**
-	 * Swipe para cima na linha abre a nota inteira na aba Notas. O `touchmove`
-	 * só cancela o scroll depois que o gesto é claramente vertical para cima,
-	 * senão a lista continuaria rolando por baixo do dedo.
-	 */
-	const SWIPE_START = 12;
-	const SWIPE_OPEN = 48;
-	let swipe: { x: number; y: number; note: Note; armed: boolean } | null = null;
-	let suppressClick = false;
-	let suppressTimer: ReturnType<typeof setTimeout> | undefined;
-
-	function touchStart(event: TouchEvent, note: Note) {
-		if (event.touches.length !== 1) {
-			swipe = null;
-			return;
-		}
-		const touch = event.touches[0];
-		swipe = { x: touch.clientX, y: touch.clientY, note, armed: false };
-		suppressClick = false;
-	}
-
-	function touchMove(event: TouchEvent) {
-		if (!swipe || event.touches.length !== 1) return;
-		const touch = event.touches[0];
-		const dx = touch.clientX - swipe.x;
-		const dy = touch.clientY - swipe.y;
-		if (!swipe.armed && dy < -SWIPE_START && Math.abs(dy) > Math.abs(dx) * 1.2) {
-			swipe.armed = true;
-		}
-		if (swipe.armed && event.cancelable) event.preventDefault();
-	}
-
-	function touchEnd(event: TouchEvent) {
-		const current = swipe;
-		swipe = null;
-		if (!current?.armed) return;
-		const touch = event.changedTouches[0];
-		if (!touch || touch.clientY - current.y > -SWIPE_OPEN) return;
-		// O touchend também gera click na linha; o preview não pode abrir.
-		suppressClick = true;
-		clearTimeout(suppressTimer);
-		suppressTimer = setTimeout(() => (suppressClick = false), 600);
-		onopenfull(current.note);
-	}
 </script>
 
 <Sheet title="Notas do planejador" closeLabel="Fechar" {onclose}>
 	<div class="pn-list">
 		{#each items as item, index (item.note.id + index)}
-			<button
-				type="button"
-				class="pn-row"
-				style={`--cc:${item.color}`}
-				onclick={() => {
-					if (!suppressClick) onopen(item.note);
-				}}
-				ontouchstart={(event) => touchStart(event, item.note)}
-				ontouchmove={touchMove}
-				ontouchend={touchEnd}
-				ontouchcancel={() => (swipe = null)}
-			>
+			<button type="button" class="pn-row" style={`--cc:${item.color}`} onclick={() => onopen(item.note)}>
 				<i aria-hidden="true"></i>
 				<span class="pn-main">
 					<b>{item.note.title || 'Sem título'}</b>

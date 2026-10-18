@@ -14,13 +14,59 @@
 		title,
 		closeLabel,
 		onclose,
+		onpullup,
 		children
 	}: {
 		title: string;
 		closeLabel: string;
 		onclose: () => void;
+		/** Arrastar a alça para cima (mobile) dispara este callback. */
+		onpullup?: () => void;
 		children?: Snippet;
 	} = $props();
+
+	/** Gesto da alça: arma após 12 px e abre após 48 px para cima. */
+	function pullUp(node: HTMLElement, callback?: () => void) {
+		let startY = 0;
+		let active = false;
+		let armed = false;
+		const down = (event: TouchEvent) => {
+			if (!callback || event.touches.length !== 1) return;
+			startY = event.touches[0].clientY;
+			active = true;
+			armed = false;
+		};
+		const move = (event: TouchEvent) => {
+			if (!active || !callback || event.touches.length !== 1) return;
+			const dy = event.touches[0].clientY - startY;
+			if (!armed && dy < -12) armed = true;
+			if (armed && event.cancelable) event.preventDefault();
+		};
+		const end = (event: TouchEvent) => {
+			if (!active || !callback) return;
+			const touch = event.changedTouches[0];
+			const dy = touch ? touch.clientY - startY : 0;
+			active = false;
+			if (armed && dy <= -48) callback();
+			armed = false;
+		};
+		const cancel = () => {
+			active = false;
+			armed = false;
+		};
+		node.addEventListener('touchstart', down, { passive: true });
+		node.addEventListener('touchmove', move, { passive: false });
+		node.addEventListener('touchend', end);
+		node.addEventListener('touchcancel', cancel);
+		return {
+			destroy() {
+				node.removeEventListener('touchstart', down);
+				node.removeEventListener('touchmove', move);
+				node.removeEventListener('touchend', end);
+				node.removeEventListener('touchcancel', cancel);
+			}
+		};
+	}
 
 	const uid = $props.id();
 	const titleId = `${uid}-title`;
@@ -83,7 +129,7 @@
 
 <div class="backdrop" role="presentation" onclick={onBackdrop}>
 	<div class="sheet" role="dialog" aria-modal="true" aria-labelledby={titleId} bind:this={panel} tabindex="-1">
-		<div class="grip" aria-hidden="true"></div>
+		<div class="grip" class:pull={Boolean(onpullup)} aria-hidden="true" use:pullUp={onpullup}></div>
 		<header class="head">
 			<h2 id={titleId}>{title}</h2>
 			<button type="button" class="close" aria-label={closeLabel} onclick={onclose}>
@@ -125,6 +171,22 @@
 		width: 40px;
 		height: 4px;
 		margin: 4px auto 12px;
+		border-radius: 2px;
+		background: var(--ln);
+	}
+	.grip.pull {
+		position: relative;
+		height: 20px;
+		margin: 0 auto 6px;
+		background: transparent;
+		touch-action: none;
+		cursor: grab;
+	}
+	.grip.pull::before {
+		content: '';
+		position: absolute;
+		inset: 8px 0 auto;
+		height: 4px;
 		border-radius: 2px;
 		background: var(--ln);
 	}
