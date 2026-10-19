@@ -10,6 +10,7 @@
 | [MVP.md](MVP.md) | Escopo acordado, regras de streak/Life Force, privacidade e backup. |
 | [DESIGN.md](DESIGN.md) | Guia visual e de interação; vence em caso de conflito com protótipos. |
 | [ROADMAP.md](ROADMAP.md) | Fatias entregues, estado atual e próximos ciclos. |
+| [CYCLE-S15.md](CYCLE-S15.md) | Alinhamento do ciclo S15: decisões, modelo, etapas e aceite. |
 | [IDEAS.md](IDEAS.md) | Ideias fora do ciclo, ainda não implementadas. |
 
 ## Desenvolvimento

@@ -362,6 +362,21 @@ Detalhes de estado e o que ficou pendente de verificação manual: git history (
 > limitações que dependem de device ficam em **`docs/SYNC.md`** e
 > **`docs/IOS-SIDELOAD.md`**.
 
+### Ciclo S15 — correções e polimento (E0 implementado; E1–E8 pendentes)
+
+Sessão de 18/10/2026 fechou 25 itens em seis frentes. É **um ciclo**, com PRs
+pequenos por frente e CI verde em cada um. Decisões, modelo de dados, etapas e
+aceite: **`docs/CYCLE-S15.md`**.
+
+| Frente | Conteúdo |
+|---|---|
+| **Tempo** | gestos de pintura/bolha, sem drawer de notas, morph para o editor, preview sem tag `tempo` e com quebras de linha |
+| **Notas** | nota "sumida" (pasta), último modo por nota, context menu, `/tempo`, export iOS |
+| **Hábitos/Trackers** | direção em contagem/duração, semanal conta no dia, streak em semanas, chama, tiles, primeiro dia da semana |
+| **Finanças** | limpar só no modo teste, excluir categoria, título 40, categoria meta, budget |
+| **Planejamento** | trackers como fonte, unidade semanal, glitch do drag |
+| **Sistema** | lixeira global (7 dias), pausa somente leitura, notificações iOS, updater no macOS |
+
 **Fora do ciclo** (escolhas do usuário): ícone novo (1024 sem alpha), assinatura Windows (Azure Trusted Signing), AltStore PAL/notarização, kit completo + migração dos overlays de lançamento/hábito, i18n em `en`, exportação em PDF nativa.
 
 **Estimativa (1 dev, 5–10 h/sem):** S1–S9 ≈ 30–45 dias-dev; S10 (sync) +15–20 dias-dev.
