@@ -535,12 +535,13 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .tp-c.on.st.en { border-radius: 8px; }
 /* Bloco com nota referenciando o horário (briefing do animador): linhas
    laterais em todas as células, topo só no início e base só no fim — assim
-   não aparece linha no meio do bloco — mais o ponto no início. */
+   não aparece linha no meio do bloco — mais o ponto no início. O traço é
+   escuro porque as categorias são claras; lime puro sumia no bloco lime. */
 .tp-c { position: relative; }
-.tp-c.nt { box-shadow: inset 1.5px 0 0 var(--lime), inset -1.5px 0 0 var(--lime); }
-.tp-c.nt.st { box-shadow: inset 1.5px 1.5px 0 var(--lime), inset -1.5px 0 0 var(--lime); }
-.tp-c.nt.en { box-shadow: inset 1.5px -1.5px 0 var(--lime), inset -1.5px 0 0 var(--lime); }
-.tp-c.nt.st.en { box-shadow: inset 1.5px 1.5px 0 var(--lime), inset -1.5px -1.5px 0 var(--lime); }
+.tp-c.nt { box-shadow: inset 2px 0 0 #141a0a, inset -2px 0 0 #141a0a; }
+.tp-c.nt.st { box-shadow: inset 2px 2px 0 #141a0a, inset -2px 0 0 #141a0a; }
+.tp-c.nt.en { box-shadow: inset 2px -2px 0 #141a0a, inset -2px 0 0 #141a0a; }
+.tp-c.nt.st.en { box-shadow: inset 2px 2px 0 #141a0a, inset -2px -2px 0 #141a0a; }
 .tp-c.nt.st::after {
 	content: '';
 	position: absolute;
@@ -549,8 +550,8 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 	width: 6px;
 	height: 6px;
 	border-radius: 50%;
-	background: var(--lime);
-	box-shadow: 0 0 6px var(--lime);
+	background: #141a0a;
+	box-shadow: 0 0 0 1.5px #ecefe6;
 }
 .tp-now { position: absolute; height: 2px; background: var(--lime); z-index: 2; pointer-events: none; box-shadow: 0 0 8px var(--lime); }
 .tp-now::before { content: ''; position: absolute; left: -4px; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--lime); }

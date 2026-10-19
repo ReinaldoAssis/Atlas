@@ -29,6 +29,8 @@ export interface BubbleOptions {
 	onRowClick?: (index: number, row: HTMLElement) => void;
 	/** Chamado quando a bolha abre (ex.: som/háptica de âncora). */
 	onEnter?: () => void;
+	/** Chamado quando um clique/toque fora fecha a bolha `sticky`. */
+	onDismiss?: () => void;
 }
 
 interface Placement {
@@ -81,6 +83,7 @@ export class TimeBubble {
 		if (!target) return;
 		if (this.el.contains(target) || this.anchor?.contains(target)) return;
 		this.hide();
+		this.options.onDismiss?.();
 	};
 
 	private onKeydown = (event: KeyboardEvent): void => {

@@ -193,9 +193,11 @@ desfaz — só ele apaga). **Qualquer arrasto navega.** Hold de 250 ms em célul
 célula **preenchida** não pinta e 650 ms abrem a bolha (com nota) ou a categoria
 (sem nota). Soltar depois do hold não pinta nem apaga. A bolha fixa
 (`TimeBubble` com `sticky`) não fecha no `pointerup` e só some com clique fora
-ou Esc. O editor é o `NoteEditor` montado por cima do Tempo, com morph por
-`clip-path` a partir da linha clicada; fechar volta ao planejador. O preview da
-bolha usa `notePreview` (remove `tempo`/`time`, mantém até 3 linhas).
+ou Esc; o toque que a fecha é consumido e não cria/apaga a célula. Bloco com
+nota ganha outline escuro de 2 px e um ponto no início. O editor é o
+`NoteEditor` montado por cima do Tempo, com morph por `clip-path` a partir da
+linha clicada; fechar volta ao planejador. O preview da bolha usa `notePreview`
+(remove `tempo`/`time`, mantém até 3 linhas).
 
 **Depende de:** E0 (para `lastMode` na nota). **Verificação pendente:** toque
 real no iPhone (timings, bolha e morph).

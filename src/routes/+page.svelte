@@ -177,6 +177,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	/** Bolha fixa do long press no mobile (não fecha ao soltar). */
 	let plannerPinBubble: TimeBubble | null = null;
 	let plannerPinCurrent: { note: Note; label: string; color: string }[] = [];
+	/** O toque que fecha a bolha fixa não pode virar pintura na célula. */
+	let plannerDismissTapUntil = 0;
 	/** Editor de nota em overlay, aberto a partir da bolha do Tempo. */
 	let noteOverlay = $state<Note | null>(null);
 	let noteOverlayOpen = $state(false);
@@ -2869,6 +2871,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			onRowClick: (index, row) => {
 				const item = plannerPinCurrent[index];
 				if (item) void openNoteFromPlanner(item.note.id, row.getBoundingClientRect());
+			},
+			onDismiss: () => {
+				plannerDismissTapUntil = Date.now() + 400;
 			}
 		});
 		plannerPinBubble = bubble;
@@ -3104,6 +3109,13 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		if (!cell) return;
 		clearTimeTouchTimers();
 		cancelAutoDwell();
+		if (Date.now() < plannerDismissTapUntil) {
+			// Este toque só fecha a bolha. Fica segurado para o `touchend`
+			// não cair no toque curto e criar/apagar a célula.
+			plannerDismissTapUntil = 0;
+			timeTouch = { x: touch.clientX, y: touch.clientY, cell, held: true, painting: false, navigating: false };
+			return;
+		}
 		timeTouch = { x: touch.clientX, y: touch.clientY, cell, held: false, painting: false, navigating: false };
 		timeTouchArmTimer = setTimeout(() => {
 			if (!timeTouch || timeTouch.navigating || timeTouch.painting) return;
@@ -3193,6 +3205,10 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	function beginTimePaint(event: PointerEvent) {
 		if (event.button !== 0 || !snapshot) return;
 		if (event.pointerType !== 'mouse' && event.pointerType !== 'pen') return;
+		if (Date.now() < plannerDismissTapUntil) {
+			plannerDismissTapUntil = 0;
+			return;
+		}
 		const cell = timeCellFromEvent(event);
 		if (!cell) return;
 		cancelAutoDwell();

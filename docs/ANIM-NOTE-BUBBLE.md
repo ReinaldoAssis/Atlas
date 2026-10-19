@@ -138,7 +138,10 @@ Framer Motion / Rive / After Effects e nos mandar o arquivo — a gente adapta o
 - Qualquer arrasto fora do modo pintar é navegação. Só o toque curto sem
   arrasto cria, substitui ou desfaz uma célula.
 - Ela **não fecha quando o dedo solta**: permanece até clique/toque fora, troca
-  de contexto ou fechamento explícito.
+  de contexto ou fechamento explícito. O toque que fecha **não** cria, substitui
+  nem apaga o bloco.
+- Bloco com nota tem outline escuro de 2 px e um ponto no início (o lime puro
+  sumia nos blocos de categoria lime).
 - Conteúdo: todas as notas do bloco (título + trecho), com rolagem quando
   necessário; a nota tocada abre o editor.
 - Transição para a nota: **morph** da linha/bolha para o editor (FLIP,
