@@ -24,9 +24,10 @@ function monthStart(today: string): string {
 	return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-01`;
 }
 
-function windowRange(edge: GraphEdge): Range {
+function windowRange(edge: GraphEdge, snapshot: AtlasSnapshot): Range {
 	const today = localDate();
-	if (edge.window === 'week') return { start: weekStartDate(today), end: today };
+	const firstDay = snapshot.preferences.firstDayOfWeek ?? 'mon';
+	if (edge.window === 'week') return { start: weekStartDate(today, firstDay), end: today };
 	if (edge.window === 'month') return { start: monthStart(today), end: today };
 	if (edge.window === 'fixed') return { start: edge.windowFrom ?? null, end: today };
 	return { start: null, end: today };
@@ -59,7 +60,7 @@ export function sourceProgress(edge: GraphEdge, snapshot: AtlasSnapshot): Source
 		case 'habitValue': {
 			const habit = snapshot.habits.find((item) => item.id === edge.refId);
 			if (!habit) return null;
-			const range = windowRange(edge);
+			const range = windowRange(edge, snapshot);
 			const value = snapshot.habitLogs
 				.filter((log) => log.habitId === habit.id && inRange(log.date, range))
 				.reduce((sum, log) => sum + log.value, 0);
@@ -68,21 +69,21 @@ export function sourceProgress(edge: GraphEdge, snapshot: AtlasSnapshot): Source
 		case 'habitStreak': {
 			const habit = snapshot.habits.find((item) => item.id === edge.refId);
 			if (!habit) return null;
-			const value = currentStreak(habit, snapshot.habitLogs, localDate(), pausePeriods(snapshot));
+			const value = currentStreak(habit, snapshot.habitLogs, localDate(), pausePeriods(snapshot), snapshot.preferences.firstDayOfWeek ?? 'mon');
 			return resultOf(value, edge.target);
 		}
 		case 'timeHours': {
 			const category = snapshot.categories.find((item) => item.id === edge.refId && item.module === 'time');
 			if (!category) return null;
 			const today = localDate();
-			const week = weekStartDate(today);
+			const week = weekStartDate(today, snapshot.preferences.firstDayOfWeek ?? 'mon');
 			const minutes = snapshot.timeBlocks
 				.filter((block) => block.categoryId === category.id && block.status !== 'cancelled' && block.startAt.slice(0, 10) >= week && block.startAt.slice(0, 10) <= today)
 				.reduce((sum, block) => sum + block.plannedMinutes, 0);
 			return resultOf(minutes / 60, edge.target);
 		}
 		case 'financeSavings': {
-			const range = windowRange(edge);
+			const range = windowRange(edge, snapshot);
 			const value = snapshot.transactions
 				.filter((item) => inRange(item.date, range))
 				.reduce((sum, item) => sum + (item.type === 'income' ? item.amountMinor : -item.amountMinor), 0);

@@ -1,6 +1,6 @@
 # Atlas — Ciclo S15: rodada de correções e polimento
 
-> **Estado:** alinhado em 18/10/2026 · **E0–E3 implementados; E4–E8 pendentes**.
+> **Estado:** alinhado em 18/10/2026 · **E0–E4 implementados; E5–E8 pendentes**.
 > Este documento é a fonte das decisões do ciclo. Se conflitar com
 > `ROADMAP.md`, vale este arquivo para o escopo do S15.
 >
@@ -215,7 +215,7 @@ capability; erros agora viram toast em vez de silêncio.
 **Depende de:** E0. **Verificação pendente:** export `.md` e `.zip` no iPhone
 físico (a permissão de Document é o conserto provável).
 
-### E4 — Hábitos/Trackers
+### E4 — Hábitos/Trackers ✅
 
 - Direção em contagem/duração (UI + `didMeetTarget` + streak + accent).
 - Semanal: `lastIncrementDate`, conta no dia, accent; streak em semanas.
@@ -225,7 +225,18 @@ físico (a permissão de Document é o conserto provável).
 - Ordem de criação estável e reatividade dos tiles.
 - Testes de streak, direção, semana e migração de chave.
 
-**Depende de:** E0.
+**Como ficou:** hábito de contagem/duração ganhou "Mais/Menos é melhor"
+(`didMeetTarget`, streak, barra e accent). O semanal guarda `incrementDates`
+(histórico) + `lastIncrementDate`, conta na meta do dia em que foi incrementado,
+ganha contorno de accent e mantém o streak em semanas. Tiles fora do dia ficam
+esmaecidos; sim/não mostra `–` e o semanal tem chip "semana". A semana começa
+em segunda por padrão e pode ser trocada em Configurações, remapeando o log da
+semana atual sem perder valor. A lista de hábitos ganhou chave por id
+(ordem de criação estável). A atualização de meta que fecha a meta do dia
+também dispara a celebração da chama.
+
+**Depende de:** E0. **Verificação pendente:** toque nos tiles e virada de
+semana no device.
 
 ### E5 — Finanças
 

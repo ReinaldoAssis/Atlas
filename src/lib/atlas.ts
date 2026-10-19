@@ -69,6 +69,8 @@ export interface HabitLog {
 	 * permite o hábito contar na meta do dia em que foi mexido.
 	 */
 	lastIncrementDate?: string;
+	/** Só em hábito semanal: dias em que houve incremento na semana. */
+	incrementDates?: string[];
 }
 
 /**
@@ -323,6 +325,16 @@ export function didMeetTarget(habit: Habit, value: number): boolean {
 	return value >= habit.target;
 }
 
+/** 0..1 para a barra do tile, respeitando "menos é melhor". */
+export function habitProgress(habit: Habit, value: number): number {
+	if (habit.metric === 'boolean') return didMeetTarget(habit, value) ? 1 : 0;
+	if (habit.target <= 0) return 0;
+	if (habit.targetDirection === 'down') {
+		return value <= habit.target ? 1 : Math.min(1, habit.target / Math.max(1, value));
+	}
+	return Math.min(1, value / habit.target);
+}
+
 /** Valor (0/1) tratado como positivo num sim/não. Default: `1`. */
 export function positiveValueOf(source: { positiveValue?: 0 | 1 } | null | undefined): 0 | 1 {
 	return source?.positiveValue === 0 ? 0 : 1;
@@ -380,6 +392,42 @@ export function currentStreak(
 		date = dateOffset(date, -1);
 	}
 	return streak;
+}
+
+/**
+ * Move o log da semana atual quando o primeiro dia da semana muda.
+ *
+ * Só há um log por (hábito semanal, semana). Se o novo início já tiver um log
+ * (troca de ida e volta), os dois são fundidos sem duplicar valor.
+ */
+export function remapWeeklyLogs(
+	logs: HabitLog[],
+	weeklyHabitIds: ReadonlySet<string>,
+	oldStart: string,
+	newStart: string
+): HabitLog[] {
+	if (oldStart === newStart) return logs;
+	const moved = logs.filter((log) => weeklyHabitIds.has(log.habitId) && log.date === oldStart);
+	if (!moved.length) return logs;
+	const rest = logs.filter((log) => !(weeklyHabitIds.has(log.habitId) && log.date === oldStart));
+	for (const log of moved) {
+		const target = rest.find((item) => item.habitId === log.habitId && item.date === newStart);
+		if (target) {
+			target.value = Math.max(target.value, log.value);
+			target.completed = target.completed || log.completed;
+			target.experienceAwarded = Boolean(target.experienceAwarded || log.experienceAwarded);
+			target.incrementDates = [...new Set([
+				...(target.incrementDates ?? []),
+				...(target.lastIncrementDate ? [target.lastIncrementDate] : []),
+				...(log.incrementDates ?? []),
+				...(log.lastIncrementDate ? [log.lastIncrementDate] : [])
+			])].sort();
+			target.lastIncrementDate = target.incrementDates.at(-1);
+		} else {
+			rest.push({ ...log, id: habitLogId(log.habitId, newStart), date: newStart });
+		}
+	}
+	return rest;
 }
 
 /**

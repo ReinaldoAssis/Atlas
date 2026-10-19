@@ -7,7 +7,7 @@
 		Wallet, X, type LucideIcon
 	} from '@lucide/svelte';
 	import {
-		HABIT_BOOLEAN_LABELS, booleanLabelOf, currentStreak, dateOffset, didMeetTarget, formatMinutes, habitLogId, id, localDate, money, nextBooleanLog, normalizeDailyGoal, positiveValueOf, weekStartDate, WEEK_MAX,
+		HABIT_BOOLEAN_LABELS, booleanLabelOf, currentStreak, dateOffset, didMeetTarget, formatMinutes, habitLogId, habitProgress, id, localDate, money, nextBooleanLog, normalizeDailyGoal, normalizeFirstDayOfWeek, positiveValueOf, remapWeeklyLogs, weekStartDate, WEEK_MAX,
 		TIME_SLOT_START_HOUR, TIME_SLOT_COUNT, TIME_SLOT_MINUTES,
 		experienceProgress, type AppPreferences, type AtlasSnapshot, type Category, type Habit, type HabitLog,
 		type NavigationKey, type TimeBlock, type Tracker, type TrackerEntry, type Transaction
@@ -305,12 +305,15 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const data = snapshot;
 		if (!data) return [];
 		const start = weekStart(today);
+		const labels = firstDayOfWeek(data) === 'sun'
+			? ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb']
+			: ['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom'];
 		return Array.from({ length: 7 }, (_, index) => {
 			const date = dateOffset(start, index);
 			const paused = isPausedOn(date, data);
 			const planned = paused ? [] : habitsForDate(data, date);
 			const done = planned.filter((habit) => habitDoneOn(data, habit, date)).length;
-			return { date, label: ['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom'][index], done, planned: planned.length, goal: paused ? 0 : Math.min(dailyGoalOf(data), planned.length), paused };
+			return { date, label: labels[index], done, planned: planned.length, goal: paused ? 0 : Math.min(dailyGoalOf(data), planned.length), paused };
 		});
 	});
 	let prototypeTodayHabits = $derived.by(() => (snapshot ? habitsForDate(snapshot, today) : []));
@@ -473,6 +476,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		target: '1',
 		scheduledDays: [1, 2, 3, 4, 5] as number[],
 		reminder: '',
+		targetDirection: 'up' as 'up' | 'down',
 		positiveLabel: HABIT_BOOLEAN_LABELS.positive,
 		negativeLabel: HABIT_BOOLEAN_LABELS.negative,
 		positiveValue: 1 as 0 | 1
@@ -927,8 +931,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function weekStart(date: string): string {
-		const day = new Date(`${date}T12:00:00`).getDay();
-		return dateOffset(date, -((day + 6) % 7));
+		return weekStartDate(date, firstDayOfWeek());
 	}
 
 	/** Índice do dia dentro do range atual (negativo/fora = não desenhar). */
@@ -963,6 +966,11 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		return Boolean(currentPause || previousPause);
 	}
 
+	/** Primeiro dia da semana configurado (default segunda). */
+	function firstDayOfWeek(data: AtlasSnapshot | null = snapshot) {
+		return normalizeFirstDayOfWeek(data?.preferences.firstDayOfWeek);
+	}
+
 	/** Hábitos que contam no dia: weekly sempre, os demais pelo dia da semana. */
 	function habitsForDate(data: AtlasSnapshot, date: string): Habit[] {
 		const weekday = new Date(`${date}T12:00:00`).getDay();
@@ -971,8 +979,14 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	/** Weekly fecha na semana (log no início dela); os outros fecham no dia. */
 	function habitDoneOn(data: AtlasSnapshot, habit: Habit, date: string): boolean {
-		const logDate = habit.metric === 'weekly' ? weekStartDate(date) : date;
-		const log = data.habitLogs.find((item) => item.habitId === habit.id && item.date === logDate);
+		if (habit.metric === 'weekly') {
+			const week = weekStartDate(date, firstDayOfWeek(data));
+			const log = data.habitLogs.find((item) => item.habitId === habit.id && item.date === week);
+			if (!log) return false;
+			// Sem `incrementDates` (logs antigos), usa o último dia incrementado.
+			return Boolean(log.incrementDates?.includes(date) || log.lastIncrementDate === date);
+		}
+		const log = data.habitLogs.find((item) => item.habitId === habit.id && item.date === date);
 		return Boolean(log && didMeetTarget(habit, log.value));
 	}
 
@@ -1027,8 +1041,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	function prototypeSheetMax(habit: Habit): number {
 		const values = snapshot?.habitLogs.filter((log) => log.habitId === habit.id).map((log) => log.value) ?? [];
-		// O maior valor já usado (meta ou lançamento) é o teto do slider.
-		return Math.max(habit.target, ...values, 1);
+		// "Menos é melhor" precisa aceitar o excesso para registrar o dia ruim.
+		const ceiling = habit.targetDirection === 'down' ? habit.target * 2 : habit.target;
+		return Math.max(ceiling, ...values, 1);
 	}
 
 	function prototypeSheetStep(habit: Habit): number {
@@ -1044,13 +1059,13 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function weeklyValue(habit: Habit): number {
-		const week = weekStartDate(today);
+		const week = weekStartDate(today, firstDayOfWeek());
 		return snapshot?.habitLogs.find((item) => item.habitId === habit.id && item.date === week)?.value ?? 0;
 	}
 
 	async function setWeeklyValue(habit: Habit, value: number) {
 		if (!snapshot) return;
-		const week = weekStartDate(today);
+		const week = weekStartDate(today, firstDayOfWeek());
 		const existing = snapshot.habitLogs.find((item) => item.habitId === habit.id && item.date === week);
 		const clamped = Math.max(0, Math.min(WEEK_MAX, value));
 		const tile = document.querySelector<HTMLElement>(`[data-habit-id="${habit.id}"]`);
@@ -1838,6 +1853,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					target: String(habit.target),
 					scheduledDays: [...habit.scheduledDays],
 					reminder: habit.reminder ?? '',
+					targetDirection: habit.targetDirection ?? 'up',
 					positiveLabel: habit.positiveLabel?.trim() || HABIT_BOOLEAN_LABELS.positive,
 					negativeLabel: habit.negativeLabel?.trim() || HABIT_BOOLEAN_LABELS.negative,
 					positiveValue: positiveValueOf(habit)
@@ -1849,6 +1865,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					target: '1',
 					scheduledDays: [1, 2, 3, 4, 5],
 					reminder: '',
+					targetDirection: 'up',
 					positiveLabel: HABIT_BOOLEAN_LABELS.positive,
 					negativeLabel: HABIT_BOOLEAN_LABELS.negative,
 					positiveValue: 1
@@ -2019,9 +2036,11 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					? [0, 1, 2, 3, 4, 5, 6]
 					: [...habitForm.scheduledDays],
 			reminder: habitForm.reminder || undefined,
+			targetDirection: habitForm.metric === 'boolean' || habitForm.metric === 'weekly' ? 'up' : habitForm.targetDirection,
 			...labels
 		};
 		const next = cloneSnapshot();
+		const beforeDaily = getDailyHabitGoal(snapshot);
 		const existingIndex = editingHabitId ? next.habits.findIndex((item) => item.id === editingHabitId) : -1;
 		let savedHabit: Habit;
 		if (existingIndex >= 0) {
@@ -2033,6 +2052,10 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		}
 		const isNew = existingIndex < 0;
 		await commit(next, isNew, isNew);
+		const afterDaily = getDailyHabitGoal(next);
+		if (afterDaily.goal > 0 && beforeDaily.done < beforeDaily.goal && afterDaily.done >= afterDaily.goal) {
+			celebrate(getHabitDayStreak(next));
+		}
 		await scheduleHabitReminder(savedHabit);
 		modal = null;
 		editingHabitId = '';
@@ -2093,15 +2116,29 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const existingLog = existingIndex >= 0 ? next.habitLogs[existingIndex] : null;
 		const qualifies = didMeetTarget(habit, value);
 		const awardExperience = award && qualifies && !existingLog?.experienceAwarded;
+		const currentWeek = weekStartDate(today, firstDayOfWeek());
+		const isCurrentWeek = habit.metric === 'weekly' && date === currentWeek;
+		const incrementDates = habit.metric === 'weekly'
+			? new Set([
+					...(existingLog?.incrementDates ?? (existingLog?.lastIncrementDate ? [existingLog.lastIncrementDate] : [])),
+					...(isCurrentWeek && value > (existingLog?.value ?? 0) ? [today] : [])
+				])
+			: null;
+		const lastIncrementDate = habit.metric === 'weekly' && incrementDates?.size
+			? [...incrementDates].sort().at(-1)
+			: existingLog?.lastIncrementDate;
 		const log: HabitLog = {
 			id: existingLog?.id ?? habitLogId(habit.id, date), habitId: habit.id, date, value,
 			completed: habit.metric === 'boolean' ? qualifies : value > 0,
-			experienceAwarded: Boolean(existingLog?.experienceAwarded || awardExperience)
+			experienceAwarded: Boolean(existingLog?.experienceAwarded || awardExperience),
+			...(habit.metric === 'weekly'
+				? { lastIncrementDate, incrementDates: incrementDates ? [...incrementDates].sort() : undefined }
+				: {})
 		};
 		if (existingIndex >= 0) next.habitLogs[existingIndex] = log;
 		else next.habitLogs.unshift(log);
 		if (awardExperience) next.experience.totalXp += 10;
-		const streak = currentStreak(habit, next.habitLogs, today, allPausePeriods(next));
+		const streak = currentStreak(habit, next.habitLogs, today, allPausePeriods(next), firstDayOfWeek(next));
 		const habitIndex = next.habits.findIndex((item) => item.id === habit.id);
 		if (habitIndex >= 0) next.habits[habitIndex].bestStreak = Math.max(next.habits[habitIndex].bestStreak, streak);
 		const afterDailyGoal = getDailyHabitGoal(next);
@@ -3401,6 +3438,22 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		return true;
 	}
 
+	/**
+	 * Troca o primeiro dia da semana remapeando o log da semana atual.
+	 * Sem isso, a semana em aberto sumiria do hábito semanal.
+	 */
+	async function changeFirstDayOfWeek(value: 'mon' | 'sun') {
+		if (!snapshot || value === snapshot.preferences.firstDayOfWeek) return;
+		const oldStart = weekStartDate(today, firstDayOfWeek(snapshot));
+		const newStart = weekStartDate(today, value);
+		const next = cloneSnapshot();
+		next.preferences.firstDayOfWeek = value;
+		const weekly = new Set(next.habits.filter((habit) => habit.metric === 'weekly').map((habit) => habit.id));
+		next.habitLogs = remapWeeklyLogs(next.habitLogs, weekly, oldStart, newStart);
+		await commit(next);
+		toastMessage(value === 'sun' ? 'Semana começa no domingo.' : 'Semana começa na segunda.');
+	}
+
 	async function startPause(event: SubmitEvent) {
 		event.preventDefault();
 		if (!snapshot || pauseForm.until < today) {
@@ -3895,7 +3948,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 											<section class="habit-prototype-card habit-prototype-wide habit-prototype-week" aria-label="Sequência da semana">
 												{#each habitWeekDays as day, index}
 													{@const reached = day.goal > 0 && day.done >= day.goal}
-													<div class:done={reached} class:today={day.date === today} class="habit-prototype-day"><span>{#if reached}<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/></svg>{/if}</span>{['S', 'T', 'Q', 'Q', 'S', 'S', 'D'][index]}</div>
+													<div class:done={reached} class:today={day.date === today} class="habit-prototype-day"><span>{#if reached}<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/></svg>{/if}</span>{day.label[0].toUpperCase()}</div>
 												{/each}
 											</section>
 										</div>
@@ -3904,13 +3957,16 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 											<button class="habit-prototype-card habit-prototype-empty" onclick={() => openHabit()}>
 												<Plus size={20} /> Hábito
 											</button>
-											{#each snapshot.habits.filter((habit) => habit.active) as habit}
+											{#each snapshot.habits.filter((habit) => habit.active) as habit (habit.id)}
+												{@const scheduledToday = habit.metric === 'weekly' || habit.scheduledDays.includes(new Date(`${today}T12:00:00`).getDay())}
 												{#if habit.metric === 'weekly'}
 													{@const count = weeklyValue(habit)}
 													{@const complete = count >= habit.target}
+													{@const weekLog = snapshot.habitLogs.find((item) => item.habitId === habit.id && item.date === weekStartDate(today, firstDayOfWeek()))}
+													{@const touched = Boolean(weekLog?.incrementDates?.includes(today) || weekLog?.lastIncrementDate === today)}
 													<div class="hcard habit-prototype-wide">
-														<section role="group" class:done={complete} class="habit-prototype-card habit-prototype-wide habit-prototype-pips" data-habit-id={habit.id} onpointerdown={(event) => startHabitPress(event, habit)}>
-															<div class="habit-prototype-row"><b>{habit.name}</b><small>{count} de {habit.target} na semana</small></div>
+														<section role="group" class:done={complete} class:touched class="habit-prototype-card habit-prototype-wide habit-prototype-pips" data-habit-id={habit.id} onpointerdown={(event) => startHabitPress(event, habit)}>
+															<div class="habit-prototype-row"><b>{habit.name}<span class="habit-week-chip">semana</span></b><small>{count} de {habit.target} na semana</small></div>
 															<div class="habit-prototype-pip-track">
 																{#each Array.from({ length: WEEK_MAX }, (_, index) => index + 1) as step}
 																	<button class="habit-prototype-pip" class:on={step <= count} class:goal={step === habit.target} aria-label={`${step} de ${WEEK_MAX} na semana`} aria-pressed={step <= count} onclick={() => { if (habitPressSuppress) return; setWeeklyValue(habit, count === step ? step - 1 : step); }}></button>
@@ -3923,9 +3979,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 													{@const log = snapshot.habitLogs.find((item) => item.habitId === habit.id && item.date === today)}
 													{@const value = log?.value ?? 0}
 													{@const complete = log ? didMeetTarget(habit, value) : false}
-													{@const progress = habit.metric === 'boolean' ? (complete ? 1 : 0) : Math.min(1, value / habit.target)}
-													{@const label = habit.metric === 'boolean' ? (log ? booleanLabelOf(habit, value, HABIT_BOOLEAN_LABELS) : 'Hoje') : prototypeValue(habit, value)}
-													<div class="hcard">
+													{@const progress = log ? habitProgress(habit, value) : 0}
+													{@const label = habit.metric === 'boolean' ? (!scheduledToday && !log ? '–' : log ? booleanLabelOf(habit, value, HABIT_BOOLEAN_LABELS) : 'Hoje') : prototypeValue(habit, value)}
+													<div class="hcard" class:off={!scheduledToday}>
 														<button
 															class:done={complete}
 															class="habit-prototype-card habit-prototype-habit"
@@ -3939,7 +3995,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 															oncontextmenu={(event) => { event.preventDefault(); openHabitMenu(habit, event.clientX, event.clientY); }}
 															onpointerdown={(event) => startHabitPress(event, habit)}
 														>
-															<b>{habit.name}</b><span><span class="habit-prototype-value" class:idle={habit.metric === 'boolean' && !log}>{label}</span><br /><small>{habit.metric === 'boolean' ? (log ? (complete ? 'Concluído' : 'Registrado') : 'Toque para registrar') : `meta ${prototypeValue(habit, habit.target)}`}</small></span>{#if complete}<i class="habit-prototype-check"><Check size={15} /></i>{/if}
+															<b>{habit.name}</b><span><span class="habit-prototype-value" class:idle={habit.metric === 'boolean' && !log}>{label}</span><br /><small>{!scheduledToday ? 'Fora de hoje' : habit.metric === 'boolean' ? (log ? (complete ? 'Concluído' : 'Registrado') : 'Toque para registrar') : `meta ${prototypeValue(habit, habit.target)}`}</small></span>{#if complete}<i class="habit-prototype-check"><Check size={15} /></i>{/if}
 														</button>
 														<button class="hcard-more" aria-label={`Opções de ${habit.name}`} onclick={(event) => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); openHabitMenu(habit, rect.left, rect.bottom + 6); }}><MoreHorizontal size={16} /></button>
 													</div>
@@ -4507,6 +4563,20 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 							/>
 						</div>
 					{/if}
+					{#if habitForm.metric === 'count' || habitForm.metric === 'duration'}
+						<div class="sheet-days">
+							<span class="sheet-days-label">Como atingir a meta</span>
+							<Segmented
+								label="Direção da meta"
+								options={[
+									{ value: 'up', label: 'Mais é melhor' },
+									{ value: 'down', label: 'Menos é melhor' }
+								]}
+								value={habitForm.targetDirection}
+								onchange={(value) => (habitForm.targetDirection = value === 'down' ? 'down' : 'up')}
+							/>
+						</div>
+					{/if}
 					{#if habitForm.metric !== 'weekly'}
 						<div class="sheet-days">
 							<span class="sheet-days-label">Dias programados</span>
@@ -4560,6 +4630,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			onnotifications={toggleNotifications}
 			onpreference={setFeedbackPreference}
 			oncurrency={changeCurrency}
+			onfirstday={(value) => void changeFirstDayOfWeek(value)}
 			ontestmode={toggleTestMode}
 			onpause={() => (modal = 'pause')}
 			onexport={exportData}

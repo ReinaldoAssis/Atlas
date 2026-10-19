@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { Bell, CircleDollarSign, FlaskConical, Keyboard, Volume2, Vibrate, ArrowDownRight, ArrowUpRight, Flame, RefreshCw, Wifi, Link2, Smartphone, Timer } from '@lucide/svelte';
-	import type { AtlasSnapshot } from '#lib/atlas';
+	import { Bell, CalendarDays, CircleDollarSign, FlaskConical, Keyboard, Volume2, Vibrate, ArrowDownRight, ArrowUpRight, Flame, RefreshCw, Wifi, Link2, Smartphone, Timer } from '@lucide/svelte';
+	import type { AtlasSnapshot, FirstDayOfWeek } from '#lib/atlas';
 	import { m } from '#lib/paraglide/messages.js';
 	import Sheet from '#lib/components/ui/Sheet.svelte';
+	import Segmented from '#lib/components/ui/Segmented.svelte';
 	import Toggle from '#lib/components/ui/Toggle.svelte';
 	import { lastSyncLabel, type SyncPeerStatus, type SyncStatus, type SyncDiscoveryStatus } from '#lib/sync';
 
@@ -24,6 +25,7 @@
 		onnotifications,
 		onpreference,
 		oncurrency,
+		onfirstday,
 		ontestmode,
 		onpause,
 		onexport,
@@ -52,6 +54,7 @@
 			enabled: boolean
 		) => void;
 		oncurrency: (value: string) => Promise<boolean>;
+		onfirstday: (value: FirstDayOfWeek) => void;
 		ontestmode: (enabled: boolean) => void;
 		onpause: () => void;
 		onexport: () => void;
@@ -183,6 +186,22 @@
 						<option value="USD">USD · Dólar</option>
 						<option value="EUR">EUR · Euro</option>
 					</select>
+				</div>
+				<div class="row">
+					<span class="lead"><CalendarDays size={17} /></span>
+					<span class="text">
+						<strong>Primeiro dia da semana</strong>
+						<small>Afeta hábito semanal, metas e calendários.</small>
+					</span>
+					<Segmented
+						label="Primeiro dia da semana"
+						options={[
+							{ value: 'mon', label: 'Seg' },
+							{ value: 'sun', label: 'Dom' }
+						]}
+						value={snapshot.preferences.firstDayOfWeek}
+						onchange={(value) => onfirstday(value === 'sun' ? 'sun' : 'mon')}
+					/>
 				</div>
 			</div>
 		</section>

@@ -17,6 +17,7 @@ function setup(overrides: Record<string, unknown> = {}) {
 		onnotifications: vi.fn(),
 		onpreference: vi.fn(),
 		oncurrency: vi.fn(async () => true),
+		onfirstday: vi.fn(),
 		ontestmode: vi.fn(),
 		onpause: vi.fn(),
 		onexport: vi.fn(),
@@ -41,6 +42,7 @@ describe('SettingsSheet', () => {
 		expect(screen.getByRole('dialog', { name: 'Configurações' })).toBeTruthy();
 		expect(screen.getByText('Modo de teste')).toBeTruthy();
 		expect(screen.getByText('Backup local')).toBeTruthy();
+		expect(screen.getByText('Primeiro dia da semana')).toBeTruthy();
 		expect(screen.queryByText('ATLAS · SEU ESPAÇO')).toBeNull();
 	});
 
