@@ -21,10 +21,12 @@ export interface BubbleOptions {
 	anchorMiddle?: boolean;
 	/** Variante de toque: assenta para baixo. */
 	touch?: boolean;
+	/** Fica aberta até clique fora/Esc (não fecha no pointerleave). */
+	sticky?: boolean;
 	sound?: boolean;
 	haptics?: boolean;
 	/** Clique numa linha do conteúdo (`data-i`). */
-	onRowClick?: (index: number) => void;
+	onRowClick?: (index: number, row: HTMLElement) => void;
 	/** Chamado quando a bolha abre (ex.: som/háptica de âncora). */
 	onEnter?: () => void;
 }
@@ -58,14 +60,32 @@ export class TimeBubble {
 		this.tail = this.body.lastElementChild as HTMLElement;
 
 		el.addEventListener('pointerenter', () => clearTimeout(this.hideTimer));
-		el.addEventListener('pointerleave', () => this.later());
+		el.addEventListener('pointerleave', () => {
+			if (!options.sticky) this.later();
+		});
 		el.addEventListener('click', (event) => {
 			const row = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-i]');
 			if (!row) return;
 			const index = Number(row.dataset.i);
-			if (Number.isFinite(index)) this.options.onRowClick?.(index);
+			if (Number.isFinite(index)) this.options.onRowClick?.(index, row);
 		});
+		if (options.sticky) {
+			document.addEventListener('pointerdown', this.onOutside, true);
+			window.addEventListener('keydown', this.onKeydown);
+		}
 	}
+
+	private onOutside = (event: PointerEvent): void => {
+		if (!this.open) return;
+		const target = event.target as Node | null;
+		if (!target) return;
+		if (this.el.contains(target) || this.anchor?.contains(target)) return;
+		this.hide();
+	};
+
+	private onKeydown = (event: KeyboardEvent): void => {
+		if (event.key === 'Escape') this.hide();
+	};
 
 	get isOpen(): boolean {
 		return this.open;
@@ -239,6 +259,10 @@ export class TimeBubble {
 
 	destroy() {
 		clearTimeout(this.hideTimer);
+		if (this.options.sticky) {
+			document.removeEventListener('pointerdown', this.onOutside, true);
+			window.removeEventListener('keydown', this.onKeydown);
+		}
 		this.el.remove();
 	}
 }

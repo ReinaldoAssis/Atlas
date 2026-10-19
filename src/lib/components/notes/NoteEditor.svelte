@@ -37,6 +37,7 @@
 		open,
 		initialMode,
 		flushToken = 0,
+		morphFrom = null,
 		sound,
 		typingSound,
 		haptics,
@@ -61,6 +62,8 @@
 		haptics: boolean;
 		/** Muda quando o pai precisa que o rascunho seja gravado antes do reload. */
 		flushToken?: number;
+		/** Retângulo de origem para o morph da bolha de tempo até o editor. */
+		morphFrom?: DOMRect | null;
 		backlinks: Note[];
 		onpatch: (patch: Partial<Note>) => void;
 		onpin: (element?: Element | null) => void;
@@ -82,6 +85,8 @@
 	let status = $state('Salvo');
 	let attachments = $state<string[]>([]);
 	let paneEl = $state<HTMLElement | null>(null);
+	let rootEl = $state<HTMLElement | null>(null);
+	let morphing = $state(false);
 	let editorEl = $state<HTMLTextAreaElement | null>(null);
 	let previewEl = $state<HTMLElement | null>(null);
 	let moreEl = $state<HTMLElement | null>(null);
@@ -425,9 +430,41 @@
 	});
 
 	$effect(() => () => flush());
+
+	// Morph da bolha de tempo até o editor: revela o overlay a partir do
+	// retângulo clicado. O CSS pula a transição de slide enquanto isso.
+	$effect(() => {
+		const element = rootEl;
+		if (!element || !open || !morphFrom || prefersReducedMotion()) return;
+		morphing = true;
+		element.style.transition = 'none';
+		// Garante que o navegador aplicou o estado final antes de medir.
+		void element.offsetHeight;
+		const rect = element.getBoundingClientRect();
+		const top = Math.max(0, morphFrom.top - rect.top);
+		const left = Math.max(0, morphFrom.left - rect.left);
+		const right = Math.max(0, rect.right - (morphFrom.left + morphFrom.width));
+		const bottom = Math.max(0, rect.bottom - (morphFrom.top + morphFrom.height));
+		const animation = element.animate(
+			[
+				{ clipPath: `inset(${top}px ${right}px ${bottom}px ${left}px round 14px)`, opacity: 0.7 },
+				{ clipPath: 'inset(0px round 0px)', opacity: 1 }
+			],
+			{ duration: 340, easing: 'cubic-bezier(.2,.9,.2,1)' }
+		);
+		animation.onfinish = () => {
+			morphing = false;
+			element.style.transition = '';
+		};
+		return () => {
+			animation.cancel();
+			morphing = false;
+			element.style.transition = '';
+		};
+	});
 </script>
 
-<div class="nt-ed" class:on={open}>
+<div class="nt-ed" class:on={open} class:morphing bind:this={rootEl}>
 	<div class="nt-eh">
 		<button class="nt-ic" aria-label="Voltar" onclick={onclose}>‹</button>
 		<button class="nt-fc" style={`--cc:${folder?.color ?? '#454c45'}`} onclick={onopenfolder}>

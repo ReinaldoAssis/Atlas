@@ -832,6 +832,7 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 /* Editor em tela cheia */
 .nt-ed { position: fixed; inset: 0; background: var(--nt-bg); z-index: 40; display: flex; flex-direction: column; transform: translateY(100%); transition: transform .38s cubic-bezier(.2,.9,.2,1); padding-top: env(safe-area-inset-top, 0px); }
 .nt-ed.on { transform: none; }
+.nt-ed.morphing { transition: none; }
 .nt-eh { display: flex; align-items: center; gap: 6px; padding: 8px 10px; max-width: 1000px; width: 100%; margin: 0 auto; }
 .nt-eh .nt-ic { flex: none; }
 .nt-actions { display: flex; align-items: center; gap: 6px; flex: none; }
@@ -1009,7 +1010,15 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 	transition: background 0.15s;
 }
 .tbb-r:hover { background: #ffffff12; }
-.tbb-r .tbb-2 { font-size: 11px; max-width: 260px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.tbb-r .tbb-2 {
+	font-size: 11px;
+	max-width: 260px;
+	overflow: hidden;
+	white-space: pre-line;
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 3;
+}
 @media (prefers-reduced-motion: reduce) {
 	.tbb-r { transition: none; }
 }

@@ -44,9 +44,11 @@ import { checkForUpdate, relaunchApp, updaterSupportedHere } from '#lib/updater'
 		type SyncDiscovered,
 		type SyncStatus
 	} from '#lib/sync';
-import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, restoreAttachments } from '#lib/notes-store';
-	import type { Note, NotesState } from '#lib/notes';
+import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, restoreAttachments, upsertNote } from '#lib/notes-store';
+	import { backlinks, createNote, findNoteByTitle, type Note, type NotesState } from '#lib/notes';
+	import NoteEditor from '#lib/components/notes/NoteEditor.svelte';
 	import { notesForBlock, type NoteRef } from '#lib/tempo-ref';
+	import { notePreview } from '#lib/note-preview';
 	import { addDays, clampRange, defaultRange, rangeLabel } from '#lib/time-range';
 	import { TimeBubble } from '#lib/bubble';
 	import { edgeRatio, isMilestone, nodeReached, type GraphState } from '#lib/graph';
@@ -165,6 +167,15 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let timeGridEl = $state<HTMLElement | null>(null);
 	let plannerBubble: TimeBubble | null = null;
 	let plannerBubbleCurrent: NoteRef[] = [];
+	/** Bolha fixa do long press no mobile (não fecha ao soltar). */
+	let plannerPinBubble: TimeBubble | null = null;
+	let plannerPinCurrent: { note: Note; label: string; color: string }[] = [];
+	/** Editor de nota em overlay, aberto a partir da bolha do Tempo. */
+	let noteOverlay = $state<Note | null>(null);
+	let noteOverlayOpen = $state(false);
+	let noteOverlayMode = $state<'write' | 'preview'>('preview');
+	let noteOverlayMorph = $state<DOMRect | null>(null);
+	let noteOverlaySeq = 0;
 	/** Auto-dwell: tela parada por 4 s abre o dialog das notas visíveis. */
 	let autoDwellTimer: ReturnType<typeof setTimeout> | undefined;
 	let autoDwellRings: SVGSVGElement[] = [];
@@ -2240,23 +2251,122 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 	}
 
-	function noteExcerpt(body: string): string {
-		return body
-			.replace(/[#*_>`[\]]/g, '')
-			.replace(/\s+/g, ' ')
-			.trim()
-			.slice(0, 64);
+	async function openNoteFromPlanner(noteId: string, source?: DOMRect) {
+		const note = notesState.notes.find((item) => item.id === noteId);
+		if (!note) {
+			// Nota ainda não carregada (não deve acontecer): cai no deep-link.
+			notesOpenId = noteId;
+			notesOpenToken += 1;
+			goTab('notes');
+			return;
+		}
+		plannerBubble?.hide(true);
+		plannerPinBubble?.hide(true);
+		cancelAutoDwell();
+		noteOverlaySeq += 1;
+		noteOverlayMorph = source ?? null;
+		noteOverlayMode = note.lastMode === 'write' ? 'write' : 'preview';
+		noteOverlay = note;
+		noteOverlayOpen = false;
+		await tick();
+		noteOverlayOpen = true;
+		pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 8);
+		playTone(520, 0.08, 'sine', 0.05, snapshot?.preferences.soundEnabled ?? true);
 	}
 
-	function openNoteFromPlanner(noteId: string) {
-		plannerBubble?.hide(true);
-		notesOpenId = noteId;
+	async function closeNoteOverlay() {
+		const seq = ++noteOverlaySeq;
+		noteOverlayOpen = false;
+		await new Promise((resolve) => setTimeout(resolve, prefersReducedMotion() ? 0 : 380));
+		if (seq !== noteOverlaySeq) return;
+		noteOverlay = null;
+		noteOverlayMorph = null;
+	}
+
+	const overlayNotes = $derived(notesState.notes.filter((item) => !item.trashedAt));
+	const overlayBacklinks = $derived(noteOverlay ? backlinks(overlayNotes, noteOverlay) : []);
+
+	function patchOverlayNote(patch: Partial<Note>): void {
+		if (!noteOverlay) return;
+		const updated: Note = { ...noteOverlay, ...patch, updatedAt: new Date().toISOString() };
+		noteOverlay = updated;
+		notesState = {
+			...notesState,
+			notes: notesState.notes.map((item) => (item.id === updated.id ? updated : item))
+		};
+		void upsertNote(updated).catch((error) => {
+			console.error('Não foi possível salvar a nota', error);
+			toastMessage('Não foi possível salvar a nota.', { warning: true });
+		});
+	}
+
+	function pinOverlayNote(): void {
+		if (!noteOverlay) return;
+		const pinned = !noteOverlay.pinned;
+		patchOverlayNote({ pinned });
+		toastMessage(pinned ? 'Nota fixada.' : 'Nota desafixada.');
+	}
+
+	async function deleteOverlayNote(): Promise<void> {
+		const target = noteOverlay;
+		if (!target) return;
+		const before = { ...target };
+		patchOverlayNote({ trashedAt: new Date().toISOString() });
+		await closeNoteOverlay();
+		toastMessage('Nota movida para a lixeira', {
+			undo: () => {
+				notesState = {
+					...notesState,
+					notes: notesState.notes.map((item) => (item.id === before.id ? before : item))
+				};
+				void upsertNote(before);
+			}
+		});
+	}
+
+	async function openOverlayFolder(): Promise<void> {
+		const id = noteOverlay?.id;
+		await closeNoteOverlay();
+		if (!id) return;
+		notesOpenId = id;
 		notesOpenToken += 1;
 		goTab('notes');
 	}
 
+	async function openOverlayWikiLink(title: string): Promise<void> {
+		const existing = findNoteByTitle(overlayNotes, title);
+		if (existing) {
+			noteOverlaySeq += 1;
+			noteOverlayMorph = null;
+			noteOverlay = existing;
+			noteOverlayMode = existing.lastMode === 'write' ? 'write' : 'preview';
+			await tick();
+			noteOverlayOpen = true;
+			return;
+		}
+		const created = createNote(noteOverlay?.folderId ?? null, title);
+		notesState = { ...notesState, notes: [created, ...notesState.notes] };
+		await upsertNote(created);
+		noteOverlaySeq += 1;
+		noteOverlayMorph = null;
+		noteOverlay = created;
+		noteOverlayMode = 'write';
+		await tick();
+		noteOverlayOpen = true;
+	}
+
+	async function openOverlayBacklink(note: Note): Promise<void> {
+		noteOverlaySeq += 1;
+		noteOverlayMorph = null;
+		noteOverlay = note;
+		noteOverlayMode = note.lastMode === 'write' ? 'write' : 'preview';
+		await tick();
+		noteOverlayOpen = true;
+	}
+
 	function hideBlockNotes() {
 		plannerBubble?.hide(true);
+		plannerPinBubble?.hide(true);
 	}
 
 	function plannerBlockTint(blockId: string): string {
@@ -2264,17 +2374,18 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		return (block ? currentCategory(block.categoryId)?.color : null) ?? '#d4f25a';
 	}
 
-	function plannerBubbleHtml(items: NoteRef[]): string {
+	function plannerBubbleHtml(items: { note: { title: string; body: string; updatedAt?: string } }[]): string {
 		const rows = items
 			.map(
 				(item, index) =>
-					`<button class="tbb-r" data-i="${index}"><div class="tbb-1">${escapeText(item.note.title || 'Sem título')}</div><div class="tbb-2">${escapeText(noteExcerpt(item.note.body))}</div></button>`
+					`<button class="tbb-r" data-i="${index}"><div class="tbb-1">${escapeText(item.note.title || 'Sem título')}</div><div class="tbb-2">${escapeText(notePreview(item.note.body, item.note.updatedAt))}</div></button>`
 			)
 			.join('');
 		return `<div class="tbb-lb">Notas neste horário</div>${rows}`;
 	}
 
 	function showPlannerBubble(anchor: HTMLElement, items: NoteRef[], blockId: string) {
+		plannerPinBubble?.hide(true);
 		plannerBubbleCurrent = items;
 		plannerBubble?.show(anchor, plannerBubbleHtml(items), plannerBlockTint(blockId));
 	}
@@ -2553,9 +2664,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			offset: 8,
 			sound: snapshot?.preferences.soundEnabled ?? true,
 			haptics: snapshot?.preferences.hapticsEnabled ?? true,
-			onRowClick: (index) => {
+			onRowClick: (index, row) => {
 				const item = plannerBubbleCurrent[index];
-				if (item) openNoteFromPlanner(item.note.id);
+				if (item) void openNoteFromPlanner(item.note.id, row.getBoundingClientRect());
 			}
 		});
 		plannerBubble = bubble;
@@ -2577,6 +2688,29 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			grid.removeEventListener('pointerleave', onLeave);
 			bubble.destroy();
 			plannerBubble = null;
+		};
+	});
+
+	// Bolha fixa do long press (mobile): não fecha ao soltar; só clique fora/Esc.
+	$effect(() => {
+		const grid = timeGridEl;
+		if (!grid) return;
+		const bubble = new TimeBubble({
+			interactive: true,
+			sticky: true,
+			touch: true,
+			offset: 8,
+			sound: snapshot?.preferences.soundEnabled ?? true,
+			haptics: snapshot?.preferences.hapticsEnabled ?? true,
+			onRowClick: (index, row) => {
+				const item = plannerPinCurrent[index];
+				if (item) void openNoteFromPlanner(item.note.id, row.getBoundingClientRect());
+			}
+		});
+		plannerPinBubble = bubble;
+		return () => {
+			bubble.destroy();
+			plannerPinBubble = null;
 		};
 	});
 
@@ -2751,31 +2885,28 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		applyTimePaint(cell.day, cell.slot);
 	}
 
-	/** Long press sem movimento: notas do bloco ou categoria (fallback). */
+	/** Long press sem movimento: notas do bloco (bolha fixa) ou categoria. */
 	function openPlannerBlockDialog(day: number, slot: number) {
 		const blockId = timeGridBlocks[day]?.[slot] ?? '';
-		const block = blockId ? snapshot?.timeBlocks.find((item) => item.id === blockId) : null;
-		if (blockId) {
-			const items = plannerNoteItems([blockId]);
-			if (items.length) {
-				plannerNotesItems = items;
-				plannerNotesOpen = true;
-				pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 10);
-				playTone(660, 0.08, 'sine', 0.04, snapshot?.preferences.soundEnabled ?? true);
-				return;
-			}
-			if (block?.categoryId) {
-				pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 10);
-				openTimeCategorySheet(block.categoryId);
-				return;
-			}
-		}
-		if (timeSelected !== 'x') {
+		if (!blockId) return;
+		const block = snapshot?.timeBlocks.find((item) => item.id === blockId);
+		const items = plannerNoteItems([blockId]);
+		if (items.length) {
+			const anchor = timeGridEl?.querySelector<HTMLElement>(
+				`[data-tp-day="${day}"][data-tp-slot="${slot}"]`
+			);
+			if (!anchor) return;
+			plannerPinCurrent = items;
+			plannerBubble?.hide(true);
+			plannerPinBubble?.show(anchor, plannerBubbleHtml(items), plannerBlockTint(blockId));
 			pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 10);
-			openTimeCategorySheet(timeSelected);
+			playTone(660, 0.08, 'sine', 0.04, snapshot?.preferences.soundEnabled ?? true);
 			return;
 		}
-		pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 6);
+		if (block?.categoryId) {
+			pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 10);
+			openTimeCategorySheet(block.categoryId);
+		}
 	}
 
 	function clearTimeTouchTimers() {
@@ -2786,9 +2917,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	/**
-	 * Toque no planejador (mobile): qualquer arrasto antes de 400 ms rola a
-	 * grade; segurar 400 ms arma a pintura (o movimento seguinte pinta); toque
-	 * curto pinta uma célula; 1 s parado abre notas/categoria.
+	 * Toque no planejador (mobile): qualquer arrasto antes de 250 ms rola a
+	 * grade; segurar 250 ms arma a pintura (o movimento seguinte pinta); toque
+	 * curto pinta uma célula; 650 ms parado abre a bolha de notas ou a categoria.
 	 */
 	function beginTimeTouch(event: TouchEvent) {
 		if (!snapshot || event.touches.length !== 1) return;
@@ -2802,14 +2933,14 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			if (!timeTouch || timeTouch.navigating || timeTouch.painting) return;
 			timeTouch.armed = true;
 			vibrate(8);
-		}, 400);
+		}, 250);
 		timeTouchDialogTimer = setTimeout(() => {
 			if (!timeTouch || timeTouch.navigating || timeTouch.painting) return;
 			const current = timeTouch;
 			timeTouch = null;
 			clearTimeTouchTimers();
 			openPlannerBlockDialog(current.cell.day, current.cell.slot);
-		}, 1000);
+		}, 650);
 	}
 
 	function moveTimeTouch(event: TouchEvent) {
@@ -3923,6 +4054,32 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 		<div id="ov" class:on={quickMenuOpen || moreMenuOpen} role="presentation" onclick={closeShellMenus}></div>
 	</div>
+
+	{#if noteOverlay && snapshot}
+		{#key noteOverlay.id}
+			<NoteEditor
+				note={noteOverlay}
+				notesList={overlayNotes}
+				folders={notesState.folders}
+				timeBlocks={snapshot.timeBlocks}
+				open={noteOverlayOpen}
+				initialMode={noteOverlayMode}
+				morphFrom={noteOverlayMorph}
+				sound={snapshot.preferences.soundEnabled}
+				typingSound={snapshot.preferences.typingSoundEnabled}
+				haptics={snapshot.preferences.hapticsEnabled}
+				backlinks={overlayBacklinks}
+				onpatch={patchOverlayNote}
+				onpin={pinOverlayNote}
+				ondeletenote={() => void deleteOverlayNote()}
+				onopenfolder={() => void openOverlayFolder()}
+				onclose={() => void closeNoteOverlay()}
+				onwikilink={(title) => void openOverlayWikiLink(title)}
+				onopenbacklink={(note) => void openOverlayBacklink(note)}
+				ontoast={toastMessage}
+			/>
+		{/key}
+	{/if}
 
 	{#if trashOpen}
 		<TrashSheet

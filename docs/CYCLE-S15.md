@@ -1,6 +1,6 @@
 # Atlas — Ciclo S15: rodada de correções e polimento
 
-> **Estado:** alinhado em 18/10/2026 · **E0–E1 implementados; E2–E8 pendentes**.
+> **Estado:** alinhado em 18/10/2026 · **E0–E2 implementados; E3–E8 pendentes**.
 > Este documento é a fonte das decisões do ciclo. Se conflitar com
 > `ROADMAP.md`, vale este arquivo para o escopo do S15.
 >
@@ -176,7 +176,7 @@ de notas).
 **Depende de:** E0. **Bloqueia:** E2 (restore de nota), E5 (categoria), E7
 (undo durante pausa).
 
-### E2 — Tempo: gestos e preview
+### E2 — Tempo: gestos e preview ✅
 
 - Timings 250/650, fim do `dialogTimer` de 1 s, célula vazia sem ação,
   bloco sem nota → categoria, bolha consome o gesto (A3).
@@ -185,7 +185,15 @@ de notas).
 - Preview sem a tag `tempo` e com quebras de linha.
 - Testes de gesto (unidade onde possível) + verificação manual no device.
 
-**Depende de:** E0 (para `lastMode` na nota).
+**Como ficou:** long press de 250 ms arma a pintura e 650 ms abre a bolha;
+célula vazia não abre nada e bloco sem nota abre a categoria. A bolha fixa
+(`TimeBubble` com `sticky`) não fecha no `pointerup` e só some com clique fora
+ou Esc. O editor é o `NoteEditor` montado por cima do Tempo, com morph por
+`clip-path` a partir da linha clicada; fechar volta ao planejador. O preview da
+bolha usa `notePreview` (remove `tempo`/`time`, mantém até 3 linhas).
+
+**Depende de:** E0 (para `lastMode` na nota). **Verificação pendente:** toque
+real no iPhone (timings, bolha e morph).
 
 ### E3 — Notas
 
