@@ -5,7 +5,10 @@ import {
 	createEmptySnapshot,
 	defaultCategories,
 	id as newId,
+	normalizeCategoryLimitMode,
 	normalizeDailyGoal,
+	normalizeFirstDayOfWeek,
+	normalizeTargetDirection,
 	type AtlasSnapshot,
 	type Category,
 	type ExperienceState,
@@ -36,6 +39,7 @@ import {
 import { demoSnapshot } from './fixtures';
 import { nextStamp, observeStamp } from './hlc';
 import { activeDbName, previewKey, readTestMode } from './test-mode';
+import { TRASH_RETENTION_DAYS } from './trash';
 
 const PREVIEW_KEY = 'atlas-preview-state-v1';
 const LIFEFORCE_MIGRATION_KEY = 'atlas-preview-lifeforce-v3';
@@ -178,6 +182,11 @@ async function initializeDatabase(db: Database): Promise<void> {
 	};
 	await runMigrations(ctx);
 	await purgeTombstones(db);
+	// A lixeira global não guarda evento além da retenção (a purga dos
+	// tombstones é outra, comandada pelo sync).
+	await db.execute('DELETE FROM trash_events WHERE deleted_at < $1', [
+		String(Date.now() - TRASH_RETENTION_DAYS * 86_400_000)
+	]);
 	const deviceId = await ensureDeviceId(db);
 	const categoryRows = await db.select<Array<{ id: string }>>(
 		'SELECT id FROM categories WHERE deleted_at IS NULL LIMIT 1'
@@ -279,6 +288,11 @@ function hlcStatement(at: number): BatchStatement {
 	};
 }
 
+/** Carimbo HLC para lotes escritos fora do `saveSnapshot` (ex.: restaurar lixeira). */
+export function writeStampStatement(at: number): BatchStatement {
+	return hlcStatement(at);
+}
+
 /** Identidade estável desta instalação (base do sync futuro). */
 async function ensureDeviceId(db: Database): Promise<string> {
 	const rows = await db.select<Array<{ value: string }>>('SELECT value FROM app_settings WHERE key = $1', [
@@ -361,10 +375,28 @@ function normalizeCategory(category: Category): Category {
 	}
 	if (category.module !== 'finance') return category;
 	const isIncome = category.kind ? category.kind === 'in' : category.id === 'income' || category.id === 'sal' || /renda|sal[áa]rio/i.test(category.name);
+	const limitMode = normalizeCategoryLimitMode(category.limitMode);
 	const patch: Partial<Category> = {};
 	if (!category.kind) patch.kind = isIncome ? 'in' : 'out';
+	if (!isIncome && limitMode !== category.limitMode) patch.limitMode = limitMode;
 	if (!isIncome && !category.limitMinor) patch.limitMinor = FALLBACK_LIMITS[category.id] || 50000;
 	return Object.keys(patch).length ? { ...category, ...patch } : category;
+}
+
+/** Hábitos antigos podem não ter direção de meta. */
+function normalizeHabit(stored: Partial<Habit>): Habit {
+	return {
+		id: '',
+		name: '',
+		metric: 'boolean',
+		unit: '',
+		target: 1,
+		scheduledDays: [],
+		active: true,
+		bestStreak: 0,
+		...stored,
+		targetDirection: normalizeTargetDirection(stored.targetDirection)
+	} as Habit;
 }
 
 /** Trackers criados antes dos tipos de medida (S13) não têm `metric`/`askTime`. */
@@ -398,8 +430,13 @@ function readPreview(): AtlasSnapshot {
 			...defaults,
 			...stored,
 			categories: (stored.categories ?? defaults.categories).map(normalizeCategory),
+			habits: (stored.habits ?? defaults.habits).map(normalizeHabit),
 			trackers: (stored.trackers ?? defaults.trackers).map(normalizeTracker),
-			preferences: { ...defaults.preferences, ...stored.preferences },
+			preferences: {
+				...defaults.preferences,
+				...stored.preferences,
+				firstDayOfWeek: normalizeFirstDayOfWeek(stored.preferences?.firstDayOfWeek)
+			},
 			experience: { ...defaults.experience, ...stored.experience },
 			lifeForce: { ...defaults.lifeForce, ...stored.lifeForce },
 			finance: { ...defaults.finance, ...stored.finance },
@@ -526,7 +563,11 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	const dailyGoal = normalizeDailyGoal(sharedMap.dailyGoal ?? settingsMap.dailyGoal ?? defaults.dailyGoal);
 	const totalXp = Object.values(knownCounters[XP_COUNTER_KEY] ?? {}).reduce((sum, value) => sum + value, 0);
 	const experience = { totalXp } as ExperienceState;
-	const preferences = { ...defaults.preferences, ...(settingsMap.preferences ?? {}) };
+	const preferences = {
+		...defaults.preferences,
+		...(settingsMap.preferences ?? {}),
+		firstDayOfWeek: normalizeFirstDayOfWeek(settingsMap.preferences?.firstDayOfWeek)
+	};
 	// Payload corrompido (v0.3.0 deslocava as colunas: o `payload` recebia o
 	// carimbo) vira linha descartada, nunca número/objeto sem `id` no snapshot —
 	// senão a gravação seguinte manda `undefined` e o `db_batch` recusa. A linha
@@ -551,7 +592,7 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	const snapshot = {
 		categories: payloadList<Category>(categories).map(normalizeCategory),
 		transactions: payloadList<Transaction>(transactions),
-		habits: payloadList<Habit>(habits),
+		habits: payloadList<Habit>(habits).map((item) => normalizeHabit(item)),
 		habitLogs: payloadList<HabitLog>(habitLogs),
 		trackers: payloadList<Tracker>(trackers).map((item) => normalizeTracker(item)),
 		trackerEntries: payloadList<TrackerEntry>(trackerEntries),

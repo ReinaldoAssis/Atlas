@@ -353,6 +353,26 @@ export const migrations: Migration[] = [
 				await ctx.execute(`UPDATE ${table} SET updated_at = $1 WHERE updated_at = 0`, [stamp]);
 			}
 		}
+	},
+	{
+		version: 7,
+		name: 'trash-events',
+		// Lixeira global (S15): índice local de exclusões agrupadas. Não entra no
+		// sync; os tombstones das tabelas continuam sendo a fonte de verdade.
+		run: async (ctx) => {
+			await ctx.execute(`CREATE TABLE IF NOT EXISTS trash_events (
+				id TEXT PRIMARY KEY,
+				module TEXT NOT NULL,
+				kind TEXT NOT NULL,
+				entity_id TEXT NOT NULL,
+				label TEXT NOT NULL DEFAULT '',
+				payload TEXT NOT NULL,
+				deleted_at INTEGER NOT NULL,
+				device_id TEXT
+			)`);
+			await ctx.execute('CREATE INDEX IF NOT EXISTS trash_events_by_deleted ON trash_events(deleted_at)');
+			await ctx.execute('CREATE INDEX IF NOT EXISTS trash_events_by_module ON trash_events(module)');
+		}
 	}
 ];
 

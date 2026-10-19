@@ -10,6 +10,9 @@ export type GraphSourceKind =
 	| 'timeHours'
 	| 'financeSavings'
 	| 'financeLimit'
+	| 'trackerLast'
+	| 'trackerAverage'
+	| 'trackerGoal'
 	| 'manual';
 
 /** Janela do valor acumulado medido por uma aresta. */

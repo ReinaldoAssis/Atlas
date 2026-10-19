@@ -11,6 +11,7 @@ import {
 	localDate,
 	money,
 	normalizeDailyGoal,
+	normalizeFirstDayOfWeek,
 	nextBooleanLog,
 	positiveValueOf,
 	weekStartDate,
@@ -78,6 +79,19 @@ describe('weekStartDate', () => {
 	it('mantém a própria segunda-feira', () => {
 		expect(weekStartDate('2026-10-12')).toBe('2026-10-12');
 	});
+
+	it('respeita domingo como primeiro dia', () => {
+		// 2026-10-15 é quinta; o domingo anterior é 2026-10-11.
+		expect(weekStartDate('2026-10-15', 'sun')).toBe('2026-10-11');
+		expect(weekStartDate('2026-10-11', 'sun')).toBe('2026-10-11');
+	});
+
+	it('normaliza o primeiro dia para mon/sun', () => {
+		expect(normalizeFirstDayOfWeek('sun')).toBe('sun');
+		expect(normalizeFirstDayOfWeek('mon')).toBe('mon');
+		expect(normalizeFirstDayOfWeek('segunda')).toBe('mon');
+		expect(normalizeFirstDayOfWeek(undefined)).toBe('mon');
+	});
 });
 
 describe('localDate', () => {
@@ -115,6 +129,13 @@ describe('didMeetTarget', () => {
 		const habit = dailyBooleanHabit({ metric: 'count', unit: 'ml', target: 2000 });
 		expect(didMeetTarget(habit, 1999)).toBe(false);
 		expect(didMeetTarget(habit, 2000)).toBe(true);
+	});
+
+	it('com "menos é melhor", a meta vira teto', () => {
+		const habit = dailyBooleanHabit({ metric: 'duration', unit: 'min', target: 60, targetDirection: 'down' });
+		expect(didMeetTarget(habit, 61)).toBe(false);
+		expect(didMeetTarget(habit, 60)).toBe(true);
+		expect(didMeetTarget(habit, 0)).toBe(true);
 	});
 });
 
@@ -183,6 +204,40 @@ describe('currentStreak', () => {
 		const habit = dailyBooleanHabit({ active: false });
 		expect(currentStreak(habit, [log(habit.id, today)], today)).toBe(0);
 	});
+
+	it('conta semanas consecutivas para hábito semanal', () => {
+		const habit = dailyBooleanHabit({ metric: 'weekly', target: 3, scheduledDays: [] });
+		const logs = [
+			log(habit.id, '2026-10-12', 3),
+			log(habit.id, '2026-10-05', 4),
+			log(habit.id, '2026-09-28', 3)
+		];
+		expect(currentStreak(habit, logs, today)).toBe(3);
+	});
+
+	it('semana atual em aberto não quebra a sequência', () => {
+		const habit = dailyBooleanHabit({ metric: 'weekly', target: 3, scheduledDays: [] });
+		const logs = [log(habit.id, '2026-10-05', 3), log(habit.id, '2026-09-28', 3)];
+		expect(currentStreak(habit, logs, today)).toBe(2);
+	});
+
+	it('semana atual abaixo da meta ainda não quebra', () => {
+		const habit = dailyBooleanHabit({ metric: 'weekly', target: 3, scheduledDays: [] });
+		const logs = [log(habit.id, '2026-10-12', 1), log(habit.id, '2026-10-05', 3)];
+		expect(currentStreak(habit, logs, today)).toBe(1);
+	});
+
+	it('pula semanas em pausa no hábito semanal', () => {
+		const habit = dailyBooleanHabit({ metric: 'weekly', target: 3, scheduledDays: [] });
+		const logs = [log(habit.id, '2026-10-05', 3), log(habit.id, '2026-09-21', 3)];
+		expect(currentStreak(habit, logs, today, [{ start: '2026-09-28', end: '2026-10-04' }])).toBe(2);
+	});
+
+	it('respeita domingo como início da semana no semanal', () => {
+		const habit = dailyBooleanHabit({ metric: 'weekly', target: 3, scheduledDays: [] });
+		const logs = [log(habit.id, '2026-10-11', 3), log(habit.id, '2026-10-04', 3)];
+		expect(currentStreak(habit, logs, today, [], 'sun')).toBe(2);
+	});
 });
 
 describe('money', () => {
@@ -220,6 +275,10 @@ describe('createEmptySnapshot', () => {
 		expect(normalizeDailyGoal(7.6)).toBe(8);
 		expect(normalizeDailyGoal(99)).toBe(12);
 		expect(normalizeDailyGoal('5')).toBe(5);
+	});
+
+	it('a semana começa na segunda por padrão', () => {
+		expect(createEmptySnapshot().preferences.firstDayOfWeek).toBe('mon');
 	});
 });
 
