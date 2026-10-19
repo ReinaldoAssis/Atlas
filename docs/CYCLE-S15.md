@@ -34,7 +34,7 @@ hábitos/trackers), ícone novo, PDF nativo, i18n em inglês, assinatura Apple.
 
 | ID | Problema | Decisão |
 |---|---|---|
-| A1 | Pintura por arrasto instável; long press de 400 ms longo demais | Toque curto pinta uma célula. **250 ms** arma a pintura; o arrasto seguinte pinta. O toque longo de **650 ms** é reservado para a bolha. |
+| A1 | Pintura por arrasto instável; long press de 400 ms longo demais | Toque curto **sem arrasto** cria, substitui ou desfaz a célula. **Qualquer arrasto navega.** **250 ms** de hold em célula **vazia** cria o bloco e entra em modo pintar (navegação desligada); hold em célula preenchida **não pinta** e o **650 ms** abre a bolha/categoria. |
 | A2 | Long press em célula vazia abre categoria | Célula sem bloco **não abre nada**. Pintar continua sendo o gesto dela. |
 | A2b | Long press em bloco sem nota | Abre o **sheet da categoria** do bloco (comportamento preservado). |
 | A3 | Soltar o dedo depois de abrir a bolha remove o bloco | A abertura da bolha consome o gesto: `pointerup`/`touchend` não executa remoção. Remover bloco só pelo editor/menu. |
@@ -42,9 +42,11 @@ hábitos/trackers), ícone novo, PDF nativo, i18n em inglês, assinatura Apple.
 | A5 | Preview mostra a tag `tempo …` | O preview remove a referência `tempo`/`time` do texto; o chip continua existindo. |
 | A6 | Preview ignora quebras de linha | Preservar parágrafos e quebras simples no resumo da bolha e no preview. |
 
-**Fluxo do Tempo (mobile):** toque curto pinta → 250 ms arma pintura →
-650 ms abre bolha (só se houver nota) → bolha fica aberta → tocar na nota abre
-o **editor em overlay sobre o Tempo** → fechar volta ao planejador.
+**Fluxo do Tempo (mobile):** toque curto cria/substitui/desfaz →
+qualquer arrasto navega → **250 ms de hold em célula vazia** cria o bloco e
+entra em modo pintar → **650 ms** em célula preenchida abre bolha (só se houver
+nota) ou a categoria → bolha fica aberta → tocar na nota abre o **editor em
+overlay sobre o Tempo** → fechar volta ao planejador.
 
 **Bolha:** lista todas as notas do bloco, com rolagem se necessário, ancorada
 no bloco. Não é mais um preview de uma nota só.
@@ -185,16 +187,15 @@ de notas).
 - Preview sem a tag `tempo` e com quebras de linha.
 - Testes de gesto (unidade onde possível) + verificação manual no device.
 
-**Como ficou:** long press de 250 ms arma a pintura e 650 ms abre a bolha;
-célula vazia não abre nada e bloco sem nota abre a categoria. Soltar depois de
-armar não pinta nem apaga — só o **toque rápido** alterna a célula (mesma
-categoria desfaz). O **hold-drag sempre pinta** (a borracha `x` apaga) e o
-drift do dedo não cancela o hold: os movimentos curtos seguram o scroll nativo
-até o arrasto passar do slop e virar navegação. A bolha fixa (`TimeBubble` com
-`sticky`) não fecha no `pointerup` e só some com clique fora ou Esc. O editor é
-o `NoteEditor` montado por cima do Tempo, com morph por `clip-path` a partir da
-linha clicada; fechar volta ao planejador. O preview da bolha usa `notePreview`
-(remove `tempo`/`time`, mantém até 3 linhas).
+**Como ficou:** toque curto sem arrasto alterna a célula (cria, substitui ou
+desfaz — só ele apaga). **Qualquer arrasto navega.** Hold de 250 ms em célula
+**vazia** cria o bloco e entra em modo pintar, desligando a navegação; hold em
+célula **preenchida** não pinta e 650 ms abrem a bolha (com nota) ou a categoria
+(sem nota). Soltar depois do hold não pinta nem apaga. A bolha fixa
+(`TimeBubble` com `sticky`) não fecha no `pointerup` e só some com clique fora
+ou Esc. O editor é o `NoteEditor` montado por cima do Tempo, com morph por
+`clip-path` a partir da linha clicada; fechar volta ao planejador. O preview da
+bolha usa `notePreview` (remove `tempo`/`time`, mantém até 3 linhas).
 
 **Depende de:** E0 (para `lastMode` na nota). **Verificação pendente:** toque
 real no iPhone (timings, bolha e morph).

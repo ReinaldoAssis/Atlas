@@ -547,7 +547,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		x: number;
 		y: number;
 		cell: { day: number; slot: number };
-		armed: boolean;
+		/** Hold já aconteceu: soltar não pode virar toque curto. */
+		held: boolean;
 		painting: boolean;
 		navigating: boolean;
 	} | null = null;
@@ -3084,16 +3085,17 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	/**
-	 * Toque no planejador (mobile): toque curto pinta uma célula; segurar
-	 * **250 ms** arma a pintura e o arrasto seguinte pinta; **650 ms** parado
-	 * abre a bolha de notas ou a categoria. Antes de armar, só um arrasto além
-	 * do slop vira navegação — o drift do dedo não pode roubar o hold.
+	 * Toque no planejador (mobile):
+	 * - toque curto, sem arrasto: cria, substitui ou desfaz a célula;
+	 * - qualquer arrasto: navegação;
+	 * - hold em célula vazia: cria o bloco e entra em modo pintar (o arrasto
+	 *   seguinte pinta e a navegação fica desligada);
+	 * - hold em célula preenchida: 650 ms abre a bolha/categoria.
 	 *
-	 * O `preventDefault` nos movimentos curtos é o que impede o scroll nativo
-	 * de começar antes de o hold armar; sem ele, o navegador já está rolando
-	 * quando a pintura começa e o gesto vira scroll.
+	 * Segurar em célula preenchida **não** pinta: o gesto pertence à bolha.
+	 * Soltar depois do hold também não pode cair no toque curto.
 	 */
-	const TIME_NAV_SLOP = 14;
+	const TIME_TOUCH_SLOP = 8;
 
 	function beginTimeTouch(event: TouchEvent) {
 		if (!snapshot || event.touches.length !== 1) return;
@@ -3102,11 +3104,22 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		if (!cell) return;
 		clearTimeTouchTimers();
 		cancelAutoDwell();
-		timeTouch = { x: touch.clientX, y: touch.clientY, cell, armed: false, painting: false, navigating: false };
+		timeTouch = { x: touch.clientX, y: touch.clientY, cell, held: false, painting: false, navigating: false };
 		timeTouchArmTimer = setTimeout(() => {
 			if (!timeTouch || timeTouch.navigating || timeTouch.painting) return;
-			timeTouch.armed = true;
-			vibrate(8);
+			const current = timeTouch;
+			current.held = true;
+			const existing = findTimeBlock(addDays(timeRangeStart, current.cell.day), slotToTime(current.cell.slot));
+			if (existing || timeSelected === 'x') {
+				// Preenchida: só segura; a bolha/categoria abre aos 650 ms.
+				vibrate(8);
+				return;
+			}
+			// Vazia: cria o bloco agora e troca para pintura.
+			current.painting = true;
+			if (timeTouchDialogTimer) clearTimeout(timeTouchDialogTimer);
+			timeTouchDialogTimer = undefined;
+			startTimePaint(current.cell, false);
 		}, 250);
 		timeTouchDialogTimer = setTimeout(() => {
 			if (!timeTouch || timeTouch.navigating || timeTouch.painting) return;
@@ -3128,25 +3141,10 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			return;
 		}
 		if (timeTouch.navigating) return;
-		if (timeTouch.armed && distance > 8) {
-			timeTouch.painting = true;
-			if (timeTouchDialogTimer) clearTimeout(timeTouchDialogTimer);
-			timeTouchDialogTimer = undefined;
-			startTimePaint(timeTouch.cell, false);
-			if (event.cancelable) event.preventDefault();
-			const cell = timeCellAt(touch.clientX, touch.clientY);
-			if (cell) applyTimePaint(cell.day, cell.slot);
-			return;
-		}
-		if (!timeTouch.armed) {
-			if (distance > TIME_NAV_SLOP) {
-				// Arrasto claro antes de armar: navegação nativa.
-				timeTouch.navigating = true;
-				clearTimeTouchTimers();
-			} else if (event.cancelable) {
-				// Segura o scroll nativo durante a janela do hold.
-				event.preventDefault();
-			}
+		if (distance > TIME_TOUCH_SLOP) {
+			// Qualquer arrasto fora do modo pintar é navegação nativa.
+			timeTouch.navigating = true;
+			clearTimeTouchTimers();
 		}
 	}
 
@@ -3159,9 +3157,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			void finishTimePaint();
 			return;
 		}
-		if (current.navigating || current.armed) return;
-		// Só o toque rápido pinta/desfaz uma célula. Segurar e soltar não age:
-		// o gesto longo pertence à bolha (ou à categoria), nunca ao delete.
+		if (current.navigating || current.held) return;
+		// Só o toque rápido cria, substitui ou desfaz uma célula.
 		startTimePaint(current.cell);
 		void finishTimePaint();
 	}

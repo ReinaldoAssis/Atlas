@@ -133,7 +133,10 @@ Framer Motion / Rive / After Effects e nos mandar o arquivo — a gente adapta o
 - **Sem drawer de notas.** O gesto de swipe up que abria a nota individual não
   existe mais.
 - A bolha do planejador é acionada por **long press de 650 ms** num bloco que
-  tenha nota; 250 ms armam pintura.
+  tenha nota. Hold de 250 ms em célula **vazia** cria o bloco e entra em modo
+  pintar; hold em célula preenchida não pinta.
+- Qualquer arrasto fora do modo pintar é navegação. Só o toque curto sem
+  arrasto cria, substitui ou desfaz uma célula.
 - Ela **não fecha quando o dedo solta**: permanece até clique/toque fora, troca
   de contexto ou fechamento explícito.
 - Conteúdo: todas as notas do bloco (título + trecho), com rolagem quando
