@@ -186,11 +186,15 @@ de notas).
 - Testes de gesto (unidade onde possível) + verificação manual no device.
 
 **Como ficou:** long press de 250 ms arma a pintura e 650 ms abre a bolha;
-célula vazia não abre nada e bloco sem nota abre a categoria. A bolha fixa
-(`TimeBubble` com `sticky`) não fecha no `pointerup` e só some com clique fora
-ou Esc. O editor é o `NoteEditor` montado por cima do Tempo, com morph por
-`clip-path` a partir da linha clicada; fechar volta ao planejador. O preview da
-bolha usa `notePreview` (remove `tempo`/`time`, mantém até 3 linhas).
+célula vazia não abre nada e bloco sem nota abre a categoria. Soltar depois de
+armar não pinta nem apaga — só o **toque rápido** alterna a célula (mesma
+categoria desfaz). O **hold-drag sempre pinta** (a borracha `x` apaga) e o
+drift do dedo não cancela o hold: os movimentos curtos seguram o scroll nativo
+até o arrasto passar do slop e virar navegação. A bolha fixa (`TimeBubble` com
+`sticky`) não fecha no `pointerup` e só some com clique fora ou Esc. O editor é
+o `NoteEditor` montado por cima do Tempo, com morph por `clip-path` a partir da
+linha clicada; fechar volta ao planejador. O preview da bolha usa `notePreview`
+(remove `tempo`/`time`, mantém até 3 linhas).
 
 **Depende de:** E0 (para `lastMode` na nota). **Verificação pendente:** toque
 real no iPhone (timings, bolha e morph).
