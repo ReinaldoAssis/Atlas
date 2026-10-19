@@ -1,6 +1,6 @@
 # Atlas — Ciclo S15: rodada de correções e polimento
 
-> **Estado:** alinhado em 18/10/2026 · **E0–E4 implementados; E5–E8 pendentes**.
+> **Estado:** alinhado em 18/10/2026 · **E0–E5 implementados; E6–E8 pendentes**.
 > Este documento é a fonte das decisões do ciclo. Se conflitar com
 > `ROADMAP.md`, vale este arquivo para o escopo do S15.
 >
@@ -238,7 +238,7 @@ também dispara a celebração da chama.
 **Depende de:** E0. **Verificação pendente:** toque nos tiles e virada de
 semana no device.
 
-### E5 — Finanças
+### E5 — Finanças ✅
 
 - "Limpar lançamentos" condicionado ao modo teste.
 - Lixeira no sheet de categoria + armamento de 5 s + exclusão em grupo.
@@ -246,6 +246,19 @@ semana no device.
 - `limitMode`, UI de meta, saturação em 100% + badge.
 - Barra de budget fora de card no topo.
 - Testes de budget, meta e exclusão/restauração.
+
+**Como ficou:** as regras puras saíram para `src/lib/finance.ts`
+(`transactionsInMonth`, `amountForCategory`, `budgetOverview`,
+`categoryLimitStatus`), com testes em `finance.test.ts`. "Limpar lançamentos"
+só aparece no modo teste. O sheet de categoria ganhou o seletor
+Limite/Meta, nome de 40 caracteres (card com 2 linhas e `title`), e o botão de
+excluir — com lançamentos ele arma por 5 s com outline animado e o segundo
+toque leva categoria + lançamentos para a lixeira global (undo pelo toast).
+Categoria meta satura a barra em 100%, mostra `+X% além da meta` e celebra a
+primeira vez que a meta é atingida, sem punir o excedente. O budget do mês
+(soma dos limites das categorias de saída, incluindo metas) virou uma barra
+fora de card no topo, no estilo da barra de XP. `financeCategoryTables` entrou
+em uso e ganhou teste de grupo.
 
 **Depende de:** E0, E1.
 

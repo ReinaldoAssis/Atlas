@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, tick, untrack } from 'svelte';
+	import { onMount, tick, untrack, onDestroy } from 'svelte';
 	import { isTauri } from '@tauri-apps/api/core';
 	import {
 		Archive, ArchiveRestore, CalendarDays, Check, ChevronLeft,
@@ -9,9 +9,15 @@
 	import {
 		HABIT_BOOLEAN_LABELS, booleanLabelOf, currentStreak, dateOffset, didMeetTarget, formatMinutes, habitLogId, habitProgress, id, localDate, money, nextBooleanLog, normalizeDailyGoal, normalizeFirstDayOfWeek, positiveValueOf, remapWeeklyLogs, weekStartDate, WEEK_MAX,
 		TIME_SLOT_START_HOUR, TIME_SLOT_COUNT, TIME_SLOT_MINUTES,
-		experienceProgress, type AppPreferences, type AtlasSnapshot, type Category, type Habit, type HabitLog,
+		experienceProgress, type AppPreferences, type AtlasSnapshot, type Category, type CategoryLimitMode, type Habit, type HabitLog,
 		type NavigationKey, type TimeBlock, type Tracker, type TrackerEntry, type Transaction
 	} from '#lib/atlas';
+	import {
+		amountForCategory,
+		budgetOverview,
+		categoryLimitStatus,
+		transactionsInMonth
+	} from '#lib/finance';
 	import {
 		exportBackupV2,
 		importBackupV2,
@@ -61,6 +67,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	} from '#lib/trash-store';
 	import type { TrashEvent, TrashEventInput } from '#lib/trash';
 	import {
+		financeCategoryTables,
 		graphEdgeTables,
 		graphNodeTables,
 		habitLogTables,
@@ -335,7 +342,12 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let financeGoal = $derived(snapshot?.finance.savingsGoalMinor ?? 0);
 	let financeGoalPercent = $derived(financeGoal > 0 ? Math.max(0, Math.min(1, financeBalance / financeGoal)) : 0);
 	let financeExpenseCategories = $derived(financeCategories.filter((item) => item.kind !== 'in'));
-	let financeGreenCount = $derived(financeExpenseCategories.filter((item) => (item.limitMinor ?? 0) > 0 && categoryTotal(item.id) <= (item.limitMinor ?? 0)).length);
+	let financeGreenCount = $derived(financeExpenseCategories.filter((item) => {
+		const status = categoryLimitStatus(item, categoryTotal(item.id));
+		if (status.limitMinor <= 0) return false;
+		return status.mode === 'goal' ? status.reached : !status.over;
+	}).length);
+	let financeBudget = $derived(budgetOverview(financeCategories, financeMonthTransactions));
 	let financeRecent = $derived([...(snapshot?.transactions ?? [])].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6));
 	let financeMonthLabel = $derived(new Date().toLocaleDateString('pt-BR', { month: 'long' }).replace(/^./, (character) => character.toUpperCase()));
 	let financeEntryCategories = $derived(financeCategories.filter((item) => (financeEntry.type === 'income' ? item.kind === 'in' : item.kind !== 'in')));
@@ -506,7 +518,16 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let habitCelebration = $state<number | null>(null);
 	let effectsCanvas = $state<HTMLCanvasElement | null>(null);
 	let financeEntry = $state<{ open: boolean; type: 'income' | 'expense'; categoryId: string; amountMinor: number; description: string }>({ open: false, type: 'expense', categoryId: '', amountMinor: 0, description: '' });
-	let financeCategoryForm = $state<{ open: boolean; id: string | null; type: 'income' | 'expense'; name: string; color: string; limitMinor: number; back: boolean }>({ open: false, id: null, type: 'expense', name: '', color: '#9cc8ff', limitMinor: 50000, back: false });
+	let financeCategoryForm = $state<{ open: boolean; id: string | null; type: 'income' | 'expense'; name: string; color: string; limitMinor: number; limitMode: CategoryLimitMode; back: boolean }>({ open: false, id: null, type: 'expense', name: '', color: '#9cc8ff', limitMinor: 50000, limitMode: 'limit', back: false });
+	/** Categoria com lançamentos só exclui depois de 5 s de armar. */
+	let financeDeleteArm = $state<'idle' | 'arming' | 'armed'>('idle');
+	let financeDeleteTimer: ReturnType<typeof setTimeout> | undefined;
+	let financeCategoryLinkedCount = $derived(
+		financeCategoryForm.id
+			? (snapshot?.transactions.filter((item) => item.categoryId === financeCategoryForm.id).length ?? 0)
+			: 0
+	);
+	onDestroy(() => clearTimeout(financeDeleteTimer));
 	let financeCelebration = $state<number | null>(null);
 	let timeSelected = $state('deep-work');
 	let timeScroll = $state<HTMLElement | null>(null);
@@ -1110,13 +1131,11 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	function monthTransactionsOf(data: AtlasSnapshot | null): Transaction[] {
 		if (!data) return [];
-		const now = new Date();
-		const prefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-		return data.transactions.filter((item) => item.date.startsWith(prefix));
+		return transactionsInMonth(data.transactions);
 	}
 
 	function categoryTotal(categoryId: string, data: AtlasSnapshot | null = snapshot): number {
-		return monthTransactionsOf(data).filter((item) => item.categoryId === categoryId).reduce((sum, item) => sum + item.amountMinor, 0);
+		return amountForCategory(monthTransactionsOf(data), categoryId);
 	}
 
 	function shortDay(date: string): string {
@@ -1204,16 +1223,27 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			vibrate(14);
 		}
 		const limit = category.limitMinor ?? 0;
+		const beforeStatus = categoryLimitStatus(category, previousSpent);
+		const afterStatus = categoryLimitStatus(category, categoryTotal(category.id));
 		const streakNow = snapshot?.finance.streak ?? previousStreak;
 		const streakMessage = `Sequência de ${streakNow} dias`;
-		if (kind === 'expense' && limit > 0) {
-			const beforeRatio = previousSpent / limit;
-			const afterRatio = categoryTotal(category.id) / limit;
-			if (beforeRatio <= 1 && afterRatio > 1) {
+		if (kind === 'expense' && limit > 0 && category.limitMode === 'goal') {
+			if (!beforeStatus.reached && afterStatus.reached) {
+				const beyond = afterStatus.percentBeyond > 0 ? ` · +${afterStatus.percentBeyond}% além da meta` : '';
+				setTimeout(() => toastMessage(`${category.name} bateu a meta${beyond}`), 500);
+				burstAt(x, y, 18, { up: true, color: category.color });
+				playTone(784, 0.18, 'triangle', 0.06, sound);
+				setTimeout(() => playTone(1047, 0.24, 'triangle', 0.06, sound), 90);
+				vibrate([10, 30, 10]);
+			} else if (streakNow > previousStreak) {
+				setTimeout(() => toastMessage(streakMessage), 500);
+			}
+		} else if (kind === 'expense' && limit > 0) {
+			if (beforeStatus.ratio <= 1 && afterStatus.ratio > 1) {
 				setTimeout(() => toastMessage(`${category.name} passou do limite`, { warning: true, undo: () => restoreFinance(undoJson) }), 500);
 				playTone(330, 0.25, 'triangle', 0.05, sound);
-			} else if (beforeRatio < 0.8 && afterRatio >= 0.8) {
-				setTimeout(() => toastMessage(`${category.name} em ${Math.round(afterRatio * 100)}% do limite`, { warning: true }), 500);
+			} else if (beforeStatus.ratio < 0.8 && afterStatus.ratio >= 0.8) {
+				setTimeout(() => toastMessage(`${category.name} em ${Math.round(afterStatus.ratio * 100)}% do limite`, { warning: true }), 500);
 			} else if (streakNow > previousStreak) {
 				setTimeout(() => toastMessage(streakMessage), 500);
 			}
@@ -1255,7 +1285,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	async function clearFinanceTransactions() {
-		if (!snapshot) return;
+		if (!snapshot || !testModeActive) return;
 		const transactions = [...snapshot.transactions];
 		const undoJson = JSON.stringify(snapshot);
 		const next = cloneSnapshot();
@@ -1281,7 +1311,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	function openFinanceCategory(back: boolean) {
 		financeEntry = { ...financeEntry, open: false };
-		financeCategoryForm = { open: true, id: null, type: back ? financeEntry.type : 'expense', name: '', color: FINANCE_COLORS[1], limitMinor: 50000, back };
+		resetFinanceDeleteArm();
+		financeCategoryForm = { open: true, id: null, type: back ? financeEntry.type : 'expense', name: '', color: FINANCE_COLORS[1], limitMinor: 50000, limitMode: 'limit', back };
 		playTone(380, 0.1, 'sine', 0.05, snapshot?.preferences.soundEnabled ?? true);
 	}
 
@@ -1301,6 +1332,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	/** Long press (mobile) / clique direito (desktop) no tile de categoria. */
 	function openFinanceCategoryEdit(category: Category) {
+		resetFinanceDeleteArm();
 		financeCategoryForm = {
 			open: true,
 			id: category.id,
@@ -1308,6 +1340,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			name: category.name,
 			color: category.color,
 			limitMinor: category.limitMinor ?? 50000,
+			limitMode: category.limitMode === 'goal' ? 'goal' : 'limit',
 			back: false
 		};
 		financeCatPressSuppress = true;
@@ -1346,6 +1379,83 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		playTone(420, 0.06, 'sine', 0.05, snapshot?.preferences.soundEnabled ?? true);
 	}
 
+	function closeFinanceCategoryForm() {
+		resetFinanceDeleteArm();
+		financeCategoryForm = { ...financeCategoryForm, open: false };
+	}
+
+	function resetFinanceDeleteArm() {
+		clearTimeout(financeDeleteTimer);
+		financeDeleteTimer = undefined;
+		financeDeleteArm = 'idle';
+	}
+
+	/**
+	 * Categoria com lançamentos exige 5 s de armar antes do segundo toque: o
+	 * outline preenche no tempo e o gesto não apaga histórico por engano.
+	 */
+	function armFinanceCategoryDelete() {
+		if (financeDeleteArm === 'armed') {
+			void deleteFinanceCategory();
+			return;
+		}
+		if (financeDeleteArm === 'arming') return;
+		if (financeCategoryLinkedCount === 0) {
+			void deleteFinanceCategory();
+			return;
+		}
+		const sound = snapshot?.preferences.soundEnabled ?? true;
+		financeDeleteArm = 'arming';
+		playTone(300, 0.1, 'sine', 0.05, sound);
+		pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 8);
+		financeDeleteTimer = setTimeout(() => {
+			financeDeleteTimer = undefined;
+			financeDeleteArm = 'armed';
+			playTone(520, 0.1, 'triangle', 0.05, sound);
+			pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 12);
+		}, 5000);
+	}
+
+	async function deleteFinanceCategory() {
+		if (!snapshot || !financeCategoryForm.id) return;
+		const target = financeCategoryForm.id;
+		const category = snapshot.categories.find((item) => item.id === target);
+		if (!category) return;
+		const transactions = snapshot.transactions.filter((item) => item.categoryId === target);
+		const undoJson = JSON.stringify(snapshot);
+		const sound = snapshot.preferences.soundEnabled;
+		const next = cloneSnapshot();
+		next.categories = next.categories.filter((item) => item.id !== target);
+		next.transactions = next.transactions.filter((item) => item.categoryId !== target);
+		closeFinanceCategoryForm();
+		await commit(next);
+		const trash = await recordTrash({
+			module: 'finance',
+			kind: 'category',
+			entityId: category.id,
+			label: category.name,
+			tables: financeCategoryTables(category, transactions)
+		});
+		playTone(200, 0.14, 'sine', 0.05, sound);
+		vibrate(10);
+		toastMessage(
+			transactions.length
+				? `Categoria e ${transactions.length} lançamento${transactions.length === 1 ? '' : 's'} excluídos.`
+				: 'Categoria excluída.',
+			{
+				undo: () => {
+					forgetQuietly(trash);
+					restoreFinance(undoJson);
+				}
+			}
+		);
+	}
+
+	function setFinanceLimitMode(limitMode: CategoryLimitMode) {
+		financeCategoryForm = { ...financeCategoryForm, limitMode };
+		playTone(limitMode === 'goal' ? 660 : 420, 0.06, 'sine', 0.05, snapshot?.preferences.soundEnabled ?? true);
+	}
+
 	function setFinanceLimit(minor: number) {
 		financeCategoryForm = { ...financeCategoryForm, limitMinor: minor };
 		playTone(520, 0.06, 'sine', 0.05, snapshot?.preferences.soundEnabled ?? true);
@@ -1382,6 +1492,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 				found.color = financeCategoryForm.color;
 				found.kind = isIncome ? 'in' : 'out';
 				found.limitMinor = isIncome ? undefined : financeCategoryForm.limitMinor;
+				found.limitMode = isIncome ? undefined : financeCategoryForm.limitMode;
 			}
 		} else {
 			const newId = id();
@@ -1389,12 +1500,14 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			next.categories.push({
 				id: newId, module: 'finance', name, color: financeCategoryForm.color, custom: true,
 				kind: isIncome ? 'in' : 'out',
-				limitMinor: isIncome ? undefined : financeCategoryForm.limitMinor
+				limitMinor: isIncome ? undefined : financeCategoryForm.limitMinor,
+				limitMode: isIncome ? undefined : financeCategoryForm.limitMode
 			});
 			if (financeCategoryForm.back) financeEntry = { ...financeEntry, open: true, type: isIncome ? 'income' : 'expense', categoryId: newId };
 		}
 		const targetId = editingId ?? createdId ?? '';
 		const sound = snapshot.preferences.soundEnabled;
+		resetFinanceDeleteArm();
 		financeCategoryForm = { ...financeCategoryForm, open: false, id: null, name: '', back: false };
 		await commit(next);
 		if (editingId) {
@@ -3855,6 +3968,22 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					</section>
 				{:else if activeTab === 'finance'}
 					<section class="fin-prototype" aria-label="Finanças">
+						<div class:over={financeBudget.over} class="fin-budget">
+							<div class="fin-budget-head">
+								<span>Orçamento do mês</span>
+								<small>{money(financeBudget.spentMinor, currency())} de {money(financeBudget.allocatedMinor, currency())}</small>
+							</div>
+							<div class="fin-budget-track" role="progressbar" aria-label="Orçamento do mês" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(financeBudget.ratio * 100)}><i style={`width:${financeBudget.ratio * 100}%`}></i></div>
+							<small class="fin-budget-note">
+								{#if financeBudget.allocatedMinor === 0}
+									Sem orçamento definido
+								{:else if financeBudget.over}
+									{money(-financeBudget.remainingMinor, currency())} acima
+								{:else}
+									restam {money(financeBudget.remainingMinor, currency())}
+								{/if}
+							</small>
+						</div>
 						<div class="fin-top">
 							<h1>{financeMonthLabel}</h1>
 						</div>
@@ -3879,17 +4008,26 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 							{#each financeCategories as category}
 								{@const isIncome = category.kind === 'in'}
 								{@const total = categoryTotal(category.id)}
-								{@const limit = category.limitMinor ?? 0}
-								{@const over = limit > 0 && total > limit}
+								{@const status = categoryLimitStatus(category, total)}
 								{#if isIncome}
 									<button class="fin-card fin-cat-card in" data-fin-cat={category.id} style={`--cc:${category.color};--cc-soft:${hexToRgba(category.color, 0.26)}`} onclick={() => { if (!financeCatPressSuppress) openFinanceEntry('income', category.id); }} onpointerdown={(event) => startFinanceCatPress(event, category)} onpointermove={moveFinanceCatPress} onpointerup={cancelFinanceCatPress} onpointercancel={cancelFinanceCatPress} oncontextmenu={(event) => openFinanceCategoryContext(event, category)}>
-										<b><i></i>{category.name}</b>
+										<b title={category.name}><i></i><span>{category.name}</span></b>
 										<span><span class="v">+{money(total, currency())}</span></span>
 									</button>
 								{:else}
-									<button class:over class="fin-card fin-cat-card" data-fin-cat={category.id} style={`--cc:${category.color};--cc-soft:${hexToRgba(category.color, 0.26)};--p:${limit > 0 ? Math.min(1, total / limit) : 0}`} onclick={() => { if (!financeCatPressSuppress) openFinanceEntry('expense', category.id); }} onpointerdown={(event) => startFinanceCatPress(event, category)} onpointermove={moveFinanceCatPress} onpointerup={cancelFinanceCatPress} onpointercancel={cancelFinanceCatPress} oncontextmenu={(event) => openFinanceCategoryContext(event, category)}>
-										<b><i></i>{category.name}</b>
-										<span><span class="v">{money(total, currency())}</span>{#if limit > 0}<br /><span class="sm">{over ? `+${money(total - limit, currency())} acima` : `restam ${money(limit - total, currency())}`}</span>{/if}</span>
+									<button class:over={status.mode === 'limit' && status.over} class:goal-mode={status.mode === 'goal'} class:goal-hit={status.mode === 'goal' && status.reached} class="fin-card fin-cat-card" data-fin-cat={category.id} style={`--cc:${category.color};--cc-soft:${hexToRgba(category.color, 0.26)};--p:${status.displayRatio}`} onclick={() => { if (!financeCatPressSuppress) openFinanceEntry('expense', category.id); }} onpointerdown={(event) => startFinanceCatPress(event, category)} onpointermove={moveFinanceCatPress} onpointerup={cancelFinanceCatPress} onpointercancel={cancelFinanceCatPress} oncontextmenu={(event) => openFinanceCategoryContext(event, category)}>
+										<b title={category.name}><i></i><span>{category.name}</span></b>
+										<span>
+											<span class="v">{money(total, currency())}</span>
+											{#if status.limitMinor > 0}
+												<br />
+												{#if status.mode === 'goal'}
+													<span class:goal-badge={status.reached} class="sm">{status.reached ? (status.percentBeyond > 0 ? `+${status.percentBeyond}% além da meta` : 'meta batida') : `faltam ${money(status.remainingMinor, currency())}`}</span>
+												{:else}
+													<span class="sm">{status.over ? `+${money(total - status.limitMinor, currency())} acima` : `restam ${money(status.remainingMinor, currency())}`}</span>
+												{/if}
+											{/if}
+										</span>
 									</button>
 								{/if}
 							{/each}
@@ -3911,7 +4049,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 								<div class="fin-if-empty">Nenhum lançamento ainda.</div>
 							{/if}
 						</div>
-						<div class="fin-dev"><button onclick={clearFinanceTransactions}>Limpar lançamentos</button></div>
+						{#if testModeActive}
+							<div class="fin-dev"><button onclick={clearFinanceTransactions}>Limpar lançamentos</button></div>
+						{/if}
 					</section>
 				{:else if activeTab === 'habits'}
 					{#if snapshot}
@@ -4346,21 +4486,26 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	{/if}
 
 	{#if financeCategoryForm.open}
-		<div class="fin-overlay" role="presentation" onpointerdown={onFinOverlayPointerDown} onclick={(event) => onFinOverlayClick(event, () => (financeCategoryForm = { ...financeCategoryForm, open: false }))}>
+		<div class="fin-overlay" role="presentation" onpointerdown={onFinOverlayPointerDown} onclick={(event) => onFinOverlayClick(event, closeFinanceCategoryForm)}>
 			<div class="fin-sheet" role="dialog" aria-modal="true" aria-label={financeCategoryForm.id ? 'Editar categoria' : 'Nova categoria'}>
 				<div class="fin-grip"></div>
 				{#if !financeCategoryForm.id}
 					<div class="fin-seg"><button class:on={financeCategoryForm.type === 'expense'} onclick={() => setFinanceCategoryType('expense')}>Despesa</button><button class:on={financeCategoryForm.type === 'income'} onclick={() => setFinanceCategoryType('income')}>Receita</button></div>
 				{/if}
-				<input class="fin-inp" placeholder="Nome da categoria" maxlength="20" bind:value={financeCategoryForm.name} />
+				<input class="fin-inp" placeholder="Nome da categoria" maxlength="40" title={financeCategoryForm.name} bind:value={financeCategoryForm.name} />
 				<div class="fin-sw">{#each FINANCE_COLORS as color}<button class:on={financeCategoryForm.color === color} style={`--cc:${color}`} aria-label="Cor" onclick={() => (financeCategoryForm = { ...financeCategoryForm, color })}></button>{/each}</div>
 				{#if financeCategoryForm.type === 'expense'}
-					<div class="fin-lim">
+					<div class="fin-seg fin-mode" role="group" aria-label="Tipo de limite">
+						<button class:on={financeCategoryForm.limitMode === 'limit'} onclick={() => setFinanceLimitMode('limit')}>Limite</button>
+						<button class="goal" class:on={financeCategoryForm.limitMode === 'goal'} onclick={() => setFinanceLimitMode('goal')}>Meta</button>
+					</div>
+					<small class="fin-mode-hint">{financeCategoryForm.limitMode === 'goal' ? 'Atingir ou passar é positivo.' : 'Passar do limite vira aviso.'}</small>
+					<div class:goal-mode={financeCategoryForm.limitMode === 'goal'} class="fin-lim">
 						<span>R$</span>
 						<input
 							class="fin-lim-input"
 							inputmode="decimal"
-							aria-label="Limite mensal"
+							aria-label={financeCategoryForm.limitMode === 'goal' ? 'Meta mensal' : 'Limite mensal'}
 							value={moneyInput(financeCategoryForm.limitMinor)}
 							onchange={handleFinanceLimitInput}
 							onkeydown={(event) => {
@@ -4369,10 +4514,29 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 						/>
 						<span>/ mês</span>
 					</div>
-					<input type="range" min="0" max={Math.max(3000, financeCategoryForm.limitMinor / 100)} step="50" aria-label="Limite mensal (slider)" value={financeCategoryForm.limitMinor / 100} style={`--f:${financeCategoryForm.limitMinor / 100 / Math.max(3000, financeCategoryForm.limitMinor / 100) * 100}%`} oninput={(event) => setFinanceLimit(Number(event.currentTarget.value) * 100)} />
+					<input type="range" min="0" max={Math.max(3000, financeCategoryForm.limitMinor / 100)} step="50" aria-label={financeCategoryForm.limitMode === 'goal' ? 'Meta mensal (slider)' : 'Limite mensal (slider)'} value={financeCategoryForm.limitMinor / 100} style={`--f:${financeCategoryForm.limitMinor / 100 / Math.max(3000, financeCategoryForm.limitMinor / 100) * 100}%`} oninput={(event) => setFinanceLimit(Number(event.currentTarget.value) * 100)} />
 					<div class="fin-chips" style="justify-content:center;margin-top:12px">{#each [200, 500, 1000, 2000] as value}<button class="fin-chip" onclick={() => setFinanceLimit(value * 100)}>{money(value * 100, currency())}</button>{/each}</div>
 				{/if}
 				<button class="fin-btn" onclick={createFinanceCategory}>{financeCategoryForm.id ? 'Salvar' : 'Criar categoria'}</button>
+				{#if financeCategoryForm.id}
+					<button
+						type="button"
+						class="fin-btn fin-del"
+						class:arming={financeDeleteArm === 'arming'}
+						class:armed={financeDeleteArm === 'armed'}
+						onclick={armFinanceCategoryDelete}
+					>
+						{#if financeCategoryLinkedCount === 0}
+							Excluir categoria
+						{:else if financeDeleteArm === 'arming'}
+							Excluir em 5 s…
+						{:else if financeDeleteArm === 'armed'}
+							Excluir categoria e {financeCategoryLinkedCount} lançamento{financeCategoryLinkedCount === 1 ? '' : 's'}
+						{:else}
+							Excluir categoria ({financeCategoryLinkedCount} lançamento{financeCategoryLinkedCount === 1 ? '' : 's'})
+						{/if}
+					</button>
+				{/if}
 			</div>
 		</div>
 	{/if}

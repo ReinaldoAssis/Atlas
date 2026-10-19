@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Category, Habit, HabitLog, TimeBlock, Tracker, TrackerEntry, Transaction } from './atlas';
 import type { GraphEdge, GraphNode } from './graph';
 import {
+	financeCategoryTables,
 	graphEdgeTables,
 	graphNodeTables,
 	habitLogTables,
@@ -81,6 +82,17 @@ describe('trash-build', () => {
 		expect(table.rows[0][0]).toBe('t1');
 		expect(table.rows[0][1]).toBe('2026-10-17');
 		expect(JSON.parse(table.rows[0][2])).toMatchObject({ id: 't1', description: 'Mercado' });
+	});
+
+	it('agrupa categoria financeira e lançamentos vinculados', () => {
+		const tables = financeCategoryTables(category, [transaction]);
+		expect(tables.map((table) => table.table)).toEqual(['categories', 'transactions']);
+		expect(tables[0].rows[0]).toEqual(['ali', 'finance', JSON.stringify(category)]);
+		expect(tables[1].rows[0]).toEqual(['t1', '2026-10-17', JSON.stringify(transaction)]);
+	});
+
+	it('omite lançamentos quando a categoria está vazia', () => {
+		expect(financeCategoryTables(category).map((table) => table.table)).toEqual(['categories']);
 	});
 
 	it('agrupa hábito e registros', () => {
