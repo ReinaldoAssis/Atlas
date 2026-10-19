@@ -3,7 +3,7 @@
 	import { isTauri } from '@tauri-apps/api/core';
 	import {
 		Archive, ArchiveRestore, CalendarDays, Check, ChevronLeft,
-		Flame, FlaskConical, History, LayoutDashboard, Menu, MoreHorizontal, NotebookPen, Pencil, Plus, Route, Settings2, Target,
+		Flame, FlaskConical, History, LayoutDashboard, Menu, MoreHorizontal, NotebookPen, Pencil, Plus, Route, Settings2, Target, Trash2,
 		Wallet, X, type LucideIcon
 	} from '@lucide/svelte';
 	import {
@@ -51,8 +51,26 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	import { TimeBubble } from '#lib/bubble';
 	import { edgeRatio, isMilestone, nodeReached, type GraphState } from '#lib/graph';
 	import { reconcileGraph } from '#lib/graph-sources';
+	import {
+		forgetTrashEvent,
+		loadTrashEvents,
+		recordTrashEvent,
+		restoreTrashEvent
+	} from '#lib/trash-store';
+	import type { TrashEvent, TrashEventInput } from '#lib/trash';
+	import {
+		graphEdgeTables,
+		graphNodeTables,
+		habitLogTables,
+		habitTables,
+		timeCategoryTables,
+		trackerEntryTables,
+		trackerTables,
+		transactionTables
+	} from '#lib/trash-build';
 	import GraphView from '#lib/components/graph/GraphView.svelte';
 	import NotesView from '#lib/components/notes/NotesView.svelte';
+	import TrashSheet from '#lib/components/trash/TrashSheet.svelte';
 	import TrackersView from '#lib/components/habits/TrackersView.svelte';
 	import HabitHistorySheet from '#lib/components/habits/HabitHistorySheet.svelte';
 	import PlannerNotesSheet from '#lib/components/time/PlannerNotesSheet.svelte';
@@ -133,6 +151,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let toast = $state('');
 	let toastWarning = $state(false);
 	let toastUndo = $state<(() => void) | null>(null);
+	let trashOpen = $state(false);
+	let trashEvents = $state<TrashEvent[]>([]);
 	let sidebarCollapsed = $state(false);
 	let quickMenuOpen = $state(false);
 	let moreMenuOpen = $state(false);
@@ -1182,24 +1202,55 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		}
 	}
 
-	function removeFinanceTransaction(transactionId: string) {
+	async function removeFinanceTransaction(transactionId: string) {
 		if (!snapshot) return;
+		const transaction = snapshot.transactions.find((item) => item.id === transactionId);
 		const undoJson = JSON.stringify(snapshot);
 		const next = cloneSnapshot();
 		next.transactions = next.transactions.filter((item) => item.id !== transactionId);
-		void commit(next);
+		await commit(next);
+		const trash = transaction
+			? await recordTrash({
+					module: 'finance',
+					kind: 'transaction',
+					entityId: transaction.id,
+					label: transaction.description.trim() || categoryName(transaction.categoryId),
+					tables: transactionTables([transaction])
+				})
+			: null;
 		playTone(200, 0.12, 'sine', 0.05, snapshot.preferences.soundEnabled);
 		vibrate(8);
-		toastMessage('Lançamento removido', { undo: () => restoreFinance(undoJson) });
+		toastMessage('Lançamento removido', {
+			undo: () => {
+				forgetQuietly(trash);
+				restoreFinance(undoJson);
+			}
+		});
 	}
 
-	function clearFinanceTransactions() {
+	async function clearFinanceTransactions() {
 		if (!snapshot) return;
+		const transactions = [...snapshot.transactions];
 		const undoJson = JSON.stringify(snapshot);
 		const next = cloneSnapshot();
 		next.transactions = [];
-		void commit(next);
-		toastMessage('Lançamentos removidos', { warning: true, undo: () => restoreFinance(undoJson) });
+		await commit(next);
+		const trash = transactions.length
+			? await recordTrash({
+					module: 'finance',
+					kind: 'transaction',
+					entityId: `clear:${Date.now()}`,
+					label: `${transactions.length} lançamento${transactions.length === 1 ? '' : 's'}`,
+					tables: transactionTables(transactions)
+				})
+			: null;
+		toastMessage('Lançamentos removidos', {
+			warning: true,
+			undo: () => {
+				forgetQuietly(trash);
+				restoreFinance(undoJson);
+			}
+		});
 	}
 
 	function openFinanceCategory(back: boolean) {
@@ -1429,12 +1480,25 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			danger: true
 		});
 		if (!ok) return;
+		const undoJson = JSON.stringify(snapshot);
 		const next = cloneSnapshot();
 		next.habitLogs = next.habitLogs.filter((item) => item.id !== log.id);
 		if (log.experienceAwarded) next.experience.totalXp = Math.max(0, next.experience.totalXp - 10);
 		habitLogEdit = null;
 		await commit(next);
-		toastMessage('Registro excluído.');
+		const trash = await recordTrash({
+			module: 'habits',
+			kind: 'habitLog',
+			entityId: log.id,
+			label: `${habit.name} · ${log.date}`,
+			tables: habitLogTables([log])
+		});
+		toastMessage('Registro excluído.', {
+			undo: () => {
+				forgetQuietly(trash);
+				restoreSnapshotJson(undoJson);
+			}
+		});
 	}
 
 	function openHabitSheet(habit: Habit) {
@@ -1578,9 +1642,49 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	async function commitGraph(next: GraphState) {
 		if (!snapshot) return;
+		const previous = snapshot.graph;
 		const copy = cloneSnapshot();
 		copy.graph = next;
 		await commit(copy);
+
+		const removedNodes = previous.nodes.filter((node) => !next.nodes.some((item) => item.id === node.id));
+		const removedEdges = previous.edges.filter((edge) => !next.edges.some((item) => item.id === edge.id));
+		for (const node of removedNodes) {
+			await recordTrash({
+				module: 'graph',
+				kind: 'graphNode',
+				entityId: node.id,
+				label: node.name,
+				tables: graphNodeTables(
+					node,
+					previous.edges.filter((edge) => edge.from === node.id || edge.to === node.id)
+				)
+			});
+		}
+		for (const edge of removedEdges) {
+			if (removedNodes.some((node) => node.id === edge.from || node.id === edge.to)) continue;
+			await recordTrash({
+				module: 'graph',
+				kind: 'graphEdge',
+				entityId: edge.id,
+				label: edge.label,
+				tables: graphEdgeTables([edge])
+			});
+		}
+
+		// Undo do grafo (ou sync) pode trazer um item de volta: ele não deve
+		// continuar na lixeira.
+		const restoredIds = new Set([
+			...next.nodes.filter((node) => !previous.nodes.some((item) => item.id === node.id)).map((node) => node.id),
+			...next.edges.filter((edge) => !previous.edges.some((item) => item.id === edge.id)).map((edge) => edge.id)
+		]);
+		if (restoredIds.size) {
+			const events = await loadTrashEvents();
+			for (const event of events) {
+				if (event.module === 'graph' && restoredIds.has(event.entityId)) await forgetTrashEvent(event.id);
+			}
+			trashEvents = trashEvents.filter((event) => !(event.module === 'graph' && restoredIds.has(event.entityId)));
+		}
 	}
 
 	function graphToast(message: string, undo?: () => void) {
@@ -1610,6 +1714,67 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			toast = '';
 			toastUndo = null;
 		}, options.undo ? 5000 : 2800);
+	}
+
+	/* ---------- lixeira global ---------- */
+	async function recordTrash(input: TrashEventInput): Promise<TrashEvent | null> {
+		try {
+			const event = await recordTrashEvent(input);
+			trashEvents = [event, ...trashEvents];
+			return event;
+		} catch (error) {
+			// A exclusão em si não pode falhar por causa do índice da lixeira.
+			console.error('Não foi possível registrar a exclusão na lixeira', error);
+			return null;
+		}
+	}
+
+	function forgetQuietly(event: TrashEvent | null): void {
+		if (!event) return;
+		void forgetTrashEvent(event.id)
+			.then(() => {
+				trashEvents = trashEvents.filter((item) => item.id !== event.id);
+			})
+			.catch((error) => console.error(error));
+	}
+
+	async function openTrash() {
+		closeShellMenus();
+		try {
+			trashEvents = await loadTrashEvents();
+			trashOpen = true;
+		} catch (error) {
+			console.error(error);
+			toastMessage('Não foi possível abrir a lixeira.', { warning: true });
+		}
+	}
+
+	async function restoreFromTrash(event: TrashEvent) {
+		try {
+			const restored = await restoreTrashEvent(event.id);
+			if (!restored) {
+				toastMessage('Este item não está mais na lixeira.', { warning: true });
+				trashEvents = await loadTrashEvents();
+				return;
+			}
+			snapshot = await loadSnapshot();
+			trashEvents = await loadTrashEvents();
+			toastMessage(`${event.label} restaurado.`);
+		} catch (error) {
+			console.error(error);
+			toastMessage('Não foi possível restaurar.', { warning: true });
+		}
+	}
+
+	async function forgetFromTrash(event: TrashEvent) {
+		try {
+			await forgetTrashEvent(event.id);
+			trashEvents = trashEvents.filter((item) => item.id !== event.id);
+			toastMessage('Item removido da lixeira.');
+		} catch (error) {
+			console.error(error);
+			toastMessage('Não foi possível remover.', { warning: true });
+		}
 	}
 
 	function editTransaction(transaction: Transaction) {
@@ -1769,8 +1934,16 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		next.habits = next.habits.filter((item) => item.id !== habit.id);
 		next.habitLogs = next.habitLogs.filter((item) => item.habitId !== habit.id);
 		await commit(next);
+		const trash = await recordTrash({
+			module: 'habits',
+			kind: 'habit',
+			entityId: habit.id,
+			label: habit.name,
+			tables: habitTables([habit], beforeLogs)
+		});
 		toastMessage(`Hábito "${habit.name}" excluído.`, {
 			undo: () => {
+				forgetQuietly(trash);
 				const copy = cloneSnapshot();
 				copy.habits = beforeHabits;
 				copy.habitLogs = beforeLogs;
@@ -1882,15 +2055,21 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		if (!snapshot) return;
 		const existing = snapshot.habitLogs.find((item) => item.habitId === habit.id && item.date === today);
 		if (!existing) return;
-		const before = { ...existing };
+		const undoJson = JSON.stringify(snapshot);
 		const next = cloneSnapshot();
 		next.habitLogs = next.habitLogs.filter((item) => item.id !== existing.id);
 		await commit(next);
+		const trash = await recordTrash({
+			module: 'habits',
+			kind: 'habitLog',
+			entityId: existing.id,
+			label: `${habit.name} · ${existing.date}`,
+			tables: habitLogTables([existing])
+		});
 		toastMessage('Registro removido.', {
 			undo: () => {
-				const copy = cloneSnapshot();
-				copy.habitLogs = [before, ...copy.habitLogs];
-				void commit(copy);
+				forgetQuietly(trash);
+				restoreSnapshotJson(undoJson);
 			}
 		});
 	}
@@ -1987,8 +2166,16 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		next.trackers = next.trackers.filter((item) => item.id !== tracker.id);
 		next.trackerEntries = next.trackerEntries.filter((item) => item.trackerId !== tracker.id);
 		await commit(next);
+		const trash = await recordTrash({
+			module: 'habits',
+			kind: 'tracker',
+			entityId: tracker.id,
+			label: tracker.name,
+			tables: trackerTables([tracker], beforeEntries)
+		});
 		toastMessage(`Tracker "${tracker.name}" excluído.`, {
 			undo: () => {
+				forgetQuietly(trash);
 				const copy = cloneSnapshot();
 				copy.trackers = beforeTrackers;
 				copy.trackerEntries = beforeEntries;
@@ -2009,15 +2196,21 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	async function deleteTrackerEntry(entry: TrackerEntry) {
 		if (!snapshot) return;
-		const before = { ...entry };
+		const undoJson = JSON.stringify(snapshot);
 		const next = cloneSnapshot();
 		next.trackerEntries = next.trackerEntries.filter((item) => item.id !== entry.id);
 		await commit(next);
+		const trash = await recordTrash({
+			module: 'habits',
+			kind: 'trackerEntry',
+			entityId: entry.id,
+			label: `${snapshot.trackers.find((item) => item.id === entry.trackerId)?.name ?? 'Tracker'} · ${entry.date}`,
+			tables: trackerEntryTables([entry])
+		});
 		toastMessage('Registro removido.', {
 			undo: () => {
-				const copy = cloneSnapshot();
-				copy.trackerEntries = [before, ...copy.trackerEntries];
-				void commit(copy);
+				forgetQuietly(trash);
+				restoreSnapshotJson(undoJson);
 			}
 		});
 	}
@@ -2710,6 +2903,11 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		void saveSnapshot(snapshot);
 	}
 
+	/** Undo genérico de um snapshot inteiro (usado por lixeira/toasts). */
+	function restoreSnapshotJson(json: string) {
+		restoreTimeSnapshot(json);
+	}
+
 	async function finishTimePaint() {
 		if (!timePainting || !snapshot) return;
 		timePainting = false;
@@ -2800,15 +2998,31 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const sound = snapshot.preferences.soundEnabled;
 		const undoJson = JSON.stringify(snapshot);
 		const targetId = timeCategorySheet.id;
+		const category = snapshot.categories.find((item) => item.id === targetId);
+		const blocks = snapshot.timeBlocks.filter((item) => item.categoryId === targetId);
 		const next = cloneSnapshot();
 		next.categories = next.categories.filter((item) => item.id !== targetId);
 		next.timeBlocks = next.timeBlocks.filter((item) => item.categoryId !== targetId);
 		if (timeSelected === targetId) timeSelected = next.categories.find((item) => item.module === 'time')?.id ?? 'x';
 		timeCategorySheet = { ...timeCategorySheet, open: false };
 		await commit(next);
+		const trash = category
+			? await recordTrash({
+					module: 'time',
+					kind: 'category',
+					entityId: category.id,
+					label: category.name,
+					tables: timeCategoryTables(category, blocks)
+				})
+			: null;
 		playTone(200, 0.14, 'sine', 0.05, sound);
 		vibrate(10);
-		toastMessage('Categoria excluída', { undo: () => restoreTimeSnapshot(undoJson) });
+		toastMessage('Categoria excluída', {
+			undo: () => {
+				forgetQuietly(trash);
+				restoreTimeSnapshot(undoJson);
+			}
+		});
 	}
 
 	function openTimeSummary() {
@@ -3334,6 +3548,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			</nav>
 			<div class="grow"></div>
 			<nav class="nv" aria-label="Atalhos">
+				<button class="si" data-tip="Lixeira" onclick={() => void openTrash()}><Trash2 size={22} strokeWidth={2} /><span class="lab">Lixeira</span></button>
 				<button class="si" data-tip="Pausar Atlas" onclick={() => { closeShellMenus(); modal = 'pause'; }}><Flame size={22} strokeWidth={2} /><span class="lab">Pausa</span></button>
 				<button class="si" data-tip="Configurações" onclick={() => { closeShellMenus(); openSettings(); }}><Settings2 size={22} strokeWidth={2} /><span class="lab">Configurações</span></button>
 			</nav>
@@ -3698,15 +3913,25 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					<button class="mi" style={`--i:${index}`} onclick={() => goTab(tab.id)}><TabIcon size={22} />{tab.label}</button>
 				{/if}
 			{/each}
-			<button class="mi hr" style="--i:3" onclick={() => { closeShellMenus(); modal = 'pause'; }}><Flame size={22} />Pausa</button>
+			<button class="mi" style="--i:3" onclick={() => void openTrash()}><Trash2 size={22} />Lixeira</button>
+			<button class="mi hr" style="--i:4" onclick={() => { closeShellMenus(); modal = 'pause'; }}><Flame size={22} />Pausa</button>
 			{#if testModeActive}
-				<button class="mi warn" style="--i:4" onclick={() => { closeShellMenus(); void toggleTestMode(false); }}><FlaskConical size={22} />Sair do modo de teste</button>
+				<button class="mi warn" style="--i:5" onclick={() => { closeShellMenus(); void toggleTestMode(false); }}><FlaskConical size={22} />Sair do modo de teste</button>
 			{/if}
-			<button class="mi" style={`--i:${testModeActive ? 5 : 4}`} onclick={() => { closeShellMenus(); openSettings(); }}><Settings2 size={22} />Configurações</button>
+			<button class="mi" style={`--i:${testModeActive ? 6 : 5}`} onclick={() => { closeShellMenus(); openSettings(); }}><Settings2 size={22} />Configurações</button>
 		</div>
 
 		<div id="ov" class:on={quickMenuOpen || moreMenuOpen} role="presentation" onclick={closeShellMenus}></div>
 	</div>
+
+	{#if trashOpen}
+		<TrashSheet
+			events={trashEvents}
+			onclose={() => (trashOpen = false)}
+			onrestore={restoreFromTrash}
+			onforget={forgetFromTrash}
+		/>
+	{/if}
 
 	{#if plannerNotesOpen}
 		<PlannerNotesSheet

@@ -1,6 +1,6 @@
 # Atlas — Ciclo S15: rodada de correções e polimento
 
-> **Estado:** alinhado em 18/10/2026 · **E0 implementado; E1–E8 pendentes**.
+> **Estado:** alinhado em 18/10/2026 · **E0–E1 implementados; E2–E8 pendentes**.
 > Este documento é a fonte das decisões do ciclo. Se conflitar com
 > `ROADMAP.md`, vale este arquivo para o escopo do S15.
 >
@@ -152,14 +152,29 @@ a fonte de verdade do sync.
 
 **Depende de:** nada. **Bloqueia:** C2/C5, D1/D2/D5/D6, F1, F2.
 
-### E1 — Lixeira global
+### E1 — Lixeira global ✅
 
 - Tela Mais → Lixeira, filtros, contagem de dias, restaurar/excluir de vez,
   undo por toast, limpeza de 7 dias no boot.
 - Integrar notas (retenção 7) e exclusões de finanças/hábitos/tempo/grafo.
-- Exclusão em grupo: categoria + lançamentos, hábito + logs, pasta + notas.
+- Exclusão em grupo: categoria + lançamentos, hábito + logs; pasta + notas fica
+  na lixeira de notas.
 
-**Depende de:** E0.
+**Como ficou:** `TrashSheet.svelte` (bottom sheet no mobile, central no
+desktop), acesso em **Mais → Lixeira** e no atalho da sidebar; filtros por
+módulo, agrupamento por dia, dias restantes, restaurar e excluir de vez com
+confirmação em dois toques. O restore usa `db_batch` (upsert + HLC) e recarrega
+o snapshot. Já entram na lixeira: lançamentos e limpeza de lançamentos,
+hábitos + logs, trackers + registros, categoria de tempo + blocos, nós/arestas
+do grafo. Categoria financeira + lançamentos já tem helper pronto
+(`financeCategoryTables`) e é ligada na E5.
+
+**Notas:** continuam na lixeira própria (7 dias); a global não duplica notas
+individuais. Exclusão de pasta ainda é local (E3 decide se migra para a lixeira
+de notas).
+
+**Depende de:** E0. **Bloqueia:** E2 (restore de nota), E5 (categoria), E7
+(undo durante pausa).
 
 ### E2 — Tempo: gestos e preview
 
