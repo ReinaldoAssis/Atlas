@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { blockIdsForNote, blocksForRef, notesForBlock, parseTempoRefs, refOverlapsBlock } from './tempo-ref';
+import { blockIdsForNote, blocksForRef, notesForBlock, parseTempoRefs, refOverlapsBlock, tempoReference } from './tempo-ref';
 
 const NOTE_DATE = '2026-11-03T10:00:00.000Z';
+
+describe('tempoReference', () => {
+	it('gera a referência no formato aceito pelo parser', () => {
+		const raw = tempoReference({ startAt: '2026-10-16T17:00:00', endAt: '2026-10-16T20:00:00' });
+		expect(raw).toBe('tempo 16/10 17:00-20:00');
+		expect(parseTempoRefs(raw, NOTE_DATE)[0]).toMatchObject({ from: '2026-10-16T17:00', to: '2026-10-16T20:00' });
+	});
+});
 
 describe('parseTempoRefs', () => {
 	it('lê data e intervalo de horas', () => {

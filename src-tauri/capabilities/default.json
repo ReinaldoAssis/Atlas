@@ -18,6 +18,8 @@
     "fs:default",
     "fs:allow-appdata-write-recursive",
     "fs:allow-appdata-meta-recursive",
+    "fs:allow-document-read-recursive",
+    "fs:allow-document-write-recursive",
     "fs:read-files",
     "fs:write-files",
     {

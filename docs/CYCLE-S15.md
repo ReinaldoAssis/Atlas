@@ -1,6 +1,6 @@
 # Atlas — Ciclo S15: rodada de correções e polimento
 
-> **Estado:** alinhado em 18/10/2026 · **E0–E2 implementados; E3–E8 pendentes**.
+> **Estado:** alinhado em 18/10/2026 · **E0–E3 implementados; E4–E8 pendentes**.
 > Este documento é a fonte das decisões do ciclo. Se conflitar com
 > `ROADMAP.md`, vale este arquivo para o escopo do S15.
 >
@@ -195,7 +195,7 @@ bolha usa `notePreview` (remove `tempo`/`time`, mantém até 3 linhas).
 **Depende de:** E0 (para `lastMode` na nota). **Verificação pendente:** toque
 real no iPhone (timings, bolha e morph).
 
-### E3 — Notas
+### E3 — Notas ✅
 
 - Navegar para a pasta da nota ao abrir (B1).
 - Persistir/restaurar `lastMode`; nota nova em `write`.
@@ -203,7 +203,17 @@ real no iPhone (timings, bolha e morph).
 - Slash command `/tempo`/`/time` + botão de relógio.
 - Export iOS: corrigir `saveBytes`/`dialog.save`; teste manual de `.md` e `.zip`.
 
-**Depende de:** E0.
+**Como ficou:** `openNote` troca para a pasta da nota quando ela vem de
+deep-link/backlink, então fechar o editor mantém a nota visível. O `lastMode`
+é salvo por nota (sem mexer no `updatedAt`) e o editor abre nele. O menu de
+contexto virou sheet no mobile e menu flutuante no desktop com Renomear
+(sheet), Duplicar, Exportar `.md`, Copiar `[[link]]` e Excluir. O editor ganhou
+`/tempo`/`/time` com lista de blocos e botão de relógio na toolbar. A
+exportação usa `saveNoteMarkdown` e o iOS ganhou permissão de `$DOCUMENT` no
+capability; erros agora viram toast em vez de silêncio.
+
+**Depende de:** E0. **Verificação pendente:** export `.md` e `.zip` no iPhone
+físico (a permissão de Document é o conserto provável).
 
 ### E4 — Hábitos/Trackers
 

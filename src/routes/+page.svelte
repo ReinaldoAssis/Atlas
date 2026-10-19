@@ -45,7 +45,7 @@ import { checkForUpdate, relaunchApp, updaterSupportedHere } from '#lib/updater'
 		type SyncStatus
 	} from '#lib/sync';
 import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, restoreAttachments, upsertNote } from '#lib/notes-store';
-	import { backlinks, createNote, findNoteByTitle, type Note, type NotesState } from '#lib/notes';
+	import { backlinks, createNote, findNoteByTitle, type Note, type NoteMode, type NotesState } from '#lib/notes';
 	import NoteEditor from '#lib/components/notes/NoteEditor.svelte';
 	import { notesForBlock, type NoteRef } from '#lib/tempo-ref';
 	import { notePreview } from '#lib/note-preview';
@@ -173,7 +173,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	/** Editor de nota em overlay, aberto a partir da bolha do Tempo. */
 	let noteOverlay = $state<Note | null>(null);
 	let noteOverlayOpen = $state(false);
-	let noteOverlayMode = $state<'write' | 'preview'>('preview');
+	let noteOverlayMode = $state<NoteMode>('preview');
 	let noteOverlayMorph = $state<DOMRect | null>(null);
 	let noteOverlaySeq = 0;
 	/** Auto-dwell: tela parada por 4 s abre o dialog das notas visíveis. */
@@ -2265,7 +2265,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		cancelAutoDwell();
 		noteOverlaySeq += 1;
 		noteOverlayMorph = source ?? null;
-		noteOverlayMode = note.lastMode === 'write' ? 'write' : 'preview';
+		noteOverlayMode = note.lastMode ?? 'preview';
 		noteOverlay = note;
 		noteOverlayOpen = false;
 		await tick();
@@ -2298,6 +2298,19 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			console.error('Não foi possível salvar a nota', error);
 			toastMessage('Não foi possível salvar a nota.', { warning: true });
 		});
+	}
+
+	/** Troca de modo não é edição de conteúdo: não mexe no `updatedAt`. */
+	function setOverlayMode(mode: NoteMode): void {
+		if (!noteOverlay) return;
+		const updated: Note = { ...noteOverlay, lastMode: mode };
+		noteOverlay = updated;
+		noteOverlayMode = mode;
+		notesState = {
+			...notesState,
+			notes: notesState.notes.map((item) => (item.id === updated.id ? updated : item))
+		};
+		void upsertNote(updated).catch((error) => console.error('Não foi possível salvar o modo da nota', error));
 	}
 
 	function pinOverlayNote(): void {
@@ -2339,7 +2352,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			noteOverlaySeq += 1;
 			noteOverlayMorph = null;
 			noteOverlay = existing;
-			noteOverlayMode = existing.lastMode === 'write' ? 'write' : 'preview';
+			noteOverlayMode = existing.lastMode ?? 'preview';
 			await tick();
 			noteOverlayOpen = true;
 			return;
@@ -2359,7 +2372,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		noteOverlaySeq += 1;
 		noteOverlayMorph = null;
 		noteOverlay = note;
-		noteOverlayMode = note.lastMode === 'write' ? 'write' : 'preview';
+		noteOverlayMode = note.lastMode ?? 'preview';
 		await tick();
 		noteOverlayOpen = true;
 	}
@@ -3299,8 +3312,13 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	async function exportData() {
 		if (!snapshot) return;
-		const result = await saveBytes(await currentBackupBytes(), backupFileName());
-		toastMessage(result === 'saved' ? 'Backup exportado.' : 'Exportação cancelada.');
+		try {
+			const result = await saveBytes(await currentBackupBytes(), backupFileName());
+			toastMessage(result === 'saved' ? 'Backup exportado.' : 'Exportação cancelada.');
+		} catch (error) {
+			console.error('Falha ao exportar o backup', error);
+			toastMessage('Não foi possível exportar o backup.', { warning: true });
+		}
 	}
 
 	async function importData() {
@@ -4064,6 +4082,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 				timeBlocks={snapshot.timeBlocks}
 				open={noteOverlayOpen}
 				initialMode={noteOverlayMode}
+				onmode={setOverlayMode}
 				morphFrom={noteOverlayMorph}
 				sound={snapshot.preferences.soundEnabled}
 				typingSound={snapshot.preferences.typingSoundEnabled}

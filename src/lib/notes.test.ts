@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
 	TRASH_RETENTION_DAYS,
 	createNote,
+	duplicateNote,
 	noteExportFileName,
+	noteLink,
 	noteMarkdown,
 	normalizeNote
 } from './notes';
@@ -57,5 +59,21 @@ describe('modo e retenção da nota', () => {
 
 	it('lixeira de notas guarda 7 dias', () => {
 		expect(TRASH_RETENTION_DAYS).toBe(7);
+	});
+
+	it('duplica com id novo, sem lixeira e sem vínculo de conflito', () => {
+		const original = { ...createNote('f1', 'Ideia'), trashedAt: '2026-10-01', conflictOf: 'x' };
+		const copy = duplicateNote(original);
+		expect(copy.id).not.toBe(original.id);
+		expect(copy.title).toBe('Ideia (cópia)');
+		expect(copy.folderId).toBe('f1');
+		expect(copy.trashedAt).toBeNull();
+		expect(copy.conflictOf).toBeUndefined();
+		expect(copy.body).toBe(original.body);
+	});
+
+	it('gera o link wiki pelo título exibido', () => {
+		const note = createNote(null, 'Reunião');
+		expect(noteLink(note)).toBe('[[Reunião]]');
 	});
 });

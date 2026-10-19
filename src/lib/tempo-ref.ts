@@ -131,6 +131,11 @@ function buildRef(text: string, at: number, keywordLength: number, spec: Spec, b
 	};
 }
 
+/** Texto canônico da referência para um bloco (`tempo DD/MM HH:MM-HH:MM`). */
+export function tempoReference(block: Pick<{ startAt: string; endAt: string }, 'startAt' | 'endAt'>): string {
+	return `tempo ${block.startAt.slice(8, 10)}/${block.startAt.slice(5, 7)} ${block.startAt.slice(11, 16)}-${block.endAt.slice(11, 16)}`;
+}
+
 /** Todas as referências de tempo de um texto. */
 export function parseTempoRefs(text: string, noteDate?: string): TempoRef[] {
 	const base = dateParts(noteDate);

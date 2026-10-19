@@ -74,6 +74,28 @@ export function createNote(folderIdValue: string | null = null, title = ''): Not
 	};
 }
 
+/** Cópia independente, sem o estado de lixeira/merge. */
+export function duplicateNote(note: Note): Note {
+	const now = new Date().toISOString();
+	return {
+		...note,
+		id: noteId(),
+		title: `${noteTitle(note)} (cópia)`,
+		pinned: false,
+		createdAt: now,
+		updatedAt: now,
+		trashedAt: null,
+		conflictOf: undefined,
+		conflictedAt: undefined,
+		lastMode: note.lastMode ?? 'preview'
+	};
+}
+
+/** Link wiki para colar em outra nota. */
+export function noteLink(note: Note): string {
+	return `[[${noteTitle(note)}]]`;
+}
+
 /** Dias que uma nota permanece na lixeira antes de ser apagada em definitivo. */
 export const TRASH_RETENTION_DAYS = 7;
 
