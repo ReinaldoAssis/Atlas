@@ -100,13 +100,26 @@
 	}
 
 	const hit = $derived(accentAt !== null && value >= accentAt);
+
+	let closing = $state(false);
+	function requestClose() {
+		if (closing) return;
+		const reduced = typeof window.matchMedia !== 'function' || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		if (reduced) {
+			onclose();
+			return;
+		}
+		closing = true;
+		setTimeout(onclose, 190);
+	}
 </script>
 
 <div
 	class="habit-prototype-overlay"
+	class:closing
 	role="presentation"
 	onclick={(event) => {
-		if (event.target === event.currentTarget) onclose();
+		if (event.target === event.currentTarget) requestClose();
 	}}
 >
 	<div class="habit-prototype-sheet" role="dialog" aria-modal="true" aria-label={title}>
@@ -163,7 +176,7 @@
 			{#if ondelete}
 				<button class="vs-delete" onclick={ondelete}>Excluir</button>
 			{/if}
-			<button class="vs-cancel" onclick={onclose}>Cancelar</button>
+			<button class="vs-cancel" onclick={requestClose}>Cancelar</button>
 			<button class="habit-prototype-save vs-save" onclick={commit}>{saveLabel}</button>
 		</div>
 	</div>
@@ -262,5 +275,27 @@
 	}
 	.vs-save {
 		width: auto;
+	}
+	.habit-prototype-overlay.closing {
+		animation: vs-fade-out 0.18s ease-in forwards;
+	}
+	.habit-prototype-overlay.closing .habit-prototype-sheet {
+		animation: vs-sheet-out 0.19s cubic-bezier(0.4, 0, 1, 1) forwards;
+	}
+	@keyframes vs-fade-out {
+		to {
+			opacity: 0;
+		}
+	}
+	@keyframes vs-sheet-out {
+		to {
+			transform: translateY(105%);
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.habit-prototype-overlay.closing,
+		.habit-prototype-overlay.closing .habit-prototype-sheet {
+			animation: none;
+		}
 	}
 </style>

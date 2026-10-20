@@ -7,6 +7,7 @@
 
 <script lang="ts">
 	import { onMount, tick, untrack } from 'svelte';
+	import { fade, fly } from 'svelte/transition';
 	import { Copy, Download, Link2, Pencil, RotateCcw, Trash2 } from '@lucide/svelte';
 	import {
 		allTags,
@@ -386,9 +387,16 @@
 		}
 		editorNote = note;
 		editorMode = mode ?? note.lastMode ?? 'preview';
+		const wasOpen = editorOpen;
+		if (!wasOpen) editorIn = false;
 		editorOpen = true;
 		await tick();
-		requestAnimationFrame(() => (editorIn = true));
+		if (!wasOpen) {
+			// Dois frames: garante que o navegador pinte o estado fora da tela
+			// antes de aplicar `.on`, senão a transição de entrada não roda.
+			await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+		}
+		editorIn = true;
 		tone(420, 0.14, 'triangle', 0.05);
 		setTimeout(() => tone(700, 0.1, 'triangle', 0.04), 60);
 		haptic(8);
@@ -673,7 +681,8 @@
 		sheetKind = kind;
 		sheetIn = false;
 		await tick();
-		requestAnimationFrame(() => (sheetIn = true));
+		await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+		sheetIn = true;
 	}
 
 	async function closeSheet() {
@@ -1055,7 +1064,14 @@
 	{@const target = menuState.note}
 	<div class="nt-menu-ov" role="presentation" onclick={closeMenuFromBackdrop}></div>
 	{#if menuState.mobile}
-		<div class="nt-sh on nt-mmenu" role="menu" aria-label="Ações da nota" style="--nt-tint:#8d968a">
+		<div
+			class="nt-sh on nt-mmenu nt-sh-fly"
+			role="menu"
+			aria-label="Ações da nota"
+			style="--nt-tint:#8d968a"
+			in:fly={{ y: 120, duration: prefersReducedMotion() ? 0 : 300 }}
+			out:fly={{ y: 120, duration: prefersReducedMotion() ? 0 : 180 }}
+		>
 			<div class="nt-grip"></div>
 			<div class="nt-mmenu-head">
 				<b>{noteTitle(target)}</b>
@@ -1083,8 +1099,15 @@
 {/if}
 
 {#if renameState}
-	<div class="nt-ov on" role="presentation" onclick={closeRename}></div>
-	<div class="nt-sh on nt-rename" role="dialog" aria-modal="true" aria-label="Renomear nota">
+	<div class="nt-ov on nt-ov-fly" role="presentation" transition:fade={{ duration: prefersReducedMotion() ? 0 : 150 }} onclick={closeRename}></div>
+	<div
+		class="nt-sh on nt-rename nt-sh-fly"
+		role="dialog"
+		aria-modal="true"
+		aria-label="Renomear nota"
+		in:fly={{ y: 120, duration: prefersReducedMotion() ? 0 : 300 }}
+		out:fly={{ y: 120, duration: prefersReducedMotion() ? 0 : 180 }}
+	>
 		<div class="nt-grip"></div>
 		<input
 			class="nt-inp"
@@ -1139,8 +1162,15 @@
 {/if}
 
 {#if confirmState}
-	<div class="nt-ov on" role="presentation" onclick={closeConfirm}></div>
-	<div class="nt-sh on" role="dialog" aria-modal="true" aria-label="Confirmação">
+	<div class="nt-ov on nt-ov-fly" role="presentation" transition:fade={{ duration: prefersReducedMotion() ? 0 : 150 }} onclick={closeConfirm}></div>
+	<div
+		class="nt-sh on nt-sh-fly"
+		role="dialog"
+		aria-modal="true"
+		aria-label="Confirmação"
+		in:fly={{ y: 120, duration: prefersReducedMotion() ? 0 : 300 }}
+		out:fly={{ y: 120, duration: prefersReducedMotion() ? 0 : 180 }}
+	>
 		<div class="nt-grip"></div>
 		<p class="nt-confirm-text">{confirmState.message}</p>
 		<button class="nt-btn danger" onclick={runConfirm}>{confirmState.label}</button>

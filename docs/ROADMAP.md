@@ -362,7 +362,7 @@ Detalhes de estado e o que ficou pendente de verificação manual: git history (
 > limitações que dependem de device ficam em **`docs/SYNC.md`** e
 > **`docs/IOS-SIDELOAD.md`**.
 
-### Ciclo S15 — correções e polimento (E0–E5 implementados; E6–E8 pendentes)
+### Ciclo S15 — correções e polimento (E0–E5 implementados; E6 e E8 pendentes; E7 parcial — F2 concluída)
 
 Sessão de 18/10/2026 fechou 25 itens em seis frentes. É **um ciclo**, com PRs
 pequenos por frente e CI verde em cada um. Decisões, modelo de dados, etapas e

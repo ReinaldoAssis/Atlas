@@ -1,6 +1,7 @@
 # Atlas — Ciclo S15: rodada de correções e polimento
 
-> **Estado:** alinhado em 18/10/2026 · **E0–E5 implementados; E6–E8 pendentes**.
+> **Estado:** alinhado em 18/10/2026 · **E0–E5 implementados; E6 e E8 pendentes;
+> E7 parcial (F2 concluída em 20/10)**.
 > Este documento é a fonte das decisões do ciclo. Se conflitar com
 > `ROADMAP.md`, vale este arquivo para o escopo do S15.
 >
@@ -34,19 +35,23 @@ hábitos/trackers), ícone novo, PDF nativo, i18n em inglês, assinatura Apple.
 
 | ID | Problema | Decisão |
 |---|---|---|
-| A1 | Pintura por arrasto instável; long press de 400 ms longo demais | Toque curto **sem arrasto** cria, substitui ou desfaz a célula. **Qualquer arrasto navega.** **250 ms** de hold em célula **vazia** cria o bloco e entra em modo pintar (navegação desligada); hold em célula preenchida **não pinta** e o **650 ms** abre a bolha/categoria. |
+| A1 | Pintura por arrasto instável; long press de 400 ms longo demais | Toque curto **sem arrasto** cria, substitui ou desfaz a célula. **Qualquer arrasto navega.** **250 ms** de hold em célula **vazia** cria o bloco e entra em modo pintar (navegação desligada). |
 | A2 | Long press em célula vazia abre categoria | Célula sem bloco **não abre nada**. Pintar continua sendo o gesto dela. |
-| A2b | Long press em bloco sem nota | Abre o **sheet da categoria** do bloco (comportamento preservado). |
+| A2b | Long press em bloco sem nota abria o sheet da categoria | Agora **entra em modo destruição**: apaga o bloco segurado e os blocos que o dedo cruzar, inclusive com nota, com undo. Editar a categoria passou a ser **hold de 250 ms no chip do topo**; tap só seleciona. |
 | A3 | Soltar o dedo depois de abrir a bolha remove o bloco | A abertura da bolha consome o gesto: `pointerup`/`touchend` não executa remoção. Remover bloco só pelo editor/menu. |
+| A8 | Editar categoria de tempo | **Tap** no chip seleciona; **hold de 250 ms** em qualquer chip abre o sheet de edição (inclusive a já selecionada). O hold abre ao soltar, sem o clique sintetizado fechar o sheet. |
+| A9 | Destruição no desktop | Só no toque; desktop mantém clique/arrasto/borracha. O bloco inicial apaga na hora; soltar sem arrastar já conta como destruição. |
+| A10 | Faixa de dias duplicada | Remover a faixa externa `.tp-wkb` (barras de carga + clique para pular dia). O cabeçalho de dias dentro da grade fica; perde-se o clique e as barras. |
 | A4/A7 | Drawer de notas puxado para cima quebra e faz fade estranho | **Drawer removido.** A bolha lista as notas do bloco, **não fecha ao soltar o dedo** e só fecha com clique fora. Tocar numa nota faz um **morph da bolha para o editor**. |
 | A5 | Preview mostra a tag `tempo …` | O preview remove a referência `tempo`/`time` do texto; o chip continua existindo. |
 | A6 | Preview ignora quebras de linha | Preservar parágrafos e quebras simples no resumo da bolha e no preview. |
 
 **Fluxo do Tempo (mobile):** toque curto cria/substitui/desfaz →
 qualquer arrasto navega → **250 ms de hold em célula vazia** cria o bloco e
-entra em modo pintar → **650 ms** em célula preenchida abre bolha (só se houver
-nota) ou a categoria → bolha fica aberta → tocar na nota abre o **editor em
-overlay sobre o Tempo** → fechar volta ao planejador.
+entra em modo pintar → **250 ms de hold em bloco sem nota** entra em destruição
+→ **650 ms em bloco com nota** abre a bolha → bolha fica aberta → tocar na nota
+abre o **editor em overlay sobre o Tempo** → fechar volta ao planejador.
+**Hold de 250 ms no chip de categoria** abre a edição; tap só seleciona.
 
 **Bolha:** lista todas as notas do bloco, com rolagem se necessário, ancorada
 no bloco. Não é mais um preview de uma nota só.
@@ -81,6 +86,10 @@ no bloco. Não é mais um preview de uma nota só.
 | D5 | Primeiro dia da semana | Configuração **Segunda/Domingo**, padrão **segunda**. Afeta semana de hábito semanal, trackers, janela semanal do grafo e calendários. Ao trocar, o log da semana atual é remapeado para a nova chave (sem perder valor). |
 | D6 | Aresta `habitStreak` de hábito semanal usava "dias" | Hábito semanal mede **semanas consecutivas com meta batida**; unidade `semanas`. Hábito diário continua em dias. |
 | D7 | Ordem dos tiles mudava até reabrir | Ordem de **criação**, estável. Corrigir a reatividade da lista (lista derivada + `{#each}` com chave); sem drag. |
+| D8 | Chama na barra da semana | Dia com meta batida ganha **chama laranja** no lugar do check. |
+| D9 | Lançar em dia passado | Tap num dia do strip seleciona a data (só passado/hoje); hold de 500 ms abre um **calendário no Sheet** com qualquer data passada e atalho "Hoje". A barra mostra a semana da data escolhida; fora de hoje, o chip fica laranja e o cabeçalho mostra a data. O card "Meta do dia" segue a data e fica **read-only** no passado. Ao sair de Hábitos, volta para hoje. |
+| D10 | XP e chama em dia passado | Lançar no passado **não dá XP nem celebração**; recalcula a chama atual. Hábito semanal incrementa a semana e registra a data selecionada em `incrementDates`. Trackers não usam a data selecionada. |
+| D11 | Chama da app bar em zero | Era efeito da pausa: a barra zera a meta do dia pausado e a sequência pula o dia, mas a celebração ainda disparava. A **F2** bloqueia o progresso e a chama fica azul/congelada no valor pré-pausa. |
 
 ### E — Planejamento/grafo
 
@@ -95,7 +104,7 @@ no bloco. Não é mais um preview de uma nota só.
 | ID | Problema/decisão |
 |---|---|
 | F1 | Lixeira global | Tabela `trash_events` + tela **Mais → Lixeira**, filtros por módulo, agrupamento por dia, dias restantes, restaurar e excluir de vez. Retenção de **7 dias**, limpeza no boot, undo por toast. Notas mantêm a lixeira própria, também com 7 dias. |
-| F2 | Pausa não bloqueia nada | Pausa = **somente leitura no que afeta progresso**: não registra hábito/tempo/finança, não edita categorias/metas. Notas, leitura, configurações e sair da pausa continuam liberados. Faixa fina "Atlas em pausa até DD/MM", chama **azul** (congelada), tentativa bloqueada mostra toast, controles de escrita esmaecidos. Reabrir o menu de pausa pergunta **"Sair da pausa?"**. |
+| F2 | Pausa não bloqueia nada | Pausa = **somente leitura no que afeta progresso**: não registra hábito/tracker/tempo/finança, não edita categorias/metas, inclusive em datas passadas. Notas, leitura, configurações e encerrar a pausa continuam liberados. Faixa fina "Atlas em pausa até DD/MM" com ação que abre o modal, chama **azul** (congelada no valor pré-pausa), tentativa bloqueada mostra toast, controles de escrita esmaecidos. O modal ativo oferece **"Encerrar pausa"** e estender a data; encerrar cedo grava o período vivido. |
 | F3 | Notificações iOS nunca funcionaram | Diagnóstico no device + agenda **rolante** com `Schedule.at` para as próximas 4 semanas (não depender do repeat semanal), ressincronizando ao abrir, ao mudar preferências e ao sair da pausa. Fallback em-app com o app aberto. |
 | F4 | Export `.md` no iOS não faz nada; **backup `.zip` também falha** | O problema é o caminho de salvar do iOS, não o Markdown. Revisar `saveBytes`/`dialog.save` + escopo do `fs`; tratar erro e dar feedback. Se o picker não cooperar, usar o share sheet nativo. |
 | F5 | "Buscar atualização" ausente no macOS/Windows | No Windows o updater in-app continua. No macOS, mostrar **Buscar atualização** que consulta a release e abre a página de download; updater real no macOS só com app assinado/notarizado. Documentar que o updater automático segue Windows-only. |
@@ -181,7 +190,8 @@ de notas).
 ### E2 — Tempo: gestos e preview ✅
 
 - Timings 250/650, fim do `dialogTimer` de 1 s, célula vazia sem ação,
-  bloco sem nota → categoria, bolha consome o gesto (A3).
+  bloco sem nota → destruição, bloco com nota → bolha, bolha consome o gesto (A3).
+- Editar categoria por hold de 250 ms no chip; remover a faixa externa de dias.
 - Bolha lista notas, permanece aberta, fecha só fora; sem drawer.
 - Editor em overlay global sobre o Tempo + morph da bolha para o editor.
 - Preview sem a tag `tempo` e com quebras de linha.
@@ -189,9 +199,11 @@ de notas).
 
 **Como ficou:** toque curto sem arrasto alterna a célula (cria, substitui ou
 desfaz — só ele apaga). **Qualquer arrasto navega.** Hold de 250 ms em célula
-**vazia** cria o bloco e entra em modo pintar, desligando a navegação; hold em
-célula **preenchida** não pinta e 650 ms abrem a bolha (com nota) ou a categoria
-(sem nota). Soltar depois do hold não pinta nem apaga. A bolha fixa
+**vazia** cria o bloco e entra em modo pintar, desligando a navegação; hold de
+250 ms em **bloco sem nota** entra em destruição e apaga o bloco segurado e os
+arrastados; hold de 650 ms em **bloco com nota** abre a bolha. Soltar depois do
+hold não pinta nem apaga. O chip de categoria agora abre a edição com hold de
+250 ms (tap só seleciona) e a faixa externa de dias foi removida. A bolha fixa
 (`TimeBubble` com `sticky`) não fecha no `pointerup` e só some com clique fora
 ou Esc; o toque que a fecha é consumido e não cria/apaga a célula. Bloco com
 nota ganha outline escuro de 2 px e um ponto no início. O editor é o
@@ -231,6 +243,8 @@ físico (a permissão de Document é o conserto provável).
 - Primeiro dia da semana + remapeamento do log da semana atual.
 - Ordem de criação estável e reatividade dos tiles.
 - Testes de streak, direção, semana e migração de chave.
+- Chama no dia da semana + lançamento em data passada com seletor no Sheet.
+- F2: pausa bloqueia progresso, chama azul congelada e faixa no topo.
 
 **Como ficou:** hábito de contagem/duração ganhou "Mais/Menos é melhor"
 (`didMeetTarget`, streak, barra e accent). O semanal guarda `incrementDates`
@@ -242,8 +256,16 @@ semana atual sem perder valor. A lista de hábitos ganhou chave por id
 (ordem de criação estável). A atualização de meta que fecha a meta do dia
 também dispara a celebração da chama.
 
-**Depende de:** E0. **Verificação pendente:** toque nos tiles e virada de
-semana no device.
+O dia com meta batida mostra uma **chama laranja** no strip. Tap num dia
+passado seleciona a data (só passado/hoje); hold de 500 ms abre o calendário
+`HabitDateSheet` com qualquer data passada e "Hoje". A barra segue a semana da
+data, fica com cor laranja fora de hoje e o card "Meta do dia" segue a data
+(read-only no passado). O lançamento passado não dá XP nem celebração, recalcula
+a chama e o semanal registra `incrementDates` na data escolhida. Ao sair de
+Hábitos, a seleção volta para hoje.
+
+**Depende de:** E0. **Verificação pendente:** toque nos tiles, hold do dia e
+virada de semana no device.
 
 ### E5 — Finanças ✅
 
@@ -269,6 +291,24 @@ em uso e ganhou teste de grupo.
 
 **Depende de:** E0, E1.
 
+### Ajustes de 20/10 (pós-E5)
+
+- **Tempo**: remoção da faixa externa de dias; edição de categoria por hold de
+  250 ms no chip; destruição por hold de 250 ms em bloco sem nota (apaga o
+  inicial e os arrastados, inclusive com nota, com undo); o sheet de categoria
+  abre ao soltar e ignora o clique sintetizado.
+- **Hábitos**: chama laranja no dia com meta batida; seleção de data passada por
+  tap, calendário no Sheet por hold, strip seguindo a semana da data, laranja
+  fora de hoje, card da meta read-only no passado, sem XP/celebração no passado,
+  semanal registrando `incrementDates` na data.
+- **Pausa (F2)**: faixa fina, chama azul no valor pré-pausa, bloqueio de
+  progresso (hábitos/trackers/tempo/finanças, hoje e passado), toast e modal
+  ativo com "Encerrar pausa" + estender.
+- **Drawers**: entrada e saída no `NoteEditor` (slide; morph mantido na entrada
+  pela bolha), saída no `Sheet` compartilhado, transições nos sheets legados de
+  Finanças/Tempo/Hábitos, `ValueSheet` e `GraphSheet`; menus de nota também
+  animam. Tudo respeita `prefers-reduced-motion`.
+
 ### E6 — Planejamento/grafo
 
 - Fontes de tracker (último, média da janela, meta) + unidade herdada.
@@ -278,9 +318,12 @@ em uso e ganhou teste de grupo.
 
 **Depende de:** E0, E4 (para unidade semanal).
 
-### E7 — Sistema
+### E7 — Sistema (F2 concluída; F3–F5 pendentes)
 
-- Pausa: bloqueio de progresso, faixa, chama azul, toast, copy de sair.
+- ~~Pausa: bloqueio de progresso, faixa, chama azul, toast, copy de sair.~~
+  **F2 implementada em 20/10**: faixa, chama azul pré-pausa, bloqueio de
+  hábitos/trackers/tempo/finanças (inclusive passado), modal com **Encerrar
+  pausa** + estender.
 - Notificações iOS: agenda rolante + ressync + logs de diagnóstico.
 - Updater macOS: checagem + link para a release; updater real segue Windows.
 - Atualizar `docs/RELEASES.md` se o comportamento de busca mudar.

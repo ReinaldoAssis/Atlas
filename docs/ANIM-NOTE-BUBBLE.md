@@ -134,9 +134,11 @@ Framer Motion / Rive / After Effects e nos mandar o arquivo — a gente adapta o
   existe mais.
 - A bolha do planejador é acionada por **long press de 650 ms** num bloco que
   tenha nota. Hold de 250 ms em célula **vazia** cria o bloco e entra em modo
-  pintar; hold em célula preenchida não pinta.
-- Qualquer arrasto fora do modo pintar é navegação. Só o toque curto sem
-  arrasto cria, substitui ou desfaz uma célula.
+  pintar; hold de 250 ms em bloco **sem nota** entra em destruição (apaga o
+  inicial e os arrastados); hold em bloco com nota não pinta.
+- A edição de categoria é **hold de 250 ms no chip do topo**; tap só seleciona.
+- Qualquer arrasto fora do modo pintar/destruição é navegação. Só o toque curto
+  sem arrasto cria, substitui ou desfaz uma célula.
 - Ela **não fecha quando o dedo solta**: permanece até clique/toque fora, troca
   de contexto ou fechamento explícito. O toque que fecha **não** cria, substitui
   nem apaga o bloco.
@@ -146,6 +148,6 @@ Framer Motion / Rive / After Effects e nos mandar o arquivo — a gente adapta o
   necessário; a nota tocada abre o editor.
 - Transição para a nota: **morph** da linha/bolha para o editor (FLIP,
   ~280–360 ms, mola curta), com o Tempo ao fundo escurecido. Fechar o editor
-  reverte para a bolha/planejador. Respeitar `prefers-reduced-motion`.
+  desliza para baixo; o morph é só na entrada. Respeitar `prefers-reduced-motion`.
 - A bolha da nota (preview do bloco a partir do chip `tempo`) continua passiva;
   o contrato de âncoras e `z-index` da §3 segue valendo.
