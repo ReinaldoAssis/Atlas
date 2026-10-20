@@ -13,8 +13,9 @@
 	let {
 		title,
 		closeLabel,
-		onclose,
+		onclose: externalClose,
 		onpullup,
+		backdropGuardMs = 0,
 		children
 	}: {
 		title: string;
@@ -22,8 +23,34 @@
 		onclose: () => void;
 		/** Arrastar a alça para cima (mobile) dispara este callback. */
 		onpullup?: () => void;
+		/** Ignora cliques no backdrop logo após abrir (hold abre o sheet ao soltar). */
+		backdropGuardMs?: number;
 		children?: Snippet;
 	} = $props();
+
+	const openedAt = Date.now();
+
+	let closing = $state(false);
+
+	function reducedMotion(): boolean {
+		return typeof window.matchMedia !== 'function' || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+	}
+
+	/** Deixa a animação de saída rodar antes de o pai desmontar o sheet. */
+	function requestClose() {
+		if (closing) return;
+		if (reducedMotion()) {
+			externalClose();
+			return;
+		}
+		closing = true;
+		setTimeout(externalClose, 190);
+	}
+
+	/** Permite que um filho dispare a saída animada (ex.: escolher uma data). */
+	export function close() {
+		requestClose();
+	}
 
 	/**
 	 * Gesto de arrastar para cima em qualquer ponto do sheet (alça, cabeçalho ou
@@ -149,7 +176,8 @@
 	}
 
 	function onBackdrop(event: MouseEvent) {
-		if (event.target === event.currentTarget) onclose();
+		if (Date.now() - openedAt < backdropGuardMs) return;
+		if (event.target === event.currentTarget) requestClose();
 	}
 
 	onMount(() => {
@@ -164,7 +192,7 @@
 		function onKeydown(event: KeyboardEvent) {
 			if (event.key === 'Escape') {
 				event.stopPropagation();
-				onclose();
+				requestClose();
 				return;
 			}
 			if (event.key !== 'Tab' || !panel) return;
@@ -195,12 +223,12 @@
 	});
 </script>
 
-<div class="backdrop" role="presentation" onclick={onBackdrop}>
+<div class:closing class="backdrop" role="presentation" onclick={onBackdrop}>
 	<div class="sheet" role="dialog" aria-modal="true" aria-labelledby={titleId} bind:this={panel} tabindex="-1" use:pullUp={onpullup}>
 		<div class="grip" class:pull={Boolean(onpullup)} aria-hidden="true"></div>
 		<header class="head">
 			<h2 id={titleId}>{title}</h2>
-			<button type="button" class="close" aria-label={closeLabel} onclick={onclose}>
+			<button type="button" class="close" aria-label={closeLabel} onclick={requestClose}>
 				<X size={19} />
 			</button>
 		</header>
@@ -313,6 +341,29 @@
 		}
 	}
 
+	.backdrop.closing {
+		animation: sheet-fade-out 0.18s ease-in forwards;
+	}
+	.backdrop.closing .sheet {
+		animation: sheet-out 0.19s cubic-bezier(0.4, 0, 1, 1) forwards;
+	}
+	@keyframes sheet-out {
+		to {
+			transform: translateY(105%);
+		}
+	}
+	@keyframes sheet-fade-out {
+		to {
+			opacity: 0;
+		}
+	}
+	@keyframes sheet-out-center {
+		to {
+			opacity: 0;
+			transform: translateY(10px) scale(0.97);
+		}
+	}
+
 	@media (min-width: 860px) {
 		.backdrop {
 			align-items: center;
@@ -323,11 +374,16 @@
 			padding: 10px 22px 22px;
 			border-radius: 18px;
 		}
+		.backdrop.closing .sheet {
+			animation-name: sheet-out-center;
+		}
 	}
 
 	@media (prefers-reduced-motion: reduce) {
 		.backdrop,
-		.sheet {
+		.sheet,
+		.backdrop.closing,
+		.backdrop.closing .sheet {
 			animation: none;
 		}
 	}

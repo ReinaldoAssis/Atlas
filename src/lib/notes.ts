@@ -17,10 +17,14 @@ export interface Note {
 	updatedAt: string;
 	/** Quando a nota foi para a lixeira (ISO) ou null se ativa. */
 	trashedAt: string | null;
+	/** Último modo do editor, por nota. Ausente = `preview`. */
+	lastMode?: NoteMode;
 	/** Cópia criada pelo merge quando esta versão perdeu o LWW. */
 	conflictOf?: string;
 	conflictedAt?: string;
 }
+
+export type NoteMode = 'write' | 'preview' | 'split';
 
 export interface NoteFolder {
 	id: string;
@@ -65,12 +69,35 @@ export function createNote(folderIdValue: string | null = null, title = ''): Not
 		pinned: false,
 		createdAt: now,
 		updatedAt: now,
-		trashedAt: null
+		trashedAt: null,
+		lastMode: 'write'
 	};
 }
 
+/** Cópia independente, sem o estado de lixeira/merge. */
+export function duplicateNote(note: Note): Note {
+	const now = new Date().toISOString();
+	return {
+		...note,
+		id: noteId(),
+		title: `${noteTitle(note)} (cópia)`,
+		pinned: false,
+		createdAt: now,
+		updatedAt: now,
+		trashedAt: null,
+		conflictOf: undefined,
+		conflictedAt: undefined,
+		lastMode: note.lastMode ?? 'preview'
+	};
+}
+
+/** Link wiki para colar em outra nota. */
+export function noteLink(note: Note): string {
+	return `[[${noteTitle(note)}]]`;
+}
+
 /** Dias que uma nota permanece na lixeira antes de ser apagada em definitivo. */
-export const TRASH_RETENTION_DAYS = 30;
+export const TRASH_RETENTION_DAYS = 7;
 
 export function createFolder(
 	parentId: string | null = null,
@@ -98,6 +125,7 @@ function asStringArray(value: unknown): string[] {
 export function normalizeNote(raw: unknown): Note {
 	const source = (raw ?? {}) as Partial<Note>;
 	const now = new Date().toISOString();
+	const mode: NoteMode = source.lastMode === 'write' || source.lastMode === 'split' ? source.lastMode : 'preview';
 	return {
 		id: asString(source.id) || noteId(),
 		folderId: typeof source.folderId === 'string' ? source.folderId : null,
@@ -107,7 +135,8 @@ export function normalizeNote(raw: unknown): Note {
 		pinned: Boolean(source.pinned),
 		createdAt: asString(source.createdAt, now),
 		updatedAt: asString(source.updatedAt, now),
-		trashedAt: typeof source.trashedAt === 'string' ? source.trashedAt : null
+		trashedAt: typeof source.trashedAt === 'string' ? source.trashedAt : null,
+		lastMode: mode
 	};
 }
 

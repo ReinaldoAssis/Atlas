@@ -100,24 +100,49 @@
 	}
 
 	/* ---------- geometria ---------- */
-	function edgeGeometry(a: { x: number; y: number }, b: { x: number; y: number }) {
+	/**
+	 * Aresta reta entre as bordas dos nós. Arestas entre o mesmo par ganham um
+	 * desvio perpendicular (`slot`) para não ficarem sobrepostas.
+	 */
+	function edgeGeometry(a: { x: number; y: number }, b: { x: number; y: number }, slot: { index: number; count: number } = { index: 0, count: 1 }) {
 		const dx = b.x - a.x;
 		const dy = b.y - a.y;
 		const length = Math.hypot(dx, dy) || 1;
 		const ux = dx / length;
 		const uy = dy / length;
-		const sx = a.x + ux * (R0 + 2);
-		const sy = a.y + uy * (R0 + 2);
-		const ex = b.x - ux * (R0 + 12);
-		const ey = b.y - uy * (R0 + 12);
-		const cx = (a.x + b.x) / 2 - uy * length * 0.13;
-		const cy = (a.y + b.y) / 2 + ux * length * 0.13;
+		const shift = slot.count > 1 ? (slot.index - (slot.count - 1) / 2) * 16 : 0;
+		const nx = -uy * shift;
+		const ny = ux * shift;
+		const ax = a.x + nx;
+		const ay = a.y + ny;
+		const bx = b.x + nx;
+		const by = b.y + ny;
+		const sx = ax + ux * (R0 + 2);
+		const sy = ay + uy * (R0 + 2);
+		const ex = bx - ux * (R0 + 12);
+		const ey = by - uy * (R0 + 12);
 		return {
-			d: `M${sx.toFixed(1)},${sy.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${ex.toFixed(1)},${ey.toFixed(1)}`,
-			mx: (sx + 2 * cx + ex) / 4,
-			my: (sy + 2 * cy + ey) / 4
+			d: `M${sx.toFixed(1)},${sy.toFixed(1)} L${ex.toFixed(1)},${ey.toFixed(1)}`,
+			mx: (sx + ex) / 2,
+			my: (sy + ey) / 2
 		};
 	}
+
+	/** Índice/quantidade de arestas por par (sem direção) para o desvio. */
+	const edgeSlots = $derived.by(() => {
+		const groups = new Map<string, string[]>();
+		for (const edge of graph.edges) {
+			const key = [edge.from, edge.to].sort().join('|');
+			const ids = groups.get(key) ?? [];
+			ids.push(edge.id);
+			groups.set(key, ids);
+		}
+		const slots = new Map<string, { index: number; count: number }>();
+		for (const ids of groups.values()) {
+			ids.forEach((id, index) => slots.set(id, { index, count: ids.length }));
+		}
+		return slots;
+	});
 
 	function nodeAt(world: { x: number; y: number }, exclude?: string): GraphNode | undefined {
 		return graph.nodes.find((node) => node.id !== exclude && Math.hypot(node.x - world.x, node.y - world.y) < R0 + 12);
@@ -334,7 +359,7 @@
 			{@const a = findNode(edge.from)}
 			{@const b = findNode(edge.to)}
 			{#if a && b}
-				{@const geo = edgeGeometry(livePos(a), livePos(b))}
+				{@const geo = edgeGeometry(livePos(a), livePos(b), edgeSlots.get(edge.id))}
 				{@const ratio = edgeRatio(edge)}
 				<g class="gv-e" data-gv-edge={edge.id} role="button" tabindex="0" aria-label={`${a.name} para ${b.name}: ${edge.label}, ${Math.round(ratio * 100)}%`} onkeydown={(event) => onEdgeKey(event, edge.id)}>
 					<path class="gv-eh" d={geo.d} />

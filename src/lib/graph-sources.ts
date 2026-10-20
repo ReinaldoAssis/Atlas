@@ -24,9 +24,10 @@ function monthStart(today: string): string {
 	return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-01`;
 }
 
-function windowRange(edge: GraphEdge): Range {
+function windowRange(edge: GraphEdge, snapshot: AtlasSnapshot): Range {
 	const today = localDate();
-	if (edge.window === 'week') return { start: weekStartDate(today), end: today };
+	const firstDay = snapshot.preferences.firstDayOfWeek ?? 'mon';
+	if (edge.window === 'week') return { start: weekStartDate(today, firstDay), end: today };
 	if (edge.window === 'month') return { start: monthStart(today), end: today };
 	if (edge.window === 'fixed') return { start: edge.windowFrom ?? null, end: today };
 	return { start: null, end: today };
@@ -59,7 +60,7 @@ export function sourceProgress(edge: GraphEdge, snapshot: AtlasSnapshot): Source
 		case 'habitValue': {
 			const habit = snapshot.habits.find((item) => item.id === edge.refId);
 			if (!habit) return null;
-			const range = windowRange(edge);
+			const range = windowRange(edge, snapshot);
 			const value = snapshot.habitLogs
 				.filter((log) => log.habitId === habit.id && inRange(log.date, range))
 				.reduce((sum, log) => sum + log.value, 0);
@@ -68,21 +69,21 @@ export function sourceProgress(edge: GraphEdge, snapshot: AtlasSnapshot): Source
 		case 'habitStreak': {
 			const habit = snapshot.habits.find((item) => item.id === edge.refId);
 			if (!habit) return null;
-			const value = currentStreak(habit, snapshot.habitLogs, localDate(), pausePeriods(snapshot));
+			const value = currentStreak(habit, snapshot.habitLogs, localDate(), pausePeriods(snapshot), snapshot.preferences.firstDayOfWeek ?? 'mon');
 			return resultOf(value, edge.target);
 		}
 		case 'timeHours': {
 			const category = snapshot.categories.find((item) => item.id === edge.refId && item.module === 'time');
 			if (!category) return null;
 			const today = localDate();
-			const week = weekStartDate(today);
+			const week = weekStartDate(today, snapshot.preferences.firstDayOfWeek ?? 'mon');
 			const minutes = snapshot.timeBlocks
 				.filter((block) => block.categoryId === category.id && block.status !== 'cancelled' && block.startAt.slice(0, 10) >= week && block.startAt.slice(0, 10) <= today)
 				.reduce((sum, block) => sum + block.plannedMinutes, 0);
 			return resultOf(minutes / 60, edge.target);
 		}
 		case 'financeSavings': {
-			const range = windowRange(edge);
+			const range = windowRange(edge, snapshot);
 			const value = snapshot.transactions
 				.filter((item) => inRange(item.date, range))
 				.reduce((sum, item) => sum + (item.type === 'income' ? item.amountMinor : -item.amountMinor), 0);
@@ -101,9 +102,37 @@ export function sourceProgress(edge: GraphEdge, snapshot: AtlasSnapshot): Source
 			const ratio = Math.max(0, Math.min(1, (target - spent) / target));
 			return { value: spent, target, ratio, done: spent <= target };
 		}
+		case 'trackerLast':
+		case 'trackerAverage':
+		case 'trackerGoal': {
+			const tracker = snapshot.trackers.find((item) => item.id === edge.refId);
+			if (!tracker) return null;
+			const range = windowRange(edge, snapshot);
+			const entries = snapshot.trackerEntries
+				.filter((entry) => entry.trackerId === tracker.id && inRange(entry.date, range))
+				.sort((a, b) => `${a.date} ${a.time ?? ''}`.localeCompare(`${b.date} ${b.time ?? ''}`));
+			const latest = entries.at(-1)?.value ?? 0;
+			const value = edge.source === 'trackerAverage' && entries.length
+				? entries.reduce((sum, entry) => sum + entry.value, 0) / entries.length
+				: latest;
+			const fallback = tracker.target && tracker.target > 0 ? tracker.target : 0;
+			const target = edge.source === 'trackerGoal' && edge.target <= 0 ? fallback : edge.target;
+			return trackerResult(value, target, tracker.targetDirection);
+		}
 		default:
 			return null;
 	}
+}
+
+/** Progresso de tracker respeitando "menos é melhor". */
+function trackerResult(value: number, target: number, direction: 'up' | 'down'): SourceProgress {
+	if (!target || target <= 0) return { value, target: 0, ratio: 0, done: false };
+	if (direction === 'down') {
+		const done = value <= target;
+		const ratio = done ? 1 : Math.min(1, target / Math.max(value, 1e-9));
+		return { value, target, ratio, done };
+	}
+	return resultOf(value, target);
 }
 
 /**
@@ -133,18 +162,29 @@ export function isMoneySource(source: GraphSourceKind): boolean {
 }
 
 export function sourceWindowable(source: GraphSourceKind): boolean {
-	return source === 'habitValue' || source === 'financeSavings';
+	return source === 'habitValue' || source === 'financeSavings' || source === 'trackerLast' || source === 'trackerAverage';
 }
 
 export function sourceNeedsRef(source: GraphSourceKind): boolean {
-	return source === 'habitValue' || source === 'habitStreak' || source === 'timeHours' || source === 'financeLimit';
+	return source === 'habitValue' || source === 'habitStreak' || source === 'timeHours' || source === 'financeLimit' ||
+		source === 'trackerLast' || source === 'trackerAverage' || source === 'trackerGoal';
 }
 
 export function sourceRefOptions(source: GraphSourceKind, snapshot: AtlasSnapshot): { id: string; name: string }[] {
 	if (source === 'habitValue' || source === 'habitStreak') return snapshot.habits.map((habit) => ({ id: habit.id, name: habit.name }));
 	if (source === 'timeHours') return snapshot.categories.filter((item) => item.module === 'time').map((item) => ({ id: item.id, name: item.name }));
 	if (source === 'financeLimit') return snapshot.categories.filter((item) => item.module === 'finance' && item.kind !== 'in').map((item) => ({ id: item.id, name: item.name }));
+	if (source === 'trackerLast' || source === 'trackerAverage' || source === 'trackerGoal') {
+		return snapshot.trackers.filter((item) => item.active).map((item) => ({ id: item.id, name: item.name }));
+	}
 	return [];
+}
+
+/** Meta sugerida ao trocar a referência (trackerGoal usa a meta do tracker). */
+export function sourceDefaultTarget(source: GraphSourceKind, refId: string | undefined, snapshot: AtlasSnapshot): number | undefined {
+	if (source !== 'trackerGoal' || !refId) return undefined;
+	const target = snapshot.trackers.find((item) => item.id === refId)?.target;
+	return target && target > 0 ? target : undefined;
 }
 
 export function sourceUnit(edge: GraphEdge, snapshot: AtlasSnapshot): string {
@@ -152,9 +192,13 @@ export function sourceUnit(edge: GraphEdge, snapshot: AtlasSnapshot): string {
 		case 'habitValue':
 			return snapshot.habits.find((item) => item.id === edge.refId)?.unit || 'x';
 		case 'habitStreak':
-			return 'dias';
+			return snapshot.habits.find((item) => item.id === edge.refId)?.metric === 'weekly' ? 'semanas' : 'dias';
 		case 'timeHours':
 			return 'h';
+		case 'trackerLast':
+		case 'trackerAverage':
+		case 'trackerGoal':
+			return snapshot.trackers.find((item) => item.id === edge.refId)?.unit || 'x';
 		case 'financeSavings':
 		case 'financeLimit':
 			return snapshot.preferences.currency;

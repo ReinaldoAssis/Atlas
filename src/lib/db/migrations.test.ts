@@ -73,6 +73,13 @@ describe('migrations', () => {
 		expect(db.executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS tracker_entries'))).toBe(true);
 	});
 
+	it('v7 cria a lixeira global', async () => {
+		const db = fakeContext(0);
+		await runMigrations(db.ctx);
+		expect(db.executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS trash_events'))).toBe(true);
+		expect(db.executed.some((sql) => sql.includes('CREATE INDEX IF NOT EXISTS trash_events_by_deleted'))).toBe(true);
+	});
+
 	it('migra o blob do grafo para as tabelas', async () => {
 		const graph = {
 			domains: [{ id: 'car' }],

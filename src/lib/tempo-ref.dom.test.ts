@@ -22,14 +22,25 @@ describe('decorateTempoRefs', () => {
 		expect(created[0].dataset.tpAllDay).toBe('1');
 	});
 
-	it('não mexe em código nem em links', () => {
+	it('não mexe em bloco de código nem em links', () => {
 		const root = document.createElement('div');
 		root.innerHTML =
 			'<pre><code>tempo 16/10</code></pre><p><a href="#">tempo 16/10</a></p><p>texto tempo 16/10</p>';
 		const created = decorateTempoRefs(root, '2026-11-03T10:00:00');
 		expect(created).toHaveLength(1);
-		expect(root.querySelector('code')?.textContent).toBe('tempo 16/10');
+		expect(root.querySelector('pre code')?.textContent).toBe('tempo 16/10');
 		expect(root.querySelector('a')?.textContent).toBe('tempo 16/10');
+	});
+
+	it('marca a referência dentro de código inline (crases)', () => {
+		// A referência inserida pela nota vai embrulhada em crases; o chip precisa
+		// continuar aparecendo e clicável.
+		const root = document.createElement('div');
+		root.innerHTML = '<p>foco <code>tempo 16/10 17h-20h</code> fim</p>';
+		const created = decorateTempoRefs(root, '2026-11-03T10:00:00');
+		expect(created).toHaveLength(1);
+		expect(root.querySelector('code')?.textContent).toBe('tempo 16/10 17h-20h');
+		expect(root.querySelector('code .tp-ref')).not.toBeNull();
 	});
 
 	it('marca várias referências no mesmo texto', () => {

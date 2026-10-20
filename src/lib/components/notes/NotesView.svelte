@@ -7,7 +7,8 @@
 
 <script lang="ts">
 	import { onMount, tick, untrack } from 'svelte';
-	import { RotateCcw, Trash2 } from '@lucide/svelte';
+	import { fade, fly } from 'svelte/transition';
+	import { Copy, Download, Link2, Pencil, RotateCcw, Trash2 } from '@lucide/svelte';
 	import {
 		allTags,
 		backlinks,
@@ -16,6 +17,7 @@
 		createNote,
 		descendantFolderIds,
 		deaccent,
+		duplicateNote,
 		filterNotesLocally,
 		findNoteByTitle,
 		folderPath,
@@ -24,6 +26,7 @@
 		highlightHtml,
 		NOTE_COLORS,
 		noteExcerpt,
+		noteLink,
 		noteTitle,
 		notesInFolder,
 		sortNotes,
@@ -31,6 +34,7 @@
 		TRASH_RETENTION_DAYS,
 		type Note,
 		type NoteFolder,
+		type NoteMode,
 		type NotesState
 	} from '#lib/notes';
 	import type { TimeBlock } from '#lib/atlas';
@@ -44,6 +48,7 @@
 	} from '#lib/notes-store';
 	import { burstAt, centerOf, playTone, playTypingThock, prefersReducedMotion, pulseHaptic } from '#lib/feedback';
 	import { m } from '#lib/paraglide/messages.js';
+	import { saveNoteMarkdown } from '#lib/note-export';
 	import FolderIcon from './FolderIcon.svelte';
 	import NoteEditor from './NoteEditor.svelte';
 
@@ -87,7 +92,7 @@
 		if (openNoteToken === handledOpenToken || !ready) return;
 		handledOpenToken = openNoteToken;
 		const note = notes.find((item) => item.id === openNoteId);
-		if (note) void openNote(note, 'preview');
+		if (note) void openNote(note);
 	});
 
 	let notes = $state<Note[]>([]);
@@ -109,7 +114,7 @@
 	let editorNote = $state<Note | null>(null);
 	let editorOpen = $state(false);
 	let editorIn = $state(false);
-	let editorMode = $state<'write' | 'preview'>('preview');
+	let editorMode = $state<NoteMode>('preview');
 
 	let sheetKind = $state<'none' | 'newfolder' | 'picker'>('none');
 	let sheetIn = $state(false);
@@ -118,7 +123,8 @@
 	let pickerNote = $state<Note | null>(null);
 
 	let confirmState = $state<{ message: string; label: string; action: () => void } | null>(null);
-	let menuState = $state<{ note: Note; x: number; y: number } | null>(null);
+	let renameState = $state<{ note: Note; value: string } | null>(null);
+	let menuState = $state<{ note: Note; x: number; y: number; mobile: boolean } | null>(null);
 
 	let suppressClick = false;
 	let drag: { kind: 'note' | 'folder'; id: string; x: number; y: number; active: boolean; ghost?: HTMLElement } | null = null;
@@ -215,13 +221,15 @@
 	let menuOpenedAt = 0;
 
 	function openMenu(note: Note, x: number, y: number) {
-		const width = 190;
-		const height = 62;
+		const mobile = window.matchMedia('(max-width: 560px)').matches;
+		const width = 210;
+		const height = mobile ? 0 : 250;
 		menuOpenedAt = Date.now();
 		menuState = {
 			note,
+			mobile,
 			x: Math.max(8, Math.min(x, window.innerWidth - width)),
-			y: Math.max(8, Math.min(y, window.innerHeight - height))
+			y: mobile ? 0 : Math.max(8, Math.min(y, window.innerHeight - height))
 		};
 		tone(520, 0.05);
 		haptic(8);
@@ -241,6 +249,7 @@
 		if (event.key === 'Escape') {
 			closeMenu();
 			closeConfirm();
+			closeRename();
 		}
 	}
 
@@ -368,12 +377,26 @@
 		await openNote(note, 'write');
 	}
 
-	async function openNote(note: Note, mode: 'write' | 'preview' = 'preview') {
+	async function openNote(note: Note, mode?: NoteMode) {
+		if (!trashedView && note.folderId !== currentFolder) {
+			// A nota pode ter sido aberta por deep-link/backlink de outra pasta.
+			currentFolder = note.folderId;
+			query = '';
+			activeTags = [];
+			searchIds = null;
+		}
 		editorNote = note;
-		editorMode = mode;
+		editorMode = mode ?? note.lastMode ?? 'preview';
+		const wasOpen = editorOpen;
+		if (!wasOpen) editorIn = false;
 		editorOpen = true;
 		await tick();
-		requestAnimationFrame(() => (editorIn = true));
+		if (!wasOpen) {
+			// Dois frames: garante que o navegador pinte o estado fora da tela
+			// antes de aplicar `.on`, senão a transição de entrada não roda.
+			await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+		}
+		editorIn = true;
 		tone(420, 0.14, 'triangle', 0.05);
 		setTimeout(() => tone(700, 0.1, 'triangle', 0.04), 60);
 		haptic(8);
@@ -393,6 +416,81 @@
 		openConfirm(`Excluir "${noteTitle(note)}"? A nota vai para a lixeira e pode ser restaurada.`, () => {
 			void trashNote(note);
 		});
+	}
+
+	/* ---------- ações do menu ---------- */
+	async function openRename(note: Note) {
+		closeMenu();
+		renameState = { note, value: noteTitle(note) };
+		await tick();
+		requestAnimationFrame(() => {
+			const input = document.querySelector<HTMLInputElement>('.nt-rename .nt-inp');
+			input?.focus();
+			input?.select();
+		});
+	}
+
+	function closeRename() {
+		renameState = null;
+	}
+
+	function confirmRename() {
+		if (!renameState) return;
+		const value = renameState.value.trim();
+		if (!value) {
+			const input = document.querySelector<HTMLInputElement>('.nt-rename .nt-inp');
+			input?.focus();
+			input?.animate?.([{ transform: 'translateX(-6px)' }, { transform: 'translateX(6px)' }, { transform: 'none' }], { duration: 200 });
+			haptic(20);
+			return;
+		}
+		const note = renameState.note;
+		renameState = null;
+		patchNote(note, { title: value });
+		notify('Nota renomeada');
+		tone(660, 0.08, 'triangle', 0.05);
+	}
+
+	function duplicate(note: Note) {
+		closeMenu();
+		const copy = duplicateNote(note);
+		notes = [copy, ...notes];
+		void persist(copy);
+		publish();
+		bump();
+		spark(document.querySelector(`[data-note="${note.id}"]`), 10);
+		tone(560, 0.1, 'triangle', 0.05);
+		notify('Nota duplicada');
+	}
+
+	async function exportNote(note: Note) {
+		closeMenu();
+		try {
+			const result = await saveNoteMarkdown(note);
+			notify(result === 'saved' ? 'Nota exportada.' : 'Exportação cancelada.');
+		} catch (error) {
+			console.error('Falha ao exportar a nota', error);
+			ontoast('Não foi possível exportar a nota.', { warning: true });
+		}
+	}
+
+	async function copyLink(note: Note) {
+		closeMenu();
+		const text = noteLink(note);
+		try {
+			await navigator.clipboard.writeText(text);
+		} catch {
+			const field = document.createElement('textarea');
+			field.value = text;
+			field.style.position = 'fixed';
+			field.style.opacity = '0';
+			document.body.appendChild(field);
+			field.select();
+			document.execCommand('copy');
+			field.remove();
+		}
+		notify('Link copiado');
+		haptic(8);
 	}
 
 	async function trashNote(note: Note) {
@@ -583,7 +681,8 @@
 		sheetKind = kind;
 		sheetIn = false;
 		await tick();
-		requestAnimationFrame(() => (sheetIn = true));
+		await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+		sheetIn = true;
 	}
 
 	async function closeSheet() {
@@ -612,7 +711,7 @@
 		if (existing) {
 			tone(560, 0.08);
 			haptic(6);
-			await openNote(existing, 'preview');
+			await openNote(existing);
 			return;
 		}
 		const note = createNote(editorNote?.folderId ?? (trashedView ? null : currentFolder), title);
@@ -962,15 +1061,68 @@
 </section>
 
 {#if menuState}
+	{@const target = menuState.note}
 	<div class="nt-menu-ov" role="presentation" onclick={closeMenuFromBackdrop}></div>
+	{#if menuState.mobile}
+		<div
+			class="nt-sh on nt-mmenu nt-sh-fly"
+			role="menu"
+			aria-label="Ações da nota"
+			style="--nt-tint:#8d968a"
+			in:fly={{ y: 120, duration: prefersReducedMotion() ? 0 : 300 }}
+			out:fly={{ y: 120, duration: prefersReducedMotion() ? 0 : 180 }}
+		>
+			<div class="nt-grip"></div>
+			<div class="nt-mmenu-head">
+				<b>{noteTitle(target)}</b>
+				<small>{formatNoteDate(target.updatedAt)}</small>
+			</div>
+			<button role="menuitem" class="nt-mrow" onclick={() => void openRename(target)}><Pencil size={17} /> Renomear</button>
+			<button role="menuitem" class="nt-mrow" onclick={() => duplicate(target)}><Copy size={17} /> Duplicar</button>
+			<button role="menuitem" class="nt-mrow" onclick={() => void exportNote(target)}><Download size={17} /> Exportar .md</button>
+			<button role="menuitem" class="nt-mrow" onclick={() => void copyLink(target)}><Link2 size={17} /> Copiar link</button>
+			<button role="menuitem" class="nt-mrow danger" onclick={() => requestDelete(target)}><Trash2 size={17} /> Excluir nota</button>
+		</div>
+	{:else}
+		<div
+			class="nt-menu"
+			role="menu"
+			style={`left:${menuState.x}px; top:${menuState.y}px; --nt-tint:${(target.folderId && folders.find((f) => f.id === target.folderId)?.color) || '#8d968a'}`}
+		>
+			<button role="menuitem" onclick={() => void openRename(target)}><Pencil size={15} /> Renomear</button>
+			<button role="menuitem" onclick={() => duplicate(target)}><Copy size={15} /> Duplicar</button>
+			<button role="menuitem" onclick={() => void exportNote(target)}><Download size={15} /> Exportar .md</button>
+			<button role="menuitem" onclick={() => void copyLink(target)}><Link2 size={15} /> Copiar link</button>
+			<button class="danger" role="menuitem" onclick={() => requestDelete(target)}><Trash2 size={15} /> Excluir nota</button>
+		</div>
+	{/if}
+{/if}
+
+{#if renameState}
+	<div class="nt-ov on nt-ov-fly" role="presentation" transition:fade={{ duration: prefersReducedMotion() ? 0 : 150 }} onclick={closeRename}></div>
 	<div
-		class="nt-menu"
-		role="menu"
-		style={`left:${menuState.x}px; top:${menuState.y}px; --nt-tint:${(menuState.note.folderId && folders.find((f) => f.id === menuState!.note.folderId)?.color) || '#8d968a'}`}
+		class="nt-sh on nt-rename nt-sh-fly"
+		role="dialog"
+		aria-modal="true"
+		aria-label="Renomear nota"
+		in:fly={{ y: 120, duration: prefersReducedMotion() ? 0 : 300 }}
+		out:fly={{ y: 120, duration: prefersReducedMotion() ? 0 : 180 }}
 	>
-		<button class="danger" role="menuitem" onclick={() => { const note = menuState!.note; closeMenu(); requestDelete(note); }}>
-			<Trash2 size={15} /> Excluir nota
-		</button>
+		<div class="nt-grip"></div>
+		<input
+			class="nt-inp"
+			aria-label="Novo título"
+			maxlength="60"
+			bind:value={renameState.value}
+			onkeydown={(event) => {
+				if (event.key === 'Enter') {
+					event.preventDefault();
+					confirmRename();
+				}
+			}}
+		/>
+		<button class="nt-btn" onclick={confirmRename}>Salvar</button>
+		<button class="nt-btn ghost" onclick={closeRename}>Cancelar</button>
 	</div>
 {/if}
 
@@ -983,6 +1135,15 @@
 			{timeBlocks}
 			open={editorIn}
 			initialMode={editorMode}
+			onmode={(mode) => {
+				if (!editorNote) return;
+				editorMode = mode;
+				const updated = { ...editorNote, lastMode: mode };
+				editorNote = updated;
+				notes = notes.map((item) => (item.id === updated.id ? updated : item));
+				void persist(updated);
+				publish();
+			}}
 			{flushToken}
 			{sound}
 			{typingSound}
@@ -994,15 +1155,22 @@
 			onopenfolder={() => openPicker(editorNote as Note)}
 			onclose={closeEditor}
 			onwikilink={openWikiLink}
-			onopenbacklink={(note) => openNote(note, 'preview')}
+			onopenbacklink={(note) => openNote(note)}
 			{ontoast}
 		/>
 	{/key}
 {/if}
 
 {#if confirmState}
-	<div class="nt-ov on" role="presentation" onclick={closeConfirm}></div>
-	<div class="nt-sh on" role="dialog" aria-modal="true" aria-label="Confirmação">
+	<div class="nt-ov on nt-ov-fly" role="presentation" transition:fade={{ duration: prefersReducedMotion() ? 0 : 150 }} onclick={closeConfirm}></div>
+	<div
+		class="nt-sh on nt-sh-fly"
+		role="dialog"
+		aria-modal="true"
+		aria-label="Confirmação"
+		in:fly={{ y: 120, duration: prefersReducedMotion() ? 0 : 300 }}
+		out:fly={{ y: 120, duration: prefersReducedMotion() ? 0 : 180 }}
+	>
 		<div class="nt-grip"></div>
 		<p class="nt-confirm-text">{confirmState.message}</p>
 		<button class="nt-btn danger" onclick={runConfirm}>{confirmState.label}</button>

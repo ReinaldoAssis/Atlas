@@ -1,7 +1,38 @@
 import { describe, expect, it } from 'vitest';
-import { blockIdsForNote, blocksForRef, notesForBlock, parseTempoRefs, refOverlapsBlock } from './tempo-ref';
+import { blockIdsForNote, blocksForRef, insideCodeAt, notesForBlock, parseTempoRefs, refOverlapsBlock, tempoReference } from './tempo-ref';
 
 const NOTE_DATE = '2026-11-03T10:00:00.000Z';
+
+describe('insideCodeAt', () => {
+	it('detecta span inline aberto', () => {
+		expect(insideCodeAt('foco `tempo 16/10', 18)).toBe(true);
+	});
+
+	it('não considera código depois do fechamento', () => {
+		expect(insideCodeAt('foco `tempo 16/10` ', 19)).toBe(false);
+	});
+
+	it('não considera crases fechadas antes do cursor', () => {
+		expect(insideCodeAt('`x` e agora ', 13)).toBe(false);
+	});
+
+	it('detecta bloco cercado', () => {
+		expect(insideCodeAt('```\ntempo 16/10\n', 15)).toBe(true);
+		expect(insideCodeAt('```\nx\n```\nfora ', 15)).toBe(false);
+	});
+
+	it('trata delimitadores de dois backticks', () => {
+		expect(insideCodeAt('a ``x`y', 8)).toBe(true);
+	});
+});
+
+describe('tempoReference', () => {
+	it('gera a referência no formato aceito pelo parser', () => {
+		const raw = tempoReference({ startAt: '2026-10-16T17:00:00', endAt: '2026-10-16T20:00:00' });
+		expect(raw).toBe('tempo 16/10 17:00-20:00');
+		expect(parseTempoRefs(raw, NOTE_DATE)[0]).toMatchObject({ from: '2026-10-16T17:00', to: '2026-10-16T20:00' });
+	});
+});
 
 describe('parseTempoRefs', () => {
 	it('lê data e intervalo de horas', () => {

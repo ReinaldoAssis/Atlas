@@ -8,12 +8,16 @@ import {
 	experienceProgress,
 	HABIT_BOOLEAN_LABELS,
 	habitLogId,
+	habitProgress,
 	localDate,
 	money,
 	normalizeDailyGoal,
+	normalizeFirstDayOfWeek,
 	nextBooleanLog,
 	positiveValueOf,
+	remapWeeklyLogs,
 	weekStartDate,
+	weeklyLogFor,
 	xpNeededForLevel,
 	type Habit,
 	type HabitLog
@@ -78,6 +82,19 @@ describe('weekStartDate', () => {
 	it('mantém a própria segunda-feira', () => {
 		expect(weekStartDate('2026-10-12')).toBe('2026-10-12');
 	});
+
+	it('respeita domingo como primeiro dia', () => {
+		// 2026-10-15 é quinta; o domingo anterior é 2026-10-11.
+		expect(weekStartDate('2026-10-15', 'sun')).toBe('2026-10-11');
+		expect(weekStartDate('2026-10-11', 'sun')).toBe('2026-10-11');
+	});
+
+	it('normaliza o primeiro dia para mon/sun', () => {
+		expect(normalizeFirstDayOfWeek('sun')).toBe('sun');
+		expect(normalizeFirstDayOfWeek('mon')).toBe('mon');
+		expect(normalizeFirstDayOfWeek('segunda')).toBe('mon');
+		expect(normalizeFirstDayOfWeek(undefined)).toBe('mon');
+	});
 });
 
 describe('localDate', () => {
@@ -115,6 +132,22 @@ describe('didMeetTarget', () => {
 		const habit = dailyBooleanHabit({ metric: 'count', unit: 'ml', target: 2000 });
 		expect(didMeetTarget(habit, 1999)).toBe(false);
 		expect(didMeetTarget(habit, 2000)).toBe(true);
+	});
+
+	it('com "menos é melhor", a meta vira teto', () => {
+		const habit = dailyBooleanHabit({ metric: 'duration', unit: 'min', target: 60, targetDirection: 'down' });
+		expect(didMeetTarget(habit, 61)).toBe(false);
+		expect(didMeetTarget(habit, 60)).toBe(true);
+		expect(didMeetTarget(habit, 0)).toBe(true);
+	});
+
+	it('a barra do tile acompanha a direção', () => {
+		const up = dailyBooleanHabit({ metric: 'count', target: 10 });
+		expect(habitProgress(up, 5)).toBe(0.5);
+		expect(habitProgress(up, 20)).toBe(1);
+		const down = dailyBooleanHabit({ metric: 'duration', target: 60, targetDirection: 'down' });
+		expect(habitProgress(down, 30)).toBe(1);
+		expect(habitProgress(down, 120)).toBe(0.5);
 	});
 });
 
@@ -183,6 +216,117 @@ describe('currentStreak', () => {
 		const habit = dailyBooleanHabit({ active: false });
 		expect(currentStreak(habit, [log(habit.id, today)], today)).toBe(0);
 	});
+
+	it('conta semanas consecutivas para hábito semanal', () => {
+		const habit = dailyBooleanHabit({ metric: 'weekly', target: 3, scheduledDays: [] });
+		const logs = [
+			log(habit.id, '2026-10-12', 3),
+			log(habit.id, '2026-10-05', 4),
+			log(habit.id, '2026-09-28', 3)
+		];
+		expect(currentStreak(habit, logs, today)).toBe(3);
+	});
+
+	it('semana atual em aberto não quebra a sequência', () => {
+		const habit = dailyBooleanHabit({ metric: 'weekly', target: 3, scheduledDays: [] });
+		const logs = [log(habit.id, '2026-10-05', 3), log(habit.id, '2026-09-28', 3)];
+		expect(currentStreak(habit, logs, today)).toBe(2);
+	});
+
+	it('semana atual abaixo da meta ainda não quebra', () => {
+		const habit = dailyBooleanHabit({ metric: 'weekly', target: 3, scheduledDays: [] });
+		const logs = [log(habit.id, '2026-10-12', 1), log(habit.id, '2026-10-05', 3)];
+		expect(currentStreak(habit, logs, today)).toBe(1);
+	});
+
+	it('pula semanas em pausa no hábito semanal', () => {
+		const habit = dailyBooleanHabit({ metric: 'weekly', target: 3, scheduledDays: [] });
+		const logs = [log(habit.id, '2026-10-05', 3), log(habit.id, '2026-09-21', 3)];
+		expect(currentStreak(habit, logs, today, [{ start: '2026-09-28', end: '2026-10-04' }])).toBe(2);
+	});
+
+	it('respeita domingo como início da semana no semanal', () => {
+		const habit = dailyBooleanHabit({ metric: 'weekly', target: 3, scheduledDays: [] });
+		const logs = [log(habit.id, '2026-10-11', 3), log(habit.id, '2026-10-04', 3)];
+		expect(currentStreak(habit, logs, today, [], 'sun')).toBe(2);
+	});
+
+	it('conta log semanal gravado no dia do incremento (chave antiga)', () => {
+		// O log deveria estar em 2026-10-12 (início da semana), mas versões antigas
+		// gravaram no dia do incremento. O streak não pode zerar por isso.
+		const habit = dailyBooleanHabit({ metric: 'weekly', target: 3, scheduledDays: [] });
+		const logs = [log(habit.id, '2026-10-14', 3), log(habit.id, '2026-10-07', 3)];
+		expect(currentStreak(habit, logs, today)).toBe(2);
+	});
+});
+
+describe('weeklyLogFor', () => {
+	const week = '2026-10-12';
+
+	it('prefere a chave canônica da semana', () => {
+		const logs = [log('h1', '2026-10-14', 2), log('h1', week, 4)];
+		expect(weeklyLogFor(logs, 'h1', week)?.value).toBe(4);
+	});
+
+	it('cai para o registro dentro da semana quando a chave é antiga', () => {
+		const logs = [log('h1', '2026-10-14', 3)];
+		expect(weeklyLogFor(logs, 'h1', week)?.date).toBe('2026-10-14');
+	});
+
+	it('escolhe o registro mais recente da semana', () => {
+		const logs = [log('h1', '2026-10-13', 1), log('h1', '2026-10-15', 2)];
+		expect(weeklyLogFor(logs, 'h1', week)?.date).toBe('2026-10-15');
+	});
+
+	it('não pega log de outra semana nem de outro hábito', () => {
+		const logs = [log('h1', '2026-10-11', 3), log('h1', '2026-10-19', 3), log('h2', week, 3)];
+		expect(weeklyLogFor(logs, 'h1', week)).toBeUndefined();
+	});
+});
+
+describe('remapWeeklyLogs', () => {
+	it('move o log da semana atual para o novo início', () => {
+		const log: HabitLog = {
+			id: 'hlog:h1:2026-10-12',
+			habitId: 'h1',
+			date: '2026-10-12',
+			value: 2,
+			completed: false
+		};
+		const remapped = remapWeeklyLogs([log], new Set(['h1']), '2026-10-12', '2026-10-11');
+		expect(remapped).toHaveLength(1);
+		expect(remapped[0].date).toBe('2026-10-11');
+		expect(remapped[0].id).toBe('hlog:h1:2026-10-11');
+	});
+
+	it('funde com o log existente sem duplicar valor', () => {
+		const oldLog: HabitLog = {
+			id: 'hlog:h1:2026-10-12',
+			habitId: 'h1',
+			date: '2026-10-12',
+			value: 2,
+			completed: false,
+			incrementDates: ['2026-10-13']
+		};
+		const current: HabitLog = {
+			id: 'hlog:h1:2026-10-11',
+			habitId: 'h1',
+			date: '2026-10-11',
+			value: 3,
+			completed: true,
+			incrementDates: ['2026-10-12']
+		};
+		const remapped = remapWeeklyLogs([oldLog, current], new Set(['h1']), '2026-10-12', '2026-10-11');
+		expect(remapped).toHaveLength(1);
+		expect(remapped[0].value).toBe(3);
+		expect(remapped[0].incrementDates).toEqual(['2026-10-12', '2026-10-13']);
+	});
+
+	it('não mexe em hábito diário nem quando o início é o mesmo', () => {
+		const daily: HabitLog = { id: 'd', habitId: 'h2', date: '2026-10-12', value: 1, completed: true };
+		expect(remapWeeklyLogs([daily], new Set(['h1']), '2026-10-12', '2026-10-11')).toEqual([daily]);
+		expect(remapWeeklyLogs([daily], new Set(['h2']), '2026-10-12', '2026-10-12')).toEqual([daily]);
+	});
 });
 
 describe('money', () => {
@@ -220,6 +364,10 @@ describe('createEmptySnapshot', () => {
 		expect(normalizeDailyGoal(7.6)).toBe(8);
 		expect(normalizeDailyGoal(99)).toBe(12);
 		expect(normalizeDailyGoal('5')).toBe(5);
+	});
+
+	it('a semana começa na segunda por padrão', () => {
+		expect(createEmptySnapshot().preferences.firstDayOfWeek).toBe('mon');
 	});
 });
 

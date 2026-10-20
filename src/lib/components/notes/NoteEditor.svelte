@@ -13,19 +13,19 @@
 	import { isTauri } from '@tauri-apps/api/core';
 	import {
 		findNoteByTitle,
-		noteExportFileName,
-		noteMarkdown,
 		noteTitle,
 		normalizeTag,
 		tagColor,
 		type Note,
-		type NoteFolder
+		type NoteFolder,
+		type NoteMode
 	} from '#lib/notes';
+	import { saveNoteMarkdown } from '#lib/note-export';
 	import { playTone, playTypingThock, prefersReducedMotion, pulseHaptic } from '#lib/feedback';
-	import { decorateTempoRefs } from '#lib/tempo-ref';
+	import { decorateTempoRefs, insideCodeAt, tempoReference } from '#lib/tempo-ref';
 	import { TimeBubble } from '#lib/bubble';
-	import type { TimeBlock } from '#lib/atlas';
-	import { Download, MoreHorizontal } from '@lucide/svelte';
+	import { formatMinutes, type TimeBlock } from '#lib/atlas';
+	import { Clock, Download, MoreHorizontal } from '@lucide/svelte';
 	import FolderIcon from './FolderIcon.svelte';
 	import ArtifactFrame from './ArtifactFrame.svelte';
 
@@ -37,6 +37,8 @@
 		open,
 		initialMode,
 		flushToken = 0,
+		morphFrom = null,
+		onmode,
 		sound,
 		typingSound,
 		haptics,
@@ -55,12 +57,15 @@
 		folders: NoteFolder[];
 		timeBlocks?: TimeBlock[];
 		open: boolean;
-		initialMode: 'write' | 'preview';
+		initialMode: NoteMode;
+		onmode?: (mode: NoteMode) => void;
 		sound: boolean;
 		typingSound: boolean;
 		haptics: boolean;
 		/** Muda quando o pai precisa que o rascunho seja gravado antes do reload. */
 		flushToken?: number;
+		/** Retângulo de origem para o morph da bolha de tempo até o editor. */
+		morphFrom?: DOMRect | null;
 		backlinks: Note[];
 		onpatch: (patch: Partial<Note>) => void;
 		onpin: (element?: Element | null) => void;
@@ -78,10 +83,14 @@
 	let body = $state(untrack(() => note.body));
 	let tags = $state<string[]>(untrack(() => [...note.tags]));
 	let tagDraft = $state('');
-	let mode = $state<'write' | 'preview' | 'split'>(untrack(() => initialMode));
+	let mode = $state<NoteMode>(untrack(() => initialMode));
 	let status = $state('Salvo');
 	let attachments = $state<string[]>([]);
 	let paneEl = $state<HTMLElement | null>(null);
+	let rootEl = $state<HTMLElement | null>(null);
+	let morphing = $state(false);
+	let slashOpen = $state(false);
+	let slashStart = 0;
 	let editorEl = $state<HTMLTextAreaElement | null>(null);
 	let previewEl = $state<HTMLElement | null>(null);
 	let moreEl = $state<HTMLElement | null>(null);
@@ -95,6 +104,16 @@
 	const objectUrls: string[] = [];
 
 	const folder = $derived(note.folderId ? folders.find((item) => item.id === note.folderId) ?? null : null);
+
+	/** Blocos oferecidos pelo `/tempo` (próximos da data da nota). */
+	const slashOptions = $derived.by(() => {
+		const blocks = [...timeBlocks]
+			.filter((block) => block.status !== 'cancelled')
+			.sort((a, b) => a.startAt.localeCompare(b.startAt));
+		const noteDay = note.updatedAt.slice(0, 10);
+		const upcoming = blocks.filter((block) => block.startAt.slice(0, 10) >= noteDay);
+		return (upcoming.length ? upcoming : blocks).slice(0, 5);
+	});
 
 	function tone(frequency: number, duration = 0.08, type: OscillatorType = 'sine', volume = 0.05) {
 		playTone(frequency, duration, type, volume, sound);
@@ -142,11 +161,47 @@
 		renderTimer = setTimeout(() => void renderPreview(), 220);
 	}
 
-	function setMode(next: 'write' | 'preview' | 'split') {
+	function setMode(next: NoteMode) {
 		mode = next;
+		onmode?.(next);
 		tone(next === 'preview' ? 420 : 520, 0.06);
 		pulseHaptic(haptics, 6);
 		if (next !== 'preview') setTimeout(() => editorEl?.focus(), 120);
+	}
+
+	/* ---------- atalho /tempo ---------- */
+	function detectSlash(value: string, cursor: number) {
+		const match = /(?:^|\s)\/(tempo|time)$/i.exec(value.slice(0, cursor));
+		if (!match) {
+			slashOpen = false;
+			return;
+		}
+		slashStart = cursor - (match[1].length + 1);
+		slashOpen = true;
+	}
+
+	function openSlash() {
+		if (!editorEl) return;
+		slashStart = editorEl.selectionStart;
+		slashOpen = true;
+		editorEl.focus();
+	}
+
+	function insertTempo(block: TimeBlock) {
+		const element = editorEl;
+		if (!element) return;
+		const caret = element.selectionStart;
+		const start = Math.max(0, Math.min(slashStart, caret));
+		const prefix = start > 0 && !/\s/.test(element.value[start - 1]) ? ' ' : '';
+		const reference = tempoReference(block);
+		const text = `${prefix}${insideCodeAt(element.value, start) ? reference : `\`${reference}\``}`;
+		element.setRangeText(text, start, caret, 'end');
+		body = element.value;
+		slashOpen = false;
+		markChange();
+		element.focus();
+		tone(660, 0.07, 'triangle', 0.05);
+		pulseHaptic(haptics, 5);
 	}
 
 	/* ---------- preview (pipeline Carta) ---------- */
@@ -294,8 +349,13 @@
 		const bytes = await readAttachment(note.id, name);
 		if (!bytes) return;
 		if (!isTauriApp() || isIOSWebView()) {
-			const result = await saveBytes(bytes, name);
-			ontoast(result === 'saved' ? 'Anexo exportado.' : 'Exportação cancelada.');
+			try {
+				const result = await saveBytes(bytes, name);
+				ontoast(result === 'saved' ? 'Anexo exportado.' : 'Exportação cancelada.');
+			} catch (error) {
+				console.error('Falha ao exportar o anexo', error);
+				ontoast('Não foi possível exportar o anexo.', { warning: true });
+			}
 			return;
 		}
 		const { openPath } = await import('@tauri-apps/plugin-opener');
@@ -362,16 +422,22 @@
 	 */
 	async function exportMarkdown() {
 		flush();
-		const bytes = new TextEncoder().encode(noteMarkdown(title, body, tags));
-		const result = await saveBytes(bytes, noteExportFileName(title), [
-			{ name: 'Nota do Atlas', extensions: ['md'] }
-		]);
-		ontoast(result === 'saved' ? 'Nota exportada.' : 'Exportação cancelada.');
-		tone(560, 0.08, 'triangle', 0.05);
-		pulseHaptic(haptics, 6);
+		try {
+			const result = await saveNoteMarkdown({ title, body, tags });
+			ontoast(result === 'saved' ? 'Nota exportada.' : 'Exportação cancelada.');
+			tone(560, 0.08, 'triangle', 0.05);
+			pulseHaptic(haptics, 6);
+		} catch (error) {
+			console.error('Falha ao exportar a nota', error);
+			ontoast('Não foi possível exportar a nota.', { warning: true });
+		}
 	}
 
 	function onDocumentPointerDown(event: PointerEvent) {
+		if (slashOpen) {
+			const target = event.target as HTMLElement | null;
+			if (!target?.closest('.nt-slash') && target !== editorEl) slashOpen = false;
+		}
 		if (!moreOpen) return;
 		if (!moreEl?.contains(event.target as Node)) moreOpen = false;
 	}
@@ -425,9 +491,41 @@
 	});
 
 	$effect(() => () => flush());
+
+	// Morph da bolha de tempo até o editor: revela o overlay a partir do
+	// retângulo clicado. O CSS pula a transição de slide enquanto isso.
+	$effect(() => {
+		const element = rootEl;
+		if (!element || !open || !morphFrom || prefersReducedMotion()) return;
+		morphing = true;
+		element.style.transition = 'none';
+		// Garante que o navegador aplicou o estado final antes de medir.
+		void element.offsetHeight;
+		const rect = element.getBoundingClientRect();
+		const top = Math.max(0, morphFrom.top - rect.top);
+		const left = Math.max(0, morphFrom.left - rect.left);
+		const right = Math.max(0, rect.right - (morphFrom.left + morphFrom.width));
+		const bottom = Math.max(0, rect.bottom - (morphFrom.top + morphFrom.height));
+		const animation = element.animate(
+			[
+				{ clipPath: `inset(${top}px ${right}px ${bottom}px ${left}px round 14px)`, opacity: 0.7 },
+				{ clipPath: 'inset(0px round 0px)', opacity: 1 }
+			],
+			{ duration: 340, easing: 'cubic-bezier(.2,.9,.2,1)' }
+		);
+		animation.onfinish = () => {
+			morphing = false;
+			element.style.transition = '';
+		};
+		return () => {
+			animation.cancel();
+			morphing = false;
+			element.style.transition = '';
+		};
+	});
 </script>
 
-<div class="nt-ed" class:on={open}>
+<div class="nt-ed" class:on={open} class:morphing bind:this={rootEl}>
 	<div class="nt-eh">
 		<button class="nt-ic" aria-label="Voltar" onclick={onclose}>‹</button>
 		<button class="nt-fc" style={`--cc:${folder?.color ?? '#454c45'}`} onclick={onopenfolder}>
@@ -475,10 +573,42 @@
 			spellcheck="false"
 			aria-label="Markdown"
 			placeholder="Escreva em Markdown…  [[outra nota]]  #tag"
-			oninput={typingClick}
+			oninput={(event) => {
+				typingClick();
+				const element = event.currentTarget;
+				detectSlash(element.value, element.selectionStart ?? 0);
+			}}
+			onkeydown={(event) => {
+				if (!slashOpen) return;
+				if (event.key === 'Escape') {
+					slashOpen = false;
+					event.preventDefault();
+					return;
+				}
+				if (event.key === 'Enter' && slashOptions[0]) {
+					event.preventDefault();
+					insertTempo(slashOptions[0]);
+				}
+			}}
 		></textarea>
 		<div class="nt-pv markdown-body" bind:this={previewEl} aria-live="polite"></div>
 	</div>
+
+	{#if slashOpen}
+		<div class="nt-slash" role="listbox" aria-label="Referências de tempo">
+			<span class="nt-slash-lb">Inserir referência de tempo</span>
+			{#if slashOptions.length}
+				{#each slashOptions as block (block.id)}
+					<button type="button" role="option" aria-selected="false" onclick={() => insertTempo(block)}>
+						<b>{block.startAt.slice(8, 10)}/{block.startAt.slice(5, 7)}</b>
+						<span>{block.startAt.slice(11, 16)}–{block.endAt.slice(11, 16)} · {formatMinutes(block.plannedMinutes)} · {block.title || 'Bloco'}</span>
+					</button>
+				{/each}
+			{:else}
+				<small>Nenhum bloco no planejador.</small>
+			{/if}
+		</div>
+	{/if}
 
 	<div class="nt-tb">
 		<button aria-label="Negrito" onclick={() => surround('**')}>B</button>
@@ -488,6 +618,7 @@
 		<button aria-label="Link de nota" onclick={() => surround(['[[', ']]'])}>[[ ]]</button>
 		<button aria-label="Título" onclick={() => linePrefix('# ')}>H</button>
 		<button aria-label="Citação" onclick={() => linePrefix('> ')}>❝</button>
+		<button aria-label="Referência de tempo" title="Referência de tempo" onclick={openSlash}><Clock size={16} /></button>
 		{#if attachmentsEnabled()}
 			<label class="nt-tb-file" title="Anexar arquivo">
 				＋

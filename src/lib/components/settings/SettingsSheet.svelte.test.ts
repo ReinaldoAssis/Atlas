@@ -17,6 +17,7 @@ function setup(overrides: Record<string, unknown> = {}) {
 		onnotifications: vi.fn(),
 		onpreference: vi.fn(),
 		oncurrency: vi.fn(async () => true),
+		onfirstday: vi.fn(),
 		ontestmode: vi.fn(),
 		onpause: vi.fn(),
 		onexport: vi.fn(),
@@ -41,6 +42,7 @@ describe('SettingsSheet', () => {
 		expect(screen.getByRole('dialog', { name: 'Configurações' })).toBeTruthy();
 		expect(screen.getByText('Modo de teste')).toBeTruthy();
 		expect(screen.getByText('Backup local')).toBeTruthy();
+		expect(screen.getByText('Primeiro dia da semana')).toBeTruthy();
 		expect(screen.queryByText('ATLAS · SEU ESPAÇO')).toBeNull();
 	});
 
@@ -51,6 +53,25 @@ describe('SettingsSheet', () => {
 		});
 		expect(screen.getByText('Sincronização')).toBeTruthy();
 		expect(screen.getByRole('switch', { name: 'Sincronizar aparelhos' })).toBeTruthy();
+	});
+
+	it('desabilita o auto-sync enquanto “Sincronizar aparelhos” está desligado', () => {
+		setup({
+			syncAvailable: true,
+			sync: { enabled: false, running: false, endpointId: null, peers: [], pendingPairs: [], autoSync: true, intervalSecs: 2, discovery: { state: 'off', found: 0, message: null } }
+		});
+		const auto = screen.getByRole('switch', { name: 'Sincronizar automaticamente' }) as HTMLButtonElement;
+		expect(auto.disabled).toBe(true);
+		expect(screen.getByText('Ligue “Sincronizar aparelhos” para usar')).toBeTruthy();
+	});
+
+	it('mantém o auto-sync disponível com os aparelhos ligados', () => {
+		setup({
+			syncAvailable: true,
+			sync: { enabled: true, running: true, endpointId: 'e1', peers: [], pendingPairs: [], autoSync: true, intervalSecs: 2, discovery: { state: 'off', found: 0, message: null } }
+		});
+		const auto = screen.getByRole('switch', { name: 'Sincronizar automaticamente' }) as HTMLButtonElement;
+		expect(auto.disabled).toBe(false);
 	});
 
 	it('mostra o estado da descoberta e reinicia só ela', async () => {

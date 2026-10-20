@@ -3,6 +3,12 @@
 > Documento para o animador. Descreve o módulo, o que já existe hoje e como
 > **imaginamos** a animação. Nada aqui foi implementado: a bolha atual usa um
 > fade/deslize simples de propósito, esperando este briefing.
+>
+> **Atualização S15 (18/10/2026):** o fluxo mudou. O **drawer puxado para cima
+> foi descartado**; a bolha do planejador lista as notas do bloco, permanece
+> aberta depois que o dedo solta (fecha só com clique fora) e tocar numa nota
+> faz um **morph da bolha para o editor em overlay sobre o Tempo**. Long press:
+> **250 ms** arma pintura, **650 ms** abre a bolha. Ver `docs/CYCLE-S15.md` §2A.
 
 ---
 
@@ -119,3 +125,29 @@ elemento — e não como um card que aparece por cima.
 Dá para prototipar as duas bolhas isoladas (um chip de âncora + o card) com
 Framer Motion / Rive / After Effects e nos mandar o arquivo — a gente adapta o
 `@keyframes`/transição para o padrão acima.
+
+---
+
+## 7. Contrato S15 (substitui o drawer)
+
+- **Sem drawer de notas.** O gesto de swipe up que abria a nota individual não
+  existe mais.
+- A bolha do planejador é acionada por **long press de 650 ms** num bloco que
+  tenha nota. Hold de 250 ms em célula **vazia** cria o bloco e entra em modo
+  pintar; hold de 250 ms em bloco **sem nota** entra em destruição (apaga o
+  inicial e os arrastados); hold em bloco com nota não pinta.
+- A edição de categoria é **hold de 250 ms no chip do topo**; tap só seleciona.
+- Qualquer arrasto fora do modo pintar/destruição é navegação. Só o toque curto
+  sem arrasto cria, substitui ou desfaz uma célula.
+- Ela **não fecha quando o dedo solta**: permanece até clique/toque fora, troca
+  de contexto ou fechamento explícito. O toque que fecha **não** cria, substitui
+  nem apaga o bloco.
+- Bloco com nota tem outline escuro de 2 px e um ponto no início (o lime puro
+  sumia nos blocos de categoria lime).
+- Conteúdo: todas as notas do bloco (título + trecho), com rolagem quando
+  necessário; a nota tocada abre o editor.
+- Transição para a nota: **morph** da linha/bolha para o editor (FLIP,
+  ~280–360 ms, mola curta), com o Tempo ao fundo escurecido. Fechar o editor
+  desliza para baixo; o morph é só na entrada. Respeitar `prefers-reduced-motion`.
+- A bolha da nota (preview do bloco a partir do chip `tempo`) continua passiva;
+  o contrato de âncoras e `z-index` da §3 segue valendo.

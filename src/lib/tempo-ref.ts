@@ -131,6 +131,11 @@ function buildRef(text: string, at: number, keywordLength: number, spec: Spec, b
 	};
 }
 
+/** Texto canônico da referência para um bloco (`tempo DD/MM HH:MM-HH:MM`). */
+export function tempoReference(block: Pick<{ startAt: string; endAt: string }, 'startAt' | 'endAt'>): string {
+	return `tempo ${block.startAt.slice(8, 10)}/${block.startAt.slice(5, 7)} ${block.startAt.slice(11, 16)}-${block.endAt.slice(11, 16)}`;
+}
+
 /** Todas as referências de tempo de um texto. */
 export function parseTempoRefs(text: string, noteDate?: string): TempoRef[] {
 	const base = dateParts(noteDate);
@@ -193,7 +198,26 @@ export function blockIdsForNote<T extends BlockLike & { id: string }>(note: Note
 	return ids;
 }
 
-const SKIP_PARENTS = new Set(['CODE', 'PRE', 'A', 'SCRIPT', 'STYLE', 'TEXTAREA']);
+const SKIP_PARENTS = new Set(['PRE', 'A', 'SCRIPT', 'STYLE', 'TEXTAREA']);
+
+/**
+ * Cursor está dentro de um bloco cercado (```) ou de um span inline de crases?
+ *
+ * Usado ao inserir a referência: dentro do código entra só o texto; fora dele,
+ * a referência vai embrulhada em crases.
+ */
+export function insideCodeAt(text: string, caret: number): boolean {
+	const before = text.slice(0, Math.max(0, Math.min(caret, text.length)));
+	const fences = before.match(/^ {0,3}```/gm)?.length ?? 0;
+	if (fences % 2 === 1) return true;
+	const line = before.slice(before.lastIndexOf('\n') + 1);
+	let open = 0;
+	for (const run of line.match(/`+/g) ?? []) {
+		if (!open) open = run.length;
+		else if (run.length === open) open = 0;
+	}
+	return open !== 0;
+}
 
 function isSkipped(node: Node): boolean {
 	let parent: HTMLElement | null = node.parentElement;

@@ -11,7 +11,7 @@
 		type GraphSourceKind,
 		type GraphState
 	} from '#lib/graph';
-	import { sourceRefOptions } from '#lib/graph-sources';
+	import { sourceDefaultTarget, sourceRefOptions } from '#lib/graph-sources';
 	import { burstAt, playFeedback, playTone, pulseHaptic } from '#lib/feedback';
 	import GraphCanvas from './GraphCanvas.svelte';
 	import GraphSheet from './GraphSheet.svelte';
@@ -114,10 +114,15 @@
 		} else {
 			patch.refId = undefined;
 		}
+		const nextRef = patch.refId ?? editEdge.refId;
+		const target = sourceDefaultTarget(source, nextRef, snapshot);
+		if (target !== undefined) patch.target = target;
 		if (source === 'habitStreak') patch.window = 'total';
 		else if (source === 'timeHours') patch.window = 'week';
 		else if (source === 'financeLimit') patch.window = 'month';
 		else if (source === 'financeSavings' && editEdge.window === 'week') patch.window = 'month';
+		else if (source === 'trackerLast' || source === 'trackerAverage') patch.window = 'month';
+		else if (source === 'trackerGoal') patch.window = 'total';
 		updateEdge(patch);
 		playTone(560, 0.06, 'sine', 0.05, sound);
 		pulseHaptic(haptics, 5);
