@@ -17,6 +17,25 @@ export interface ReminderItem {
 	body: string;
 }
 
+/** Componentes locais para o trigger de calendário do iOS (evita o bug de fuso do `Schedule.at`). */
+export interface ReminderComponents {
+	year: number;
+	month: number;
+	day: number;
+	hour: number;
+	minute: number;
+}
+
+export function localComponents(date: Date): ReminderComponents {
+	return {
+		year: date.getFullYear(),
+		month: date.getMonth() + 1,
+		day: date.getDate(),
+		hour: date.getHours(),
+		minute: date.getMinutes()
+	};
+}
+
 /** Id numérico estável (o plugin exige 32 bits) derivado de uma chave. */
 export function numericNotificationId(key: string): number {
 	let hash = 0;
