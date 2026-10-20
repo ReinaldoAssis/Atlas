@@ -17,6 +17,7 @@ import {
 	positiveValueOf,
 	remapWeeklyLogs,
 	weekStartDate,
+	weeklyLogFor,
 	xpNeededForLevel,
 	type Habit,
 	type HabitLog
@@ -248,6 +249,38 @@ describe('currentStreak', () => {
 		const habit = dailyBooleanHabit({ metric: 'weekly', target: 3, scheduledDays: [] });
 		const logs = [log(habit.id, '2026-10-11', 3), log(habit.id, '2026-10-04', 3)];
 		expect(currentStreak(habit, logs, today, [], 'sun')).toBe(2);
+	});
+
+	it('conta log semanal gravado no dia do incremento (chave antiga)', () => {
+		// O log deveria estar em 2026-10-12 (início da semana), mas versões antigas
+		// gravaram no dia do incremento. O streak não pode zerar por isso.
+		const habit = dailyBooleanHabit({ metric: 'weekly', target: 3, scheduledDays: [] });
+		const logs = [log(habit.id, '2026-10-14', 3), log(habit.id, '2026-10-07', 3)];
+		expect(currentStreak(habit, logs, today)).toBe(2);
+	});
+});
+
+describe('weeklyLogFor', () => {
+	const week = '2026-10-12';
+
+	it('prefere a chave canônica da semana', () => {
+		const logs = [log('h1', '2026-10-14', 2), log('h1', week, 4)];
+		expect(weeklyLogFor(logs, 'h1', week)?.value).toBe(4);
+	});
+
+	it('cai para o registro dentro da semana quando a chave é antiga', () => {
+		const logs = [log('h1', '2026-10-14', 3)];
+		expect(weeklyLogFor(logs, 'h1', week)?.date).toBe('2026-10-14');
+	});
+
+	it('escolhe o registro mais recente da semana', () => {
+		const logs = [log('h1', '2026-10-13', 1), log('h1', '2026-10-15', 2)];
+		expect(weeklyLogFor(logs, 'h1', week)?.date).toBe('2026-10-15');
+	});
+
+	it('não pega log de outra semana nem de outro hábito', () => {
+		const logs = [log('h1', '2026-10-11', 3), log('h1', '2026-10-19', 3), log('h2', week, 3)];
+		expect(weeklyLogFor(logs, 'h1', week)).toBeUndefined();
 	});
 });
 

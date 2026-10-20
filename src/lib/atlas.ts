@@ -308,6 +308,20 @@ export function weeklyLogKey(date = localDate(), firstDay: FirstDayOfWeek = 'mon
 	return weekStartDate(date, firstDay);
 }
 
+/**
+ * Log de um hábito semanal na semana que começa em `weekStart`.
+ *
+ * O canônico é a chave da semana, mas versões antigas gravaram o log no dia do
+ * incremento. A leitura tolera as duas formas (semana primeiro, depois o
+ * registro mais recente dentro da semana) para o tile não zerar ao reabrir.
+ */
+export function weeklyLogFor(logs: readonly HabitLog[], habitId: string, weekStart: string): HabitLog | undefined {
+	const weekEnd = dateOffset(weekStart, 6);
+	const inWeek = logs.filter((log) => log.habitId === habitId && log.date >= weekStart && log.date <= weekEnd);
+	if (!inWeek.length) return undefined;
+	return inWeek.find((log) => log.date === weekStart) ?? inWeek.sort((a, b) => b.date.localeCompare(a.date))[0];
+}
+
 export function money(minor: number, currency = 'BRL'): string {
 	return new Intl.NumberFormat('pt-BR', { style: 'currency', currency }).format(minor / 100);
 }
@@ -444,9 +458,9 @@ function weeklyStreak(
 	pausePeriods: { start: string; end: string }[],
 	firstDay: FirstDayOfWeek
 ): number {
-	const logByWeek = new Map(logs.filter((log) => log.habitId === habit.id).map((log) => [log.date, log]));
+	const habitLogs = logs.filter((log) => log.habitId === habit.id);
 	const thisWeek = weekStartDate(today, firstDay);
-	const current = logByWeek.get(thisWeek);
+	const current = weeklyLogFor(habitLogs, habit.id, thisWeek);
 	let week = current && didMeetTarget(habit, current.value) ? thisWeek : dateOffset(thisWeek, -7);
 	let streak = 0;
 	for (let i = 0; i < 104; i += 1) {
@@ -456,7 +470,7 @@ function weeklyStreak(
 			week = dateOffset(week, -7);
 			continue;
 		}
-		const log = logByWeek.get(week);
+		const log = weeklyLogFor(habitLogs, habit.id, week);
 		if (!log || !didMeetTarget(habit, log.value)) break;
 		streak += 1;
 		week = dateOffset(week, -7);

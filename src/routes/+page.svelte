@@ -8,7 +8,7 @@
 		Wallet, X, type LucideIcon
 	} from '@lucide/svelte';
 	import {
-		HABIT_BOOLEAN_LABELS, booleanLabelOf, currentStreak, dateOffset, didMeetTarget, formatMinutes, habitLogId, habitProgress, id, localDate, money, nextBooleanLog, normalizeDailyGoal, normalizeFirstDayOfWeek, positiveValueOf, remapWeeklyLogs, weekStartDate, WEEK_MAX,
+		HABIT_BOOLEAN_LABELS, booleanLabelOf, currentStreak, dateOffset, didMeetTarget, formatMinutes, habitLogId, habitProgress, id, localDate, money, nextBooleanLog, normalizeDailyGoal, normalizeFirstDayOfWeek, positiveValueOf, remapWeeklyLogs, weekStartDate, weeklyLogFor, WEEK_MAX,
 		TIME_SLOT_START_HOUR, TIME_SLOT_COUNT, TIME_SLOT_MINUTES,
 		experienceProgress, type AppPreferences, type AtlasSnapshot, type Category, type CategoryLimitMode, type Habit, type HabitLog,
 		type NavigationKey, type TimeBlock, type Tracker, type TrackerEntry, type Transaction
@@ -104,6 +104,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		prefersReducedMotion, pulseHaptic, vibrate
 	} from '#lib/feedback';
 	import { formatClock } from '#lib/duration';
+	import { buildReminderSchedule } from '#lib/notifications';
 	import '../app.css';
 
 	type Period = 'week' | 'month' | 'custom';
@@ -622,6 +623,12 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			if (event.key === '[' && !/INPUT|TEXTAREA|SELECT/.test(tag)) toggleSidebar();
 			if (event.key === 'Escape') closeShellMenus();
 		};
+		const onVisibility = () => {
+			if (document.visibilityState !== 'visible' || !snapshot) return;
+			void syncIOSReminders(snapshot);
+			if (modal === 'settings' && testModeActive) void refreshNotificationDiagnostics();
+		};
+		document.addEventListener('visibilitychange', onVisibility);
 		window.addEventListener('keydown', onKeydown);
 		window.addEventListener('pointermove', onPointerMove);
 		window.addEventListener('pointerup', onPointerUp);
@@ -648,6 +655,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			for (const off of unlisteners) off();
 			if (pairTimer) clearInterval(pairTimer);
 			if (interval) clearInterval(interval);
+			document.removeEventListener('visibilitychange', onVisibility);
 			window.removeEventListener('pointermove', onPointerMove);
 			window.removeEventListener('pointerup', onPointerUp);
 			window.removeEventListener('pointercancel', onPointerUp);
@@ -1012,7 +1020,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	function habitDoneOn(data: AtlasSnapshot, habit: Habit, date: string): boolean {
 		if (habit.metric === 'weekly') {
 			const week = weekStartDate(date, firstDayOfWeek(data));
-			const log = data.habitLogs.find((item) => item.habitId === habit.id && item.date === week);
+			const log = weeklyLogFor(data.habitLogs, habit.id, week);
 			if (!log) return false;
 			// Sem `incrementDates` (logs antigos), usa o último dia incrementado.
 			return Boolean(log.incrementDates?.includes(date) || log.lastIncrementDate === date);
@@ -1175,13 +1183,13 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	function weeklyValue(habit: Habit): number {
 		const week = weekStartDate(habitSelectedDate, firstDayOfWeek());
-		return snapshot?.habitLogs.find((item) => item.habitId === habit.id && item.date === week)?.value ?? 0;
+		return weeklyLogFor(snapshot?.habitLogs ?? [], habit.id, week)?.value ?? 0;
 	}
 
 	async function setWeeklyValue(habit: Habit, value: number) {
 		if (!snapshot || pauseBlocked()) return;
 		const week = weekStartDate(habitSelectedDate, firstDayOfWeek());
-		const existing = snapshot.habitLogs.find((item) => item.habitId === habit.id && item.date === week);
+		const existing = weeklyLogFor(snapshot.habitLogs, habit.id, week);
 		const clamped = Math.max(0, Math.min(WEEK_MAX, value));
 		const tile = document.querySelector<HTMLElement>(`[data-habit-id="${habit.id}"]`);
 		const [x, y] = centerOf(tile);
@@ -1894,9 +1902,18 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	async function commitGraph(next: GraphState) {
 		if (!snapshot) return;
 		const previous = snapshot.graph;
+		const previousSnapshot = snapshot;
 		const copy = cloneSnapshot();
 		copy.graph = next;
-		await commit(copy);
+		// Otimista: a posição solta é a fonte da verdade até o snapshot confirmar.
+		// Sem isso o nó volta para a coordenada antiga enquanto o save termina.
+		snapshot = copy;
+		try {
+			await commit(copy);
+		} catch {
+			snapshot = previousSnapshot;
+			return;
+		}
 
 		const removedNodes = previous.nodes.filter((node) => !next.nodes.some((item) => item.id === node.id));
 		const removedEdges = previous.edges.filter((edge) => !next.edges.some((item) => item.id === edge.id));
@@ -2281,7 +2298,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		if (habitSelectedDate === today && afterDaily.goal > 0 && beforeDaily.done < beforeDaily.goal && afterDaily.done >= afterDaily.goal) {
 			celebrate(getHabitDayStreak(next));
 		}
-		await scheduleHabitReminder(savedHabit);
+		await syncIOSReminders(next);
 		modal = null;
 		editingHabitId = '';
 		toastMessage(isNew ? 'Hábito criado.' : 'Hábito atualizado.');
@@ -2346,11 +2363,20 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const loggingToday = habit.metric === 'weekly' ? incrementDate === today : date === today;
 		const beforeDailyGoal = getDailyHabitGoal(snapshot, loggingToday ? today : date);
 		const next = cloneSnapshot();
-		const existingIndex = next.habitLogs.findIndex((item) => item.habitId === habit.id && item.date === date);
+		let logDate = date;
+		let existingIndex = next.habitLogs.findIndex((item) => item.habitId === habit.id && item.date === date);
+		if (habit.metric === 'weekly') {
+			const week = weekStartDate(date, firstDayOfWeek(next));
+			const match = weeklyLogFor(next.habitLogs, habit.id, week);
+			if (match) {
+				logDate = match.date;
+				existingIndex = next.habitLogs.indexOf(match);
+			}
+		}
 		const existingLog = existingIndex >= 0 ? next.habitLogs[existingIndex] : null;
 		const qualifies = didMeetTarget(habit, value);
 		const awardExperience = loggingToday && award && qualifies && !existingLog?.experienceAwarded;
-		const isSelectedWeek = habit.metric === 'weekly' && weekStartDate(incrementDate, firstDayOfWeek()) === date;
+		const isSelectedWeek = habit.metric === 'weekly' && weekStartDate(incrementDate, firstDayOfWeek()) === weekStartDate(logDate, firstDayOfWeek());
 		const incrementDates = habit.metric === 'weekly'
 			? new Set([
 					...(existingLog?.incrementDates ?? (existingLog?.lastIncrementDate ? [existingLog.lastIncrementDate] : [])),
@@ -2361,7 +2387,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			? [...incrementDates].sort().at(-1)
 			: existingLog?.lastIncrementDate;
 		const log: HabitLog = {
-			id: existingLog?.id ?? habitLogId(habit.id, date), habitId: habit.id, date, value,
+			id: existingLog?.id ?? habitLogId(habit.id, logDate), habitId: habit.id, date: logDate, value,
 			completed: habit.metric === 'boolean' ? qualifies : value > 0,
 			experienceAwarded: Boolean(existingLog?.experienceAwarded || awardExperience),
 			...(habit.metric === 'weekly'
@@ -3535,14 +3561,13 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const block = next.timeBlocks.find((item) => item.id === blockId);
 		if (block) block.status = 'cancelled';
 		await commit(next);
-		if (block && isIOSApp()) {
-			try { const plugin = await import('@tauri-apps/plugin-notification'); await plugin.cancel([numericNotificationId(`time:${block.id}`)]); } catch { /* Best effort for native scheduled reminders. */ }
-		}
+		if (block) await syncIOSReminders(next);
 		toastMessage('Bloco cancelado.');
 	}
 
 	function openSettings() {
 		modal = 'settings';
+		if (testModeActive) void refreshNotificationDiagnostics();
 	}
 
 	async function updatePreferences(patch: Partial<AppPreferences>) {
@@ -3814,57 +3839,125 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		return isTauri() && (/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
 	}
 
-	function numericNotificationId(key: string): number {
-		let hash = 0;
-		for (const character of key) hash = ((hash << 5) - hash + character.charCodeAt(0)) | 0;
-		return Math.abs(hash) || 1;
+	/** Agenda rolante das notificações locais (função pura em `notifications.ts`). */
+	interface NotificationDiagnostics {
+		permission: boolean | null;
+		scheduled: number;
+		next: string | null;
+		error: string | null;
+		checkedAt: string | null;
 	}
 
-	async function scheduleHabitReminder(habit: Habit) {
-		if (!snapshot?.preferences.notificationsEnabled || isCurrentPause(snapshot) || !isIOSApp() || !habit.reminder) return;
-		try {
-			const { Schedule, sendNotification, cancel } = await import('@tauri-apps/plugin-notification');
-			const [hour, minute] = habit.reminder.split(':').map(Number);
-			for (const weekday of habit.scheduledDays) {
-				const notificationId = numericNotificationId(`habit:${habit.id}:${weekday}`);
-				await cancel([notificationId]);
-				await sendNotification({
-					id: notificationId,
-					title: 'Atlas · hábito',
-					body: habit.name,
-					schedule: Schedule.interval({ weekday: weekday + 1, hour, minute })
-				});
-			}
-		} catch (error) {
-			console.warn('Não foi possível agendar o lembrete de hábito', error);
-		}
+	let notificationDiag = $state<NotificationDiagnostics>({ permission: null, scheduled: 0, next: null, error: null, checkedAt: null });
+
+	function reportNotificationError(error: unknown): string {
+		const message = error instanceof Error ? error.message : String(error);
+		console.warn('Notificações:', error);
+		return message;
 	}
 
-	async function scheduleTimeReminder(block: TimeBlock) {
-		if (!snapshot?.preferences.notificationsEnabled || isCurrentPause(snapshot) || !isIOSApp() || !block.reminder) return;
-		try {
-			const { Schedule, sendNotification, cancel } = await import('@tauri-apps/plugin-notification');
-			const fireAt = new Date(`${block.startAt.slice(0, 10)}T${block.reminder}:00`);
-			if (fireAt <= new Date()) return;
-			const notificationId = numericNotificationId(`time:${block.id}`);
-			await cancel([notificationId]);
-			await sendNotification({ id: notificationId, title: 'Atlas · tempo', body: block.title, schedule: Schedule.at(fireAt) });
-		} catch (error) {
-			console.warn('Não foi possível agendar o lembrete de tempo', error);
-		}
-	}
-
+	/**
+	 * Reagenda tudo no iOS com uma agenda rolante de 2 semanas.
+	 *
+	 * O `Schedule.interval({ weekday })` não disparava no device; em vez de
+	 * depender do repeat semanal, agendamos cada ocorrência com `Schedule.at`
+	 * e ressincronizamos ao abrir, mudar preferências, salvar bloco/hábito e
+	 * sair da pausa. O corte de 60 evita o teto de 64 do iOS.
+	 */
 	async function syncIOSReminders(data: AtlasSnapshot) {
 		if (!isIOSApp()) return;
+		const checkedAt = new Date().toISOString();
+		let plugin: typeof import('@tauri-apps/plugin-notification');
+		try {
+			plugin = await import('@tauri-apps/plugin-notification');
+		} catch (error) {
+			notificationDiag = { permission: null, scheduled: 0, next: null, error: reportNotificationError(error), checkedAt };
+			return;
+		}
+		try {
+			await plugin.cancelAll();
+			const permission = await plugin.isPermissionGranted();
+			if (!data.preferences.notificationsEnabled || isCurrentPause(data)) {
+				notificationDiag = { permission, scheduled: 0, next: null, error: null, checkedAt };
+				return;
+			}
+			if (!permission) {
+				notificationDiag = { permission: false, scheduled: 0, next: null, error: 'Permissão não concedida', checkedAt };
+				return;
+			}
+			const scheduled = buildReminderSchedule(data);
+			for (const item of scheduled) {
+				await plugin.sendNotification({
+					id: item.id,
+					title: item.title,
+					body: item.body,
+					schedule: plugin.Schedule.at(item.at)
+				});
+			}
+			notificationDiag = {
+				permission: true,
+				scheduled: scheduled.length,
+				next: scheduled[0]?.at.toISOString() ?? null,
+				error: null,
+				checkedAt
+			};
+		} catch (error) {
+			notificationDiag = { permission: null, scheduled: 0, next: null, error: reportNotificationError(error), checkedAt };
+		}
+	}
+
+	/** Lê permissão e fila nativa (só mobile) para a seção de diagnóstico. */
+	async function refreshNotificationDiagnostics() {
+		const checkedAt = new Date().toISOString();
+		if (!isTauriApp()) {
+			const permission = 'Notification' in window ? Notification.permission === 'granted' : null;
+			notificationDiag = { permission, scheduled: 0, next: null, error: null, checkedAt };
+			return;
+		}
 		try {
 			const plugin = await import('@tauri-apps/plugin-notification');
-			await plugin.cancelAll();
+			const permission = await plugin.isPermissionGranted();
+			const pending = isIOSApp() ? await plugin.pending() : [];
+			const dates = pending
+				.map((item) => item.schedule?.at?.date)
+				.filter((date): date is Date => Boolean(date))
+				.sort((a, b) => a.getTime() - b.getTime());
+			notificationDiag = {
+				permission,
+				scheduled: pending.length,
+				next: dates[0]?.toISOString() ?? null,
+				error: null,
+				checkedAt
+			};
 		} catch (error) {
-			console.warn('Não foi possível atualizar os lembretes locais', error);
+			notificationDiag = { permission: null, scheduled: 0, next: null, error: reportNotificationError(error), checkedAt };
 		}
-		if (!data.preferences.notificationsEnabled || isCurrentPause(data)) return;
-		for (const habit of data.habits.filter((item) => item.active && item.reminder)) await scheduleHabitReminder(habit);
-		for (const block of data.timeBlocks.filter((item) => item.status === 'planned' && item.reminder)) await scheduleTimeReminder(block);
+	}
+
+	async function sendTestNotification() {
+		try {
+			if (isTauriApp()) {
+				const plugin = await import('@tauri-apps/plugin-notification');
+				if (!(await plugin.isPermissionGranted()) && (await plugin.requestPermission()) !== 'granted') {
+					toastMessage('Permissão de notificações não concedida.');
+					return;
+				}
+				await plugin.sendNotification({ title: 'Atlas · teste', body: 'As notificações estão funcionando.' });
+			} else {
+				await showNotification('Atlas · teste', 'As notificações estão funcionando.');
+			}
+			toastMessage('Notificação de teste enviada.');
+			await refreshNotificationDiagnostics();
+		} catch (error) {
+			toastMessage('Não foi possível enviar a notificação de teste.', { warning: true });
+			notificationDiag = {
+				permission: null,
+				scheduled: 0,
+				next: null,
+				error: reportNotificationError(error),
+				checkedAt: new Date().toISOString()
+			};
+		}
 	}
 
 	async function checkDesktopReminders(data: AtlasSnapshot) {
@@ -3924,6 +4017,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		if (!nextEnabled) {
 			try { const plugin = await import('@tauri-apps/plugin-notification'); await plugin.cancelAll(); } catch { /* Browser preview has no native queue. */ }
 		}
+		await refreshNotificationDiagnostics();
 	}
 
 	function isTauriApp() {
@@ -4351,7 +4445,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 												{#if habit.metric === 'weekly'}
 													{@const count = weeklyValue(habit)}
 													{@const complete = count >= habit.target}
-													{@const weekLog = snapshot.habitLogs.find((item) => item.habitId === habit.id && item.date === weekStartDate(habitSelectedDate, firstDayOfWeek()))}
+													{@const weekLog = weeklyLogFor(snapshot.habitLogs, habit.id, weekStartDate(habitSelectedDate, firstDayOfWeek()))}
 													{@const touched = Boolean(weekLog?.incrementDates?.includes(habitSelectedDate) || weekLog?.lastIncrementDate === habitSelectedDate)}
 													<div class="hcard habit-prototype-wide">
 														<section role="group" class:done={complete} class:touched class="habit-prototype-card habit-prototype-wide habit-prototype-pips" data-habit-id={habit.id} onpointerdown={(event) => startHabitPress(event, habit)}>
@@ -5061,8 +5155,11 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			{updaterAvailable}
 			{updaterBusy}
 			{updaterStatus}
+			notificationsDiagnostics={notificationDiag}
 			onclose={() => (modal = null)}
 			onnotifications={toggleNotifications}
+			onnotificationsdiagnostics={() => void refreshNotificationDiagnostics()}
+			onnotificationstest={() => void sendTestNotification()}
 			onpreference={setFeedbackPreference}
 			oncurrency={changeCurrency}
 			onfirstday={(value) => void changeFirstDayOfWeek(value)}

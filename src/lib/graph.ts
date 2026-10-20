@@ -88,6 +88,9 @@ export const GRAPH_SOURCES: { id: GraphSourceKind; label: string }[] = [
 	{ id: 'timeHours', label: 'Tempo · h/semana' },
 	{ id: 'financeSavings', label: 'Finanças · saldo' },
 	{ id: 'financeLimit', label: 'Finanças · gasto' },
+	{ id: 'trackerLast', label: 'Tracker · último' },
+	{ id: 'trackerAverage', label: 'Tracker · média' },
+	{ id: 'trackerGoal', label: 'Tracker · meta' },
 	{ id: 'manual', label: 'Manual' }
 ];
 

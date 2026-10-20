@@ -36,6 +36,7 @@
 	"sync_enable_hint": "Na mesma rede Wi-Fi, só com o app aberto",
 	"sync_auto_title": "Sincronizar automaticamente",
 	"sync_auto_hint": "Com o app aberto, troca alterações com os pares pareados",
+	"sync_auto_requires": "Ligue “Sincronizar aparelhos” para usar",
 	"sync_auto_interval": "Intervalo",
 	"sync_auto_interval_hint": "Segundos entre sincronizações (1–300)",
 	"sync_running": "Procurando aparelhos na rede",

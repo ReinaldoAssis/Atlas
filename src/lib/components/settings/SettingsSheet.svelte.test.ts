@@ -55,6 +55,25 @@ describe('SettingsSheet', () => {
 		expect(screen.getByRole('switch', { name: 'Sincronizar aparelhos' })).toBeTruthy();
 	});
 
+	it('desabilita o auto-sync enquanto “Sincronizar aparelhos” está desligado', () => {
+		setup({
+			syncAvailable: true,
+			sync: { enabled: false, running: false, endpointId: null, peers: [], pendingPairs: [], autoSync: true, intervalSecs: 2, discovery: { state: 'off', found: 0, message: null } }
+		});
+		const auto = screen.getByRole('switch', { name: 'Sincronizar automaticamente' }) as HTMLButtonElement;
+		expect(auto.disabled).toBe(true);
+		expect(screen.getByText('Ligue “Sincronizar aparelhos” para usar')).toBeTruthy();
+	});
+
+	it('mantém o auto-sync disponível com os aparelhos ligados', () => {
+		setup({
+			syncAvailable: true,
+			sync: { enabled: true, running: true, endpointId: 'e1', peers: [], pendingPairs: [], autoSync: true, intervalSecs: 2, discovery: { state: 'off', found: 0, message: null } }
+		});
+		const auto = screen.getByRole('switch', { name: 'Sincronizar automaticamente' }) as HTMLButtonElement;
+		expect(auto.disabled).toBe(false);
+	});
+
 	it('mostra o estado da descoberta e reinicia só ela', async () => {
 		const props = setup({
 			syncAvailable: true,

@@ -1,7 +1,7 @@
 # Atlas — Ciclo S15: rodada de correções e polimento
 
-> **Estado:** alinhado em 18/10/2026 · **E0–E5 implementados; E6 e E8 pendentes;
-> E7 parcial (F2 concluída em 20/10)**.
+> **Estado:** alinhado em 18/10/2026 · **E0–E6 implementados; E7 parcial (F2 e
+> F3 implementadas em 20/10); E8 pendente**.
 > Este documento é a fonte das decisões do ciclo. Se conflitar com
 > `ROADMAP.md`, vale este arquivo para o escopo do S15.
 >
@@ -309,12 +309,38 @@ em uso e ganhou teste de grupo.
   Finanças/Tempo/Hábitos, `ValueSheet` e `GraphSheet`; menus de nota também
   animam. Tudo respeita `prefers-reduced-motion`.
 
-### E6 — Planejamento/grafo
+### Ajustes de 20/10 (rodada 2)
+
+- **Semanal (D12)**: `weeklyLogFor` lê o log da semana tolerando a chave antiga
+  (dia do incremento) e o tile/streak não zeram ao reabrir; ao salvar, o log
+  existente mantém a própria chave em vez de duplicar. Coberto em `atlas.test.ts`.
+- **Referência de tempo**: a inserção embrulha em crases quando o cursor está
+  fora de código e insere só o texto quando já está dentro (`insideCodeAt`); o
+  preview decora a referência dentro de código inline, mantendo o chip. A lista
+  do `/tempo` mostra a duração do bloco.
+- **Auto-sync**: "Sincronizar automaticamente" fica desabilitado (com dica)
+  enquanto "Sincronizar aparelhos" estiver desligado; a preferência é preservada.
+- **Arestas do grafo**: retas, com desvio perpendicular para arestas paralelas
+  entre o mesmo par.
+- **Notificações**: ver F3 acima (agenda de 2 semanas + diagnóstico no modo de
+  teste).
+
+### E6 — Planejamento/grafo ✅
 
 - Fontes de tracker (último, média da janela, meta) + unidade herdada.
 - `habitStreak` semanal em semanas.
 - Corrigir glitch do drag ao soltar.
 - Testes de `sourceValue`/`sourceUnit` para trackers e semanal.
+
+**Como ficou:** `GraphSourceKind` ganhou `trackerLast`, `trackerAverage` e
+`trackerGoal` em `GRAPH_SOURCES`, com picker de trackers ativos e unidade
+herdada. `trackerGoal` usa a meta do tracker como alvo padrão (a aresta ainda
+pode sobrescrever) e respeita "menos é melhor". A aresta `habitStreak` de hábito
+semanal mostra `semanas`; a de hábito diário segue em dias. O commit do drag
+virou otimista: a posição solta entra no snapshot antes do save e só é revertida
+se o save falhar. As arestas do grafo passaram a ser retas, com desvio
+perpendicular quando há mais de uma entre o mesmo par. Testes novos em
+`graph-sources.test.ts`.
 
 **Depende de:** E0, E4 (para unidade semanal).
 
@@ -325,6 +351,11 @@ em uso e ganhou teste de grupo.
   hábitos/trackers/tempo/finanças (inclusive passado), modal com **Encerrar
   pausa** + estender.
 - Notificações iOS: agenda rolante + ressync + logs de diagnóstico.
+  **F3 implementada em 20/10**: agenda de 2 semanas com `Schedule.at` (corte de
+  60 pendentes), ressync ao abrir/voltar ao app, ao salvar hábito, ao mudar
+  preferências e ao sair da pausa; seção **Diagnóstico de notificações** no modo
+  de teste (permissão, agendadas, próxima, erro e "Testar agora"). A lógica pura
+  está em `src/lib/notifications.ts`, com testes.
 - Updater macOS: checagem + link para a release; updater real segue Windows.
 - Atualizar `docs/RELEASES.md` se o comportamento de busca mudar.
 
@@ -350,6 +381,7 @@ em uso e ganhou teste de grupo.
 | Dados/lixeira | `src/lib/storage.ts`, `src/lib/db/migrations.ts`, `src/lib/db/persist.ts` |
 | Regras | `src/lib/atlas.ts`, `src/lib/history-*.ts` |
 | Grafo | `src/lib/graph.ts`, `src/lib/graph-sources.ts`, `src/lib/components/graph/*` |
+| Notificações | `src/lib/notifications.ts`, `src/routes/+page.svelte`, `src/lib/components/settings/SettingsSheet.svelte` |
 | Hábitos/Trackers | `src/routes/+page.svelte`, `src/lib/components/habits/TrackersView.svelte` |
 | Finanças | `src/routes/+page.svelte` (sheets e cards) |
 | Plataforma | `src/lib/backup-io.ts`, `src/lib/updater.ts`, `src/lib/components/settings/SettingsSheet.svelte` |
@@ -393,11 +425,14 @@ em uso e ganhou teste de grupo.
 - Trackers aparecem como fonte (último, média da janela, meta) com unidade.
 - Aresta de hábito semanal mostra semanas.
 - Soltar o nó não salta.
+- Arestas retas, com desvio quando há paralelas entre o mesmo par.
 
 ### Sistema
 - Lixeira global lista, restaura e expira em 7 dias.
 - Pausa bloqueia progresso, mostra faixa, chama azul e copy de sair.
-- Notificações iOS disparam com o app fechado; ressync ao abrir.
+- Notificações iOS disparam com o app fechado; ressync ao abrir; diagnóstico no
+  modo de teste.
+- Auto-sync só disponível com "Sincronizar aparelhos" ligado.
 - macOS mostra "Buscar atualização" com link; Windows mantém o updater.
 
 ---
@@ -411,6 +446,7 @@ em uso e ganhou teste de grupo.
 | A1–A3 e morph | iPhone físico | Gestos e animação só se validam no toque real. |
 | B1 pasta da nota | iOS + macOS | Confirmar a hipótese de pasta antes de fechar. |
 | D3 chama após meta | iOS + macOS | Reproduzir e cobrir com teste. |
+| D12 reset do semanal | iOS + macOS | Confirmar que o log da semana sobrevive à reabertura no dia seguinte (chave antiga e nova). |
 | E1 glitch do drag | Desktop (mouse) + touch | Reproduzir e medir o commit otimista. |
 | D7 ordem dos tiles | iOS + macOS | Reproduzir a ordem errada e confirmar a reatividade. |
 | F5 updater macOS | macOS empacotado | Verificar link/checagem e documentar Windows-only. |

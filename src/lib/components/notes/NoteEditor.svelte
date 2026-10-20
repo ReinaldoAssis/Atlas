@@ -22,9 +22,9 @@
 	} from '#lib/notes';
 	import { saveNoteMarkdown } from '#lib/note-export';
 	import { playTone, playTypingThock, prefersReducedMotion, pulseHaptic } from '#lib/feedback';
-	import { decorateTempoRefs, tempoReference } from '#lib/tempo-ref';
+	import { decorateTempoRefs, insideCodeAt, tempoReference } from '#lib/tempo-ref';
 	import { TimeBubble } from '#lib/bubble';
-	import type { TimeBlock } from '#lib/atlas';
+	import { formatMinutes, type TimeBlock } from '#lib/atlas';
 	import { Clock, Download, MoreHorizontal } from '@lucide/svelte';
 	import FolderIcon from './FolderIcon.svelte';
 	import ArtifactFrame from './ArtifactFrame.svelte';
@@ -193,7 +193,8 @@
 		const caret = element.selectionStart;
 		const start = Math.max(0, Math.min(slashStart, caret));
 		const prefix = start > 0 && !/\s/.test(element.value[start - 1]) ? ' ' : '';
-		const text = `${prefix}${tempoReference(block)}`;
+		const reference = tempoReference(block);
+		const text = `${prefix}${insideCodeAt(element.value, start) ? reference : `\`${reference}\``}`;
 		element.setRangeText(text, start, caret, 'end');
 		body = element.value;
 		slashOpen = false;
@@ -600,7 +601,7 @@
 				{#each slashOptions as block (block.id)}
 					<button type="button" role="option" aria-selected="false" onclick={() => insertTempo(block)}>
 						<b>{block.startAt.slice(8, 10)}/{block.startAt.slice(5, 7)}</b>
-						<span>{block.startAt.slice(11, 16)}–{block.endAt.slice(11, 16)} · {block.title || 'Bloco'}</span>
+						<span>{block.startAt.slice(11, 16)}–{block.endAt.slice(11, 16)} · {formatMinutes(block.plannedMinutes)} · {block.title || 'Bloco'}</span>
 					</button>
 				{/each}
 			{:else}

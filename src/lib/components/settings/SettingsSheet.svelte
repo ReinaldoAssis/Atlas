@@ -21,6 +21,7 @@
 		updaterAvailable,
 		updaterBusy,
 		updaterStatus,
+		notificationsDiagnostics = null,
 		onclose,
 		onnotifications,
 		onpreference,
@@ -37,7 +38,9 @@
 		onsyncauto,
 		onsyncinterval,
 		onpair,
-		onunpair
+		onunpair,
+		onnotificationsdiagnostics,
+		onnotificationstest
 	}: {
 		snapshot: AtlasSnapshot;
 		testMode: boolean;
@@ -47,6 +50,7 @@
 		updaterAvailable: boolean;
 		updaterBusy: boolean;
 		updaterStatus: string;
+		notificationsDiagnostics?: NotificationDiagnostics | null;
 		onclose: () => void;
 		onnotifications: (enabled: boolean) => void;
 		onpreference: (
@@ -67,7 +71,22 @@
 		onsyncinterval: (secs: number) => void;
 		onpair: () => void;
 		onunpair: (peer: SyncPeerStatus) => void;
+		onnotificationsdiagnostics?: () => void;
+		onnotificationstest?: () => void;
 	} = $props();
+
+	type NotificationDiagnostics = {
+		permission: boolean | null;
+		scheduled: number;
+		next: string | null;
+		error: string | null;
+		checkedAt: string | null;
+	};
+
+	function diagnosticsWhen(value: string | null): string {
+		if (!value) return 'nenhuma';
+		return new Date(value).toLocaleString('pt-BR');
+	}
 
 	/** Paleta de categorias do guia (`docs/DESIGN.md` §2). */
 	async function handleCurrency(event: Event) {
@@ -298,16 +317,16 @@
 							<span class="lead"><Timer size={17} /></span>
 							<span class="text">
 								<strong>{m.sync_auto_title()}</strong>
-								<small>{m.sync_auto_hint()}</small>
+								<small>{sync?.enabled ? m.sync_auto_hint() : m.sync_auto_requires()}</small>
 							</span>
 							<Toggle
 								label={m.sync_auto_title()}
 								checked={Boolean(sync?.autoSync)}
-								disabled={syncBusy}
+								disabled={syncBusy || !sync?.enabled}
 								onchange={onsyncauto}
 							/>
 						</div>
-						{#if sync?.autoSync}
+						{#if sync?.autoSync && sync?.enabled}
 							<div class="row">
 								<span class="lead"><RefreshCw size={17} /></span>
 								<span class="text">
@@ -328,6 +347,22 @@
 								/>
 							</div>
 						{/if}
+					{/if}
+					{#if testMode && notificationsDiagnostics}
+						<div class="row diag">
+							<span class="text">
+								<strong>Diagnóstico de notificações</strong>
+								<small>
+									Permissão: {notificationsDiagnostics.permission === null ? '—' : notificationsDiagnostics.permission ? 'concedida' : 'negada'} ·
+									{notificationsDiagnostics.scheduled} agendadas · próxima: {diagnosticsWhen(notificationsDiagnostics.next)}
+								</small>
+								{#if notificationsDiagnostics.error}<small class="err">{notificationsDiagnostics.error}</small>{/if}
+							</span>
+							<span class="actions">
+								<button type="button" class="btn compact" onclick={onnotificationsdiagnostics}>Atualizar</button>
+								<button type="button" class="btn compact" onclick={onnotificationstest}>Testar agora</button>
+							</span>
+						</div>
 					{/if}
 				</div>
 			</details>
@@ -484,6 +519,17 @@
 		display: flex;
 		gap: 8px;
 		padding: 10px 0 4px;
+	}
+	.row.diag {
+		align-items: flex-start;
+	}
+	.row.diag .actions {
+		flex-wrap: wrap;
+		justify-content: flex-end;
+		padding: 0;
+	}
+	.text small.err {
+		color: #ff8f8f;
 	}
 	/* Em telas estreitas o rótulo + selo "Em breve" não cabem lado a lado. */
 	@media (max-width: 480px) {

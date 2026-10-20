@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { money, type AtlasSnapshot } from '#lib/atlas';
 	import { edgeRatio, GRAPH_SOURCES, GRAPH_WINDOWS, type GraphEdge, type GraphSourceKind } from '#lib/graph';
-	import { isMoneySource, sourceNeedsRef, sourceProgress, sourceRefOptions, sourceUnit, sourceWindowable } from '#lib/graph-sources';
+	import { isMoneySource, sourceDefaultTarget, sourceNeedsRef, sourceProgress, sourceRefOptions, sourceUnit, sourceWindowable } from '#lib/graph-sources';
 
 	let {
 		edge,
@@ -42,8 +42,12 @@
 	function formatMetric(value: number): string {
 		if (isMoneySource(edge.source)) return money(value, snapshot.preferences.currency);
 		if (edge.source === 'timeHours') return `${value.toFixed(1).replace('.', ',')}h`;
-		if (edge.source === 'habitStreak') return `${Math.round(value)} dias`;
 		return unit ? `${Math.round(value)} ${unit}` : `${Math.round(value)}`;
+	}
+
+	function pickRef(id: string) {
+		const target = sourceDefaultTarget(edge.source, id, snapshot);
+		onpatch(target === undefined ? { refId: id } : { refId: id, target });
 	}
 </script>
 
@@ -74,7 +78,7 @@
 		{#if options.length}
 			<div class="gv-chips">
 				{#each options as option (option.id)}
-					<button class="gv-chip" class:on={edge.refId === option.id} onclick={() => onpatch({ refId: option.id })}>{option.name}</button>
+					<button class="gv-chip" class:on={edge.refId === option.id} onclick={() => pickRef(option.id)}>{option.name}</button>
 				{/each}
 			</div>
 		{:else}
