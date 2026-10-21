@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Habit, TimeBlock } from './atlas';
-import { buildReminderSchedule, numericNotificationId } from './notifications';
+import { buildReminderSchedule, localComponents, numericNotificationId } from './notifications';
 
 function habit(overrides: Partial<Habit> = {}): Habit {
 	return {
@@ -91,6 +91,13 @@ describe('buildReminderSchedule', () => {
 		expect(items).toHaveLength(2);
 		expect(items[0].body).toBe('Foco');
 		expect(localDay(items[1].at)).toBe('2026-10-22');
+	});
+});
+
+describe('localComponents', () => {
+	it('devolve os componentes em horário local para o trigger de calendário', () => {
+		const date = new Date(2026, 9, 21, 13, 30, 45);
+		expect(localComponents(date)).toEqual({ year: 2026, month: 10, day: 21, hour: 13, minute: 30 });
 	});
 });
 

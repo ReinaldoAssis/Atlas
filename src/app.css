@@ -632,6 +632,11 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .graph-view { display: flex; flex-direction: column; height: calc(100dvh - 210px); min-height: 360px; }
 .gv-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 2px 4px 12px; }
 .gv-head h1 { margin: 0; font-family: Manrope, sans-serif; font-size: 26px; font-weight: 800; letter-spacing: -.03em; }
+@media (max-width: 859px) {
+	/* No telefone o título do módulo já vive no app shell. */
+	.gv-head h1 { display: none; }
+	.gv-head { padding-top: 0; }
+}
 .gv-head small { color: var(--muted); font-size: 12px; }
 .gv-head-actions { display: flex; gap: 6px; }
 .gv-ic { width: 38px; height: 38px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); font-size: 16px; text-align: center; }

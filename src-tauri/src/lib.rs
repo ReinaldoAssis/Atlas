@@ -13,6 +13,40 @@ pub struct BatchStatement {
   pub params: Vec<String>,
 }
 
+/// Notificação nativa no macOS.
+///
+/// O caminho do `tauri-plugin-notification` no macOS usa
+/// `NSUserNotificationCenter` (API removida nas versões recentes) e o banner é
+/// descartado em builds ad-hoc. O `osascript` é o fallback que funciona em
+/// qualquer assinatura; no Windows/iOS o plugin continua sendo usado.
+#[tauri::command]
+fn native_notification(title: String, body: String) -> Result<(), String> {
+  #[cfg(target_os = "macos")]
+  {
+    let escape = |value: &str| value.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', " ");
+    let script = format!(
+      "display notification \"{}\" with title \"{}\"",
+      escape(&body),
+      escape(&title)
+    );
+    let output = std::process::Command::new("osascript")
+      .arg("-e")
+      .arg(script)
+      .output()
+      .map_err(|error| format!("osascript: {error}"))?;
+    if output.status.success() {
+      Ok(())
+    } else {
+      Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+  }
+  #[cfg(not(target_os = "macos"))]
+  {
+    let _ = (title, body);
+    Err("notificação nativa só no macOS".to_string())
+  }
+}
+
 /// Executa uma lista de statements numa única transação sobre UMA conexão.
 ///
 /// O plugin SQL usa um pool do sqlx. Enviar `BEGIN`/`COMMIT` como comandos
@@ -89,6 +123,7 @@ pub fn run() {
     .manage(sync::commands::SyncState::default())
     .invoke_handler(tauri::generate_handler![
       db_batch,
+      native_notification,
       sync::commands::sync_start,
       sync::commands::sync_stop,
       sync::commands::sync_now,

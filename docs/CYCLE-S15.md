@@ -322,8 +322,14 @@ em uso e ganhou teste de grupo.
   enquanto "Sincronizar aparelhos" estiver desligado; a preferência é preservada.
 - **Arestas do grafo**: retas, com desvio perpendicular para arestas paralelas
   entre o mesmo par.
-- **Notificações**: ver F3 acima (agenda de 2 semanas + diagnóstico no modo de
-  teste).
+- **Notificações**: agenda de 2 semanas no iOS com trigger de calendário
+  (`Schedule.interval` em componentes locais, para não herdar o bug de fuso do
+  `Schedule.at`); o macOS passa a entregar pelo `osascript`
+  (`native_notification`), já que o plugin usa `NSUserNotificationCenter` e o
+  banner é descartado em builds ad-hoc. O diagnóstico mostra permissão, fila,
+  entregues e a próxima, com dica de Foco/Resumo Agendado.
+- **Planejamento no telefone**: o `h1` "Planejamento" do `GraphView` fica oculto
+  no mobile; sobra só o título do app shell, como nos outros módulos.
 
 ### E6 — Planejamento/grafo ✅
 
@@ -431,7 +437,8 @@ perpendicular quando há mais de uma entre o mesmo par. Testes novos em
 - Lixeira global lista, restaura e expira em 7 dias.
 - Pausa bloqueia progresso, mostra faixa, chama azul e copy de sair.
 - Notificações iOS disparam com o app fechado; ressync ao abrir; diagnóstico no
-  modo de teste.
+  modo de teste. No macOS o banner sai pelo `osascript` enquanto o app está
+  aberto (lembretes com o app fechado seguem fora do escopo).
 - Auto-sync só disponível com "Sincronizar aparelhos" ligado.
 - macOS mostra "Buscar atualização" com link; Windows mantém o updater.
 
@@ -442,6 +449,7 @@ perpendicular quando há mais de uma entre o mesmo par. Testes novos em
 | Item | Onde | Por quê |
 |---|---|---|
 | F3 notificações | iPhone físico + SideStore | Nunca funcionou; precisa de log do device e teste com app fechado. |
+| F3 macOS | macOS empacotado | Confirmar o banner do `osascript` e o botão "Testar agora". |
 | F4 export `.md`/backup | iPhone físico | Backup também falha; confirmar se é `dialog.save`, escopo do `fs` ou share sheet. |
 | A1–A3 e morph | iPhone físico | Gestos e animação só se validam no toque real. |
 | B1 pasta da nota | iOS + macOS | Confirmar a hipótese de pasta antes de fechar. |

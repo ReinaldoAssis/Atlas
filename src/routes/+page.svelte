@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, tick, untrack, onDestroy } from 'svelte';
 	import { fade, fly } from 'svelte/transition';
-	import { isTauri } from '@tauri-apps/api/core';
+	import { isTauri, invoke } from '@tauri-apps/api/core';
 	import {
 		Archive, ArchiveRestore, CalendarDays, Check, ChevronLeft,
 		Flame, FlaskConical, History, LayoutDashboard, Menu, MoreHorizontal, NotebookPen, Pencil, Plus, Route, Settings2, Target, Trash2,
@@ -104,7 +104,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		prefersReducedMotion, pulseHaptic, vibrate
 	} from '#lib/feedback';
 	import { formatClock } from '#lib/duration';
-	import { buildReminderSchedule } from '#lib/notifications';
+	import { buildReminderSchedule, localComponents } from '#lib/notifications';
 	import '../app.css';
 
 	type Period = 'week' | 'month' | 'custom';
@@ -3839,10 +3839,16 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		return isTauri() && (/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
 	}
 
+	/** macOS empacotado (o iPadOS com teclado também se anuncia como MacIntel). */
+	function isMacOSApp(): boolean {
+		return isTauriApp() && !isIOSApp() && /Macintosh|Mac OS X/i.test(navigator.userAgent);
+	}
+
 	/** Agenda rolante das notificações locais (função pura em `notifications.ts`). */
 	interface NotificationDiagnostics {
 		permission: boolean | null;
 		scheduled: number;
+		delivered?: number;
 		next: string | null;
 		error: string | null;
 		checkedAt: string | null;
@@ -3891,7 +3897,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					id: item.id,
 					title: item.title,
 					body: item.body,
-					schedule: plugin.Schedule.at(item.at)
+					// Calendário em horário local: o `Schedule.at` do plugin interpreta o
+					// ISO em UTC como se fosse local e desloca o disparo pelo fuso.
+					schedule: plugin.Schedule.interval(localComponents(item.at))
 				});
 			}
 			notificationDiag = {
@@ -3909,34 +3917,39 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	/** Lê permissão e fila nativa (só mobile) para a seção de diagnóstico. */
 	async function refreshNotificationDiagnostics() {
 		const checkedAt = new Date().toISOString();
+		const planned = snapshot ? buildReminderSchedule(snapshot) : [];
+		const nextReminder = planned[0]?.at.toISOString() ?? null;
 		if (!isTauriApp()) {
 			const permission = 'Notification' in window ? Notification.permission === 'granted' : null;
-			notificationDiag = { permission, scheduled: 0, next: null, error: null, checkedAt };
+			notificationDiag = { permission, scheduled: planned.length, delivered: 0, next: nextReminder, error: null, checkedAt };
 			return;
 		}
 		try {
 			const plugin = await import('@tauri-apps/plugin-notification');
 			const permission = await plugin.isPermissionGranted();
 			const pending = isIOSApp() ? await plugin.pending() : [];
-			const dates = pending
-				.map((item) => item.schedule?.at?.date)
-				.filter((date): date is Date => Boolean(date))
-				.sort((a, b) => a.getTime() - b.getTime());
+			const delivered = isIOSApp() ? (await plugin.active()).length : 0;
 			notificationDiag = {
 				permission,
-				scheduled: pending.length,
-				next: dates[0]?.toISOString() ?? null,
+				// No desktop os lembretes são checados pelo app aberto (não há fila nativa).
+				scheduled: isIOSApp() ? pending.length : planned.length,
+				delivered,
+				next: nextReminder,
 				error: null,
 				checkedAt
 			};
 		} catch (error) {
-			notificationDiag = { permission: null, scheduled: 0, next: null, error: reportNotificationError(error), checkedAt };
+			notificationDiag = { permission: null, scheduled: 0, delivered: 0, next: nextReminder, error: reportNotificationError(error), checkedAt };
 		}
 	}
 
 	async function sendTestNotification() {
 		try {
-			if (isTauriApp()) {
+			if (isMacOSApp()) {
+				// O plugin no macOS usa a API antiga e o banner é descartado em builds
+				// ad-hoc; o osascript entrega em qualquer assinatura.
+				await invoke('native_notification', { title: 'Atlas · teste', body: 'As notificações estão funcionando.' });
+			} else if (isTauriApp()) {
 				const plugin = await import('@tauri-apps/plugin-notification');
 				if (!(await plugin.isPermissionGranted()) && (await plugin.requestPermission()) !== 'granted') {
 					toastMessage('Permissão de notificações não concedida.');
@@ -3947,12 +3960,14 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 				await showNotification('Atlas · teste', 'As notificações estão funcionando.');
 			}
 			toastMessage('Notificação de teste enviada.');
-			await refreshNotificationDiagnostics();
+			// Deixa o sistema entregar antes de reler a fila/entregues.
+			setTimeout(() => void refreshNotificationDiagnostics(), 1200);
 		} catch (error) {
 			toastMessage('Não foi possível enviar a notificação de teste.', { warning: true });
 			notificationDiag = {
 				permission: null,
 				scheduled: 0,
+				delivered: 0,
 				next: null,
 				error: reportNotificationError(error),
 				checkedAt: new Date().toISOString()
@@ -3984,6 +3999,15 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	async function showNotification(title: string, body: string) {
+		if (isMacOSApp()) {
+			try {
+				await invoke('native_notification', { title, body });
+				return;
+			} catch (error) {
+				// Sem osascript, cai no caminho web/plugin abaixo.
+				reportNotificationError(error);
+			}
+		}
 		if ('Notification' in window && Notification.permission === 'granted') {
 			new Notification(title, { body });
 			return;

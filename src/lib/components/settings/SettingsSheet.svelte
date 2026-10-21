@@ -78,6 +78,7 @@
 	type NotificationDiagnostics = {
 		permission: boolean | null;
 		scheduled: number;
+		delivered?: number;
 		next: string | null;
 		error: string | null;
 		checkedAt: string | null;
@@ -354,9 +355,10 @@
 								<strong>Diagnóstico de notificações</strong>
 								<small>
 									Permissão: {notificationsDiagnostics.permission === null ? '—' : notificationsDiagnostics.permission ? 'concedida' : 'negada'} ·
-									{notificationsDiagnostics.scheduled} agendadas · próxima: {diagnosticsWhen(notificationsDiagnostics.next)}
+									{notificationsDiagnostics.scheduled} agendadas · {notificationsDiagnostics.delivered ?? 0} entregues · próxima: {diagnosticsWhen(notificationsDiagnostics.next)}
 								</small>
 								{#if notificationsDiagnostics.error}<small class="err">{notificationsDiagnostics.error}</small>{/if}
+								<small>Sem banner? Confira Foco/Resumo Agendado e o estilo em Ajustes → Notificações.</small>
 							</span>
 							<span class="actions">
 								<button type="button" class="btn compact" onclick={onnotificationsdiagnostics}>Atualizar</button>
