@@ -2,8 +2,9 @@ use serde::Deserialize;
 use tauri::Manager;
 use tauri_plugin_sql::{DbInstances, DbPool};
 
-// Sync P2P (S10). No iOS a descoberta é um plugin Swift (P4); o resto é comum.
-#[cfg(not(target_os = "android"))]
+// Sync P2P (S10). No iOS a descoberta é um plugin Swift (P4); no Android é o
+// mesmo `mdns-sd` do desktop, com `MulticastLock` (plugin Kotlin).
+pub mod multicast;
 pub mod sync;
 
 #[derive(Deserialize)]
@@ -118,7 +119,10 @@ pub fn run() {
     .plugin(tauri_plugin_updater::Builder::new().build())
     .plugin(tauri_plugin_process::init());
 
-  #[cfg(not(target_os = "android"))]
+  // O mDNS do sync só recebe multicast com `MulticastLock` no Android.
+  #[cfg(target_os = "android")]
+  let builder = builder.plugin(multicast::init());
+
   let builder = builder
     .manage(sync::commands::SyncState::default())
     .invoke_handler(tauri::generate_handler![
@@ -136,9 +140,6 @@ pub fn run() {
       sync::commands::sync_pair_confirm,
       sync::commands::sync_unpair
     ]);
-
-  #[cfg(target_os = "android")]
-  let builder = builder.invoke_handler(tauri::generate_handler![db_batch]);
 
   builder
     .plugin(tauri_plugin_sql::Builder::default().build())

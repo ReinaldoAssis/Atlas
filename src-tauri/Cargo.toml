@@ -56,7 +56,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
-# Descoberta no desktop (DNS-SD padrão). No iOS o mDNS cru é bloqueado por
-# entitlement, então lá a descoberta vai por um plugin Swift (dns_sd.h).
-[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+# Descoberta no desktop e no Android (DNS-SD padrão). No iOS o mDNS cru é
+# bloqueado por entitlement, então lá a descoberta vai por um plugin Swift
+# (dns_sd.h).
+[target.'cfg(not(target_os = "ios"))'.dependencies]
 mdns-sd = "0.21"

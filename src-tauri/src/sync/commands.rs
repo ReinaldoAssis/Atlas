@@ -800,6 +800,10 @@ pub async fn sync_start(
   let endpoint_id = endpoint.id();
   let name = format!("Atlas {}", endpoint_id.fmt_short());
 
+  if let Err(error) = crate::multicast::acquire(&app) {
+    log::warn!("sync: multicast lock: {error}");
+  }
+
   #[cfg(not(target_os = "ios"))]
   let (advertisement, receiver, discovery_error) =
     match discovery::Advertisement::start(&endpoint) {
@@ -943,6 +947,7 @@ pub async fn sync_stop(
     if let Some(discovery) = running.discovery.take() {
       discovery.stop();
     }
+    crate::multicast::release(&app).ok();
     running.endpoint.close().await;
   }
   set_enabled(&pool, false).await?;
@@ -968,6 +973,9 @@ pub async fn sync_discovery_restart(
     {
       if let Some(advertisement) = running.advertisement.take() {
         advertisement.stop();
+      }
+      if let Err(error) = crate::multicast::acquire(&app) {
+        log::warn!("sync: multicast lock: {error}");
       }
       match discovery::Advertisement::start(&running.endpoint) {
         Ok((advertisement, receiver)) => {
