@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Sheet from '#lib/components/ui/Sheet.svelte';
+	import { m } from '#lib/paraglide/messages.js';
 	import type { Note } from '#lib/notes';
 
 	/** Lista agregada das notas dos blocos visíveis no planejador. */
@@ -18,16 +19,16 @@
 	}
 </script>
 
-<Sheet title="Notas do planejador" closeLabel="Fechar" {onclose}>
+<Sheet title={m.planner_notes_title()} closeLabel={m.planner_close()} {onclose}>
 	<div class="pn-list">
 		{#each items as item, index (item.note.id + index)}
 			<button type="button" class="pn-row" style={`--cc:${item.color}`} onclick={() => onopen(item.note)}>
 				<i aria-hidden="true"></i>
 				<span class="pn-main">
-					<b>{item.note.title || 'Sem título'}</b>
+					<b>{item.note.title || m.planner_untitled()}</b>
 					<small>{item.label}</small>
 				</span>
-				<span class="pn-ex">{excerpt(item.note.body) || 'Nota vazia'}</span>
+				<span class="pn-ex">{excerpt(item.note.body) || m.planner_note_empty_short()}</span>
 			</button>
 		{/each}
 	</div>

@@ -1,4 +1,6 @@
 import { createGraph, type GraphState } from './graph';
+import { intlLocale } from './i18n/intl';
+import { m } from './paraglide/messages.js';
 
 export type ModuleId = 'finance' | 'habits' | 'time';
 export type TransactionType = 'income' | 'expense';
@@ -199,23 +201,29 @@ export function normalizeCategoryLimitMode(value: unknown): CategoryLimitMode {
 
 const today = () => localDate();
 
-export const defaultCategories: Category[] = [
-	{ id: 'sal', module: 'finance', name: 'Salário', color: '#d4f25a', kind: 'in' },
-	{ id: 'moa', module: 'finance', name: 'Moradia', color: '#9cc8ff', kind: 'out', limitMinor: 120000, limitMode: 'limit' },
-	{ id: 'ali', module: 'finance', name: 'Alimentação', color: '#ffb347', kind: 'out', limitMinor: 80000, limitMode: 'limit' },
-	{ id: 'laz', module: 'finance', name: 'Lazer', color: '#f1a5c5', kind: 'out', limitMinor: 25000, limitMode: 'limit' },
-	{ id: 'deep-work', module: 'time', name: 'Foco profundo', color: '#d4f25a', weeklyGoalHours: 10 },
-	{ id: 'reading', module: 'time', name: 'Leitura', color: '#c6a8ff', weeklyGoalHours: 5 },
-	{ id: 'health-time', module: 'time', name: 'Saúde', color: '#f1a5c5', weeklyGoalHours: 4 },
-	{ id: 'personal', module: 'time', name: 'Pessoal', color: '#ffb347', weeklyGoalHours: 0 },
-	{ id: 'rest', module: 'time', name: 'Descanso', color: '#7fe3c4', weeklyGoalHours: 0 }
-];
+/**
+ * Categorias iniciais. Nomes vêm do idioma do primeiro boot e ficam gravados
+ * como dados do usuário (trocar o idioma depois não renomeia).
+ */
+export function defaultCategories(): Category[] {
+	return [
+		{ id: 'sal', module: 'finance', name: m.category_sal(), color: '#d4f25a', kind: 'in' },
+		{ id: 'moa', module: 'finance', name: m.category_moa(), color: '#9cc8ff', kind: 'out', limitMinor: 120000, limitMode: 'limit' },
+		{ id: 'ali', module: 'finance', name: m.category_ali(), color: '#ffb347', kind: 'out', limitMinor: 80000, limitMode: 'limit' },
+		{ id: 'laz', module: 'finance', name: m.category_laz(), color: '#f1a5c5', kind: 'out', limitMinor: 25000, limitMode: 'limit' },
+		{ id: 'deep-work', module: 'time', name: m.category_deep_work(), color: '#d4f25a', weeklyGoalHours: 10 },
+		{ id: 'reading', module: 'time', name: m.category_reading(), color: '#c6a8ff', weeklyGoalHours: 5 },
+		{ id: 'health-time', module: 'time', name: m.category_health_time(), color: '#f1a5c5', weeklyGoalHours: 4 },
+		{ id: 'personal', module: 'time', name: m.category_personal(), color: '#ffb347', weeklyGoalHours: 0 },
+		{ id: 'rest', module: 'time', name: m.category_rest(), color: '#7fe3c4', weeklyGoalHours: 0 }
+	];
+}
 
 export const WEEK_MAX = 7;
 
 export function createEmptySnapshot(): AtlasSnapshot {
 	return {
-		categories: structuredClone(defaultCategories),
+		categories: defaultCategories(),
 		transactions: [],
 		habits: [],
 		habitLogs: [],
@@ -321,7 +329,7 @@ export function weeklyLogFor(logs: readonly HabitLog[], habitId: string, weekSta
 }
 
 export function money(minor: number, currency = 'BRL'): string {
-	return new Intl.NumberFormat('pt-BR', { style: 'currency', currency }).format(minor / 100);
+	return new Intl.NumberFormat(intlLocale(), { style: 'currency', currency }).format(minor / 100);
 }
 
 export function formatMinutes(minutes: number): string {
@@ -352,8 +360,28 @@ export function positiveValueOf(source: { positiveValue?: 0 | 1 } | null | undef
 	return source?.positiveValue === 0 ? 0 : 1;
 }
 
-export const HABIT_BOOLEAN_LABELS = { positive: 'Feito', negative: 'Não feito' };
-export const TRACKER_BOOLEAN_LABELS = { positive: 'Sim', negative: 'Não' };
+/**
+ * Rótulos padrão de sim/não. Objetos com getter: o valor é lido na hora do
+ * render (o idioma pode ter mudado) mas os chamadores continuam usando
+ * `HABIT_BOOLEAN_LABELS.positive`.
+ */
+export const HABIT_BOOLEAN_LABELS = {
+	get positive(): string {
+		return m.habit_boolean_positive();
+	},
+	get negative(): string {
+		return m.habit_boolean_negative();
+	}
+};
+
+export const TRACKER_BOOLEAN_LABELS = {
+	get positive(): string {
+		return m.tracker_boolean_positive();
+	},
+	get negative(): string {
+		return m.tracker_boolean_negative();
+	}
+};
 
 /** Rótulo do estado lançado (`value`) num sim/não, com fallback por entidade. */
 export function booleanLabelOf(

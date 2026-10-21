@@ -5,6 +5,8 @@
  * receber links grafo↔nota depois (`id` estável + `folderId`). Wiki-links
  * `[[Título]]` ligam notas entre si dentro do módulo.
  */
+import { intlLocale } from './i18n/intl';
+import { m } from './paraglide/messages.js';
 
 export interface Note {
 	id: string;
@@ -169,7 +171,7 @@ export function noteTitle(note: Note): string {
 	if (titled) return titled;
 	const firstLine = note.body.split('\n').find((line) => line.trim().length > 0) ?? '';
 	const cleaned = firstLine.replace(/^#{1,6}\s*/, '').replace(/[*_`>#-]/g, ' ').trim();
-	return cleaned || 'Sem título';
+	return cleaned || m.common_untitled();
 }
 
 /** Trecho do corpo: primeira linha que não é título, sem marcações. */
@@ -294,7 +296,7 @@ export function formatNoteDate(iso: string): string {
 	const days = Math.floor((startOfDay(new Date()) - startOfDay(date)) / 86_400_000);
 	if (days <= 0) return 'hoje';
 	if (days === 1) return 'ontem';
-	return date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+	return date.toLocaleDateString(intlLocale(), { day: '2-digit', month: '2-digit' });
 }
 
 export function deaccent(value: string): string {
@@ -346,7 +348,7 @@ export function highlightHtml(text: string, query: string): string {
  * como está e acrescenta as tags no fim.
  */
 export function noteMarkdown(title: string, body: string, tags: string[]): string {
-	const cleanTitle = title.trim() || 'Sem título';
+	const cleanTitle = title.trim() || m.common_untitled();
 	const trimmed = body.trim();
 	const firstLine = trimmed.split('\n')[0]?.replace(/^#+\s+/, '').trim().toLowerCase() ?? '';
 	const content = firstLine === cleanTitle.toLowerCase() ? trimmed : `# ${cleanTitle}\n\n${trimmed}`.trim();

@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { m } from '#lib/paraglide/messages.js';
+	import { intlLocale } from '#lib/i18n/intl';
 	import { dateOffset, localDate } from '#lib/atlas';
 	import type { HistoryGroup } from '#lib/history-list';
 
@@ -19,10 +21,10 @@
 	const today = localDate();
 
 	function dayLabel(date: string): string {
-		if (date === today) return 'Hoje';
-		if (date === dateOffset(today, -1)) return 'Ontem';
+		if (date === today) return m.habit_today();
+		if (date === dateOffset(today, -1)) return m.habit_yesterday();
 		const weekday = new Date(`${date}T12:00:00`)
-			.toLocaleDateString('pt-BR', { weekday: 'short' })
+			.toLocaleDateString(intlLocale(), { weekday: 'short' })
 			.replace('.', '');
 		const [year, month, day] = date.split('-');
 		return `${weekday}, ${day}/${month}${year !== today.slice(0, 4) ? `/${year}` : ''}`;
@@ -35,7 +37,7 @@
 			<li class="hl-group">
 				<header>
 					<span>{dayLabel(group.date)}</span>
-					<small>{group.rows.length} {group.rows.length === 1 ? 'registro' : 'registros'}</small>
+					<small>{group.rows.length === 1 ? m.common_record_count_one() : m.common_record_count_many({ count: group.rows.length })}</small>
 				</header>
 				<div class="hl-rows">
 					{#each group.rows as row (row.id)}
@@ -52,7 +54,7 @@
 		{/each}
 	</ul>
 {:else}
-	<p class="hl-empty">Nenhum registro no período.</p>
+	<p class="hl-empty">{m.common_empty_period()}</p>
 {/if}
 
 <style>

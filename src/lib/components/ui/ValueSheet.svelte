@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { untrack, type Snippet } from 'svelte';
+	import { m } from '#lib/paraglide/messages.js';
 	import DurationField from './DurationField.svelte';
 
 	/**
@@ -20,7 +21,7 @@
 		duration = false,
 		caption,
 		accentAt = null,
-		saveLabel = 'Salvar',
+		saveLabel = m.common_save(),
 		presets = [],
 		onchange,
 		onsave,
@@ -155,7 +156,7 @@
 		{#if caption}<div class="vs-caption">{caption(value)}</div>{/if}
 		{#if hint}<small class="vs-hint">{hint}</small>{/if}
 		<input
-			aria-label={`Slider de ${title}`}
+			aria-label={m.common_slider_label({ title })}
 			type="range"
 			{min}
 			max={ceiling}
@@ -174,9 +175,9 @@
 		{#if extra}{@render extra()}{/if}
 		<div class="vs-actions">
 			{#if ondelete}
-				<button class="vs-delete" onclick={ondelete}>Excluir</button>
+				<button class="vs-delete" onclick={ondelete}>{m.common_delete()}</button>
 			{/if}
-			<button class="vs-cancel" onclick={requestClose}>Cancelar</button>
+			<button class="vs-cancel" onclick={requestClose}>{m.common_cancel()}</button>
 			<button class="habit-prototype-save vs-save" onclick={commit}>{saveLabel}</button>
 		</div>
 	</div>

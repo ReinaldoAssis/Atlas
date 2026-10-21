@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Sheet from '#lib/components/ui/Sheet.svelte';
 	import { getCarta } from '#lib/carta';
+	import { m } from '#lib/paraglide/messages.js';
 	import type { Note } from '#lib/notes';
 
 	/** Leitura da nota aberta a partir do dialog do planejador, sem sair do Tempo. */
@@ -32,7 +33,7 @@
 	});
 </script>
 
-<Sheet title={note.title || 'Sem título'} closeLabel="Fechar" {onclose} onpullup={() => onopenfull(note)}>
+<Sheet title={note.title || m.planner_untitled()} closeLabel={m.planner_close()} {onclose} onpullup={() => onopenfull(note)}>
 	{#if note.tags.length}
 		<div class="pn-tags">
 			{#each note.tags as tag (tag)}<span>#{tag}</span>{/each}
@@ -41,7 +42,7 @@
 	{#if note.body.trim()}
 		<div class="pn-body markdown-body" bind:this={bodyEl}></div>
 	{:else}
-		<p class="pn-empty">Nota vazia.</p>
+		<p class="pn-empty">{m.planner_note_empty()}</p>
 	{/if}
 </Sheet>
 

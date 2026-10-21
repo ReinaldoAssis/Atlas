@@ -9,6 +9,7 @@
 	import DurationField from '../ui/DurationField.svelte';
 	import ValueSheet from '../ui/ValueSheet.svelte';
 	import { playTone, pulseHaptic } from '#lib/feedback';
+	import { m } from '#lib/paraglide/messages.js';
 	import { formatClock } from '#lib/duration';
 	import { buildHistoryChart } from '#lib/history-chart';
 	import HistoryList from './HistoryList.svelte';
@@ -351,13 +352,13 @@
 		event.preventDefault();
 		const name = trackerForm.name.trim();
 		if (!name) {
-			formError = 'Informe um nome.';
+			formError = m.tracker_error_name();
 			return;
 		}
 		const numeric = trackerForm.metric !== 'boolean';
 		const target = !numeric || trackerForm.target.trim() === '' ? null : Number(trackerForm.target.replace(',', '.'));
 		if (target != null && !Number.isFinite(target)) {
-			formError = 'Meta inválida.';
+			formError = m.tracker_error_goal();
 			return;
 		}
 		const unit = trackerForm.metric === 'duration' ? 'min' : trackerForm.metric === 'count' ? trackerForm.unit.trim() : '';
@@ -523,7 +524,7 @@
 
 <div class="tk">
 	<div class="habit-prototype-grid habit-prototype-habits">
-		<button class="habit-prototype-card habit-prototype-empty tk-new" onclick={openNewTracker}><Plus size={20} /> Tracker</button>
+		<button class="habit-prototype-card habit-prototype-empty tk-new" onclick={openNewTracker}><Plus size={20} /> {m.tracker_new()}</button>
 		{#each visibleTrackers as tracker (tracker.id)}
 			{@const last = lastEntry(tracker.id)}
 			{@const current = tracker.metric === 'boolean' ? todayEntry(tracker.id) : null}
@@ -563,14 +564,14 @@
 						<small>
 							{#if tracker.metric === 'boolean'}
 								{#if current}
-									Registrado {current.time ?? formatWhen(current)}
+									{m.tracker_logged_at({ time: current.time ?? formatWhen(current) })}
 								{:else if last}
-									último {formatWhen(last)} · toque para registrar
+									{m.tracker_last_logged({ when: formatWhen(last) })}
 								{:else}
-									Toque para registrar
+									{m.tracker_tap_to_log()}
 								{/if}
 							{:else}
-								{tracker.target == null ? 'sem meta' : `meta ${formatValue(tracker, tracker.target)}`}{#if trend} · <em class:good={trend.good} class:bad={!trend.good}>{trend.arrow} {tracker.metric === 'duration' ? formatClock(trend.average) : formatNumber(trend.average)}</em>{/if}
+								{tracker.target == null ? m.tracker_no_goal() : m.tracker_goal_inline({ value: formatValue(tracker, tracker.target) })}{#if trend} · <em class:good={trend.good} class:bad={!trend.good}>{trend.arrow} {tracker.metric === 'duration' ? formatClock(trend.average) : formatNumber(trend.average)}</em>{/if}
 							{/if}
 						</small>
 					</span>
@@ -578,7 +579,7 @@
 				</button>
 				<button
 					class="hcard-more"
-					aria-label={`Opções de ${tracker.name}`}
+					aria-label={m.tracker_options_of({ name: tracker.name })}
 					onclick={(event) => {
 						event.stopPropagation();
 						const rect = event.currentTarget.getBoundingClientRect();
@@ -592,12 +593,12 @@
 	</div>
 
 	{#if !activeTrackers.length && !archivedTrackers.length}
-		<p class="tk-hint">Acompanhe o que não é hábito: peso, humor, sono, medidas. Vários registros por dia.</p>
+		<p class="tk-hint">{m.tracker_empty_hint()}</p>
 	{/if}
 
 	{#if archivedTrackers.length}
 		<button class="tk-arch-toggle" onclick={() => { showArchived = !showArchived; tone(440, 0.05); }}>
-			{showArchived ? 'Ocultar arquivados' : `Arquivados (${archivedTrackers.length})`}
+			{showArchived ? m.tracker_hide_archived() : m.tracker_archived_count({ count: archivedTrackers.length })}
 		</button>
 	{/if}
 </div>
@@ -608,36 +609,36 @@
 		y={menu.y}
 		onclose={() => (menu = null)}
 		items={[
-			{ label: 'Histórico', icon: History, action: () => openDetail(menu!.tracker) },
-			{ label: 'Editar', icon: Pencil, action: () => openEditTracker(menu!.tracker) },
+			{ label: m.tracker_history(), icon: History, action: () => openDetail(menu!.tracker) },
+			{ label: m.common_edit(), icon: Pencil, action: () => openEditTracker(menu!.tracker) },
 			{
-				label: menu.tracker.active ? 'Arquivar' : 'Reativar',
+				label: menu.tracker.active ? m.tracker_archive() : m.tracker_restore(),
 				icon: menu.tracker.active ? Archive : ArchiveRestore,
 				action: () => toggleArchive(menu!.tracker)
 			},
-			{ label: 'Excluir', danger: true, action: () => removeTracker(menu!.tracker) }
+			{ label: m.common_delete(), danger: true, action: () => removeTracker(menu!.tracker) }
 		]}
 	/>
 {/if}
 
 {#if sheet === 'detail' && detailTracker}
 	{@const tracker = detailTracker}
-	<Sheet title={tracker.name} closeLabel="Fechar" onclose={() => { sheet = null; detailId = null; }}>
+	<Sheet title={tracker.name} closeLabel={m.common_close()} onclose={() => { sheet = null; detailId = null; }}>
 		<div class="tk-head">
 			<span class="tk-head-value">
 				{#if detailEntries[0]}
 					<b>{tracker.metric === 'boolean' ? booleanLabelOf(tracker, detailEntries[0].value, TRACKER_BOOLEAN_LABELS) : formatValue(tracker, detailEntries[0].value)}</b><small>{formatWhen(detailEntries[0])}</small>
 				{:else}
-					<b>—</b><small>Sem registros</small>
+					<b>—</b><small>{m.common_no_records()}</small>
 				{/if}
 			</span>
 			{#if tracker.target != null}
-				<span class="tk-head-goal">Meta {formatValue(tracker, tracker.target)} {tracker.targetDirection === 'down' ? '↓' : '↑'}</span>
+				<span class="tk-head-goal">{m.common_goal_value({ value: formatValue(tracker, tracker.target) })} {tracker.targetDirection === 'down' ? '↓' : '↑'}</span>
 			{/if}
 		</div>
 
 		{#if chart}
-			<svg class="tk-chart" viewBox={`0 0 ${chart.width} ${chart.height}`} role="img" aria-label={`Histórico de ${tracker.name}`}>
+			<svg class="tk-chart" viewBox={`0 0 ${chart.width} ${chart.height}`} role="img" aria-label={m.common_history_of({ name: tracker.name })}>
 				<path class="tk-area" d={chart.area} />
 				<path class="tk-line" d={chart.line} />
 				{#if chart.targetY != null}
@@ -648,11 +649,11 @@
 				{/each}
 			</svg>
 			<Segmented
-				label="Período do gráfico"
+				label={m.common_chart_period()}
 				options={[
-					{ value: '7', label: '7 dias' },
-					{ value: '30', label: '30 dias' },
-					{ value: 'all', label: 'Tudo' }
+					{ value: '7', label: m.common_range_days({ count: 7 }) },
+					{ value: '30', label: m.common_range_days({ count: 30 }) },
+					{ value: 'all', label: m.common_range_all() }
 				]}
 				bind:value={chartRange}
 			/>
@@ -673,15 +674,15 @@
 {#if sheet === 'value' && detailTracker}
 	{@const tracker = detailTracker}
 	<ValueSheet
-		title={`Registrar em ${tracker.name}`}
+		title={m.tracker_log_title({ name: tracker.name })}
 		value={entryValue}
 		max={sheetMax(tracker)}
 		step={sheetStep(tracker)}
 		unit={tracker.metric === 'duration' ? '' : tracker.unit}
 		duration={tracker.metric === 'duration'}
-		hint={tracker.target == null ? '' : `Meta ${formatValue(tracker, tracker.target)}`}
+		hint={tracker.target == null ? '' : m.common_goal_value({ value: formatValue(tracker, tracker.target) })}
 		presets={presets(tracker)}
-		saveLabel={editingEntry ? 'Salvar' : 'Registrar'}
+		saveLabel={editingEntry ? m.common_save() : m.tracker_save_new()}
 		onchange={(value) => (entryValue = value)}
 		onsave={saveValue}
 		ondelete={editingEntry ? removeEntry : undefined}
@@ -689,29 +690,29 @@
 	>
 		{#snippet extra()}
 			<div class="sheet-row">
-				<Field label="Data">
+				<Field label={m.common_date()}>
 					<input type="date" bind:value={entryForm.date} max={today} required />
 				</Field>
-				<Field label="Hora" hint="opcional">
+				<Field label={m.common_time()} hint={m.common_optional()}>
 					<input type="time" bind:value={entryForm.time} />
 				</Field>
 			</div>
-			<Field label="Nota" hint="opcional">
-				<input bind:value={entryForm.note} placeholder="Ex.: em jejum" maxlength="80" />
+			<Field label={m.common_note()} hint={m.common_optional()}>
+				<input bind:value={entryForm.note} placeholder={m.tracker_note_placeholder()} maxlength="80" />
 			</Field>
 		{/snippet}
 	</ValueSheet>
 {/if}
 
 {#if sheet === 'time'}
-	<Sheet title="Que horas?" closeLabel="Fechar" onclose={closeForm}>
+	<Sheet title={m.tracker_time_title()} closeLabel={m.common_close()} onclose={closeForm}>
 		<form class="sheet-form" onsubmit={confirmBooleanTime}>
-			<Field label="Hora do registro">
+			<Field label={m.tracker_time_label()}>
 				<input data-autofocus type="time" bind:value={booleanTime} required />
 			</Field>
 			<div class="sheet-actions">
-				<Button variant="secondary" onclick={closeForm}>Cancelar</Button>
-				<Button type="submit">Registrar</Button>
+				<Button variant="secondary" onclick={closeForm}>{m.common_cancel()}</Button>
+				<Button type="submit">{m.tracker_save_new()}</Button>
 			</div>
 		</form>
 	</Sheet>
@@ -719,35 +720,35 @@
 
 {#if sheet === 'tracker'}
 	<Sheet
-		title={editingTracker ? 'Editar tracker' : 'Novo tracker'}
-		closeLabel="Fechar"
+		title={editingTracker ? m.tracker_edit_title() : m.tracker_new_title()}
+		closeLabel={m.common_close()}
 		onclose={closeForm}
 	>
 		{#if formError}<p class="form-error">{formError}</p>{/if}
 		<form class="sheet-form" onsubmit={saveTracker}>
-			<Field label="Nome">
-				<input bind:value={trackerForm.name} placeholder="Ex.: peso, humor, sono…" maxlength="40" required />
+			<Field label={m.tracker_name()}>
+				<input bind:value={trackerForm.name} placeholder={m.tracker_name_placeholder()} maxlength="40" required />
 			</Field>
-			<Field label="Tipo de medida">
+			<Field label={m.tracker_metric()}>
 				<select bind:value={trackerForm.metric}>
-					<option value="boolean">Feito ou não feito</option>
-					<option value="duration">Duração</option>
-					<option value="count">Contagem</option>
+					<option value="boolean">{m.tracker_metric_boolean()}</option>
+					<option value="duration">{m.tracker_metric_duration()}</option>
+					<option value="count">{m.tracker_metric_count()}</option>
 				</select>
 			</Field>
 			{#if trackerForm.metric === 'boolean'}
 				<div class="sheet-row">
-					<Field label="Rótulo do positivo">
-						<input bind:value={trackerForm.positiveLabel} placeholder="Sim" maxlength="14" required />
+					<Field label={m.tracker_positive_label()}>
+						<input bind:value={trackerForm.positiveLabel} placeholder={m.tracker_positive_placeholder()} maxlength="14" required />
 					</Field>
-					<Field label="Rótulo do negativo">
-						<input bind:value={trackerForm.negativeLabel} placeholder="Não" maxlength="14" required />
+					<Field label={m.tracker_negative_label()}>
+						<input bind:value={trackerForm.negativeLabel} placeholder={m.tracker_negative_placeholder()} maxlength="14" required />
 					</Field>
 				</div>
 				<div class="sheet-days">
-					<span class="sheet-days-label">Qual conta como positivo?</span>
+					<span class="sheet-days-label">{m.tracker_positive_question()}</span>
 					<Segmented
-						label="Qual conta como positivo"
+						label={m.tracker_positive_question_label()}
 						options={[
 							{ value: '1', label: trackerForm.positiveLabel.trim() || TRACKER_BOOLEAN_LABELS.positive },
 							{ value: '0', label: trackerForm.negativeLabel.trim() || TRACKER_BOOLEAN_LABELS.negative }
@@ -758,31 +759,31 @@
 				</div>
 			{:else}
 				{#if trackerForm.metric === 'duration'}
-					<Field label="Meta" hint="opcional · HH:MM">
+					<Field label={m.common_goal()} hint={m.tracker_goal_duration_hint()}>
 						<DurationField
 							value={Number(trackerForm.target) > 0 ? Number(trackerForm.target) : null}
-							ariaLabel="Meta do tracker"
+							ariaLabel={m.tracker_duration_aria()}
 							onchange={(minutes) => (trackerForm.target = minutes && minutes > 0 ? String(minutes) : '')}
 						/>
 					</Field>
 				{:else}
 					<div class="sheet-row">
-						<Field label="Meta" hint="opcional">
+						<Field label={m.common_goal()} hint={m.common_optional()}>
 							<input bind:value={trackerForm.target} inputmode="decimal" placeholder="0" />
 						</Field>
-						<Field label="Unidade">
-							<input bind:value={trackerForm.unit} placeholder="kg, h, mmHg…" maxlength="12" />
+						<Field label={m.tracker_unit()}>
+							<input bind:value={trackerForm.unit} placeholder={m.tracker_unit_placeholder()} maxlength="12" />
 						</Field>
 					</div>
 				{/if}
 				{#if trackerForm.target.trim()}
 					<div class="sheet-days">
-						<span class="sheet-days-label">Como atingir a meta</span>
+						<span class="sheet-days-label">{m.tracker_goal_direction()}</span>
 						<Segmented
-							label="Direção da meta"
+							label={m.tracker_goal_direction_label()}
 							options={[
-								{ value: 'down', label: 'Menor é melhor' },
-								{ value: 'up', label: 'Maior é melhor' }
+								{ value: 'down', label: m.tracker_direction_down() },
+								{ value: 'up', label: m.tracker_direction_up() }
 							]}
 							bind:value={trackerForm.direction}
 						/>
@@ -791,13 +792,13 @@
 			{/if}
 			{#if trackerForm.metric === 'boolean'}
 				<div class="tk-toggle-row">
-					<span>Perguntar a hora ao registrar<small>no lançamento rápido</small></span>
-					<Toggle label="Perguntar a hora ao registrar" bind:checked={trackerForm.askTime} />
+					<span>{m.tracker_ask_time()}<small>{m.tracker_ask_time_hint()}</small></span>
+					<Toggle label={m.tracker_ask_time()} bind:checked={trackerForm.askTime} />
 				</div>
 			{/if}
 			<div class="sheet-actions">
-				<Button variant="secondary" onclick={closeForm}>Cancelar</Button>
-				<Button type="submit">{editingTracker ? 'Salvar' : 'Criar tracker'}</Button>
+				<Button variant="secondary" onclick={closeForm}>{m.common_cancel()}</Button>
+				<Button type="submit">{editingTracker ? m.common_save() : m.tracker_submit_create()}</Button>
 			</div>
 		</form>
 	</Sheet>
@@ -806,13 +807,13 @@
 {#if sheet === 'entry' && detailTracker}
 	{@const tracker = detailTracker}
 	<Sheet
-		title={editingEntry ? 'Editar registro' : `Registrar em ${tracker.name}`}
-		closeLabel="Fechar"
+		title={editingEntry ? m.tracker_entry_edit_title() : m.tracker_log_title({ name: tracker.name })}
+		closeLabel={m.common_close()}
 		onclose={closeForm}
 	>
 		<form class="sheet-form" onsubmit={saveBooleanEntry}>
 			<Segmented
-				label="Registro"
+				label={m.tracker_entry_label()}
 				options={[
 					{ value: 'sim', label: booleanLabelOf(tracker, 1, TRACKER_BOOLEAN_LABELS) },
 					{ value: 'nao', label: booleanLabelOf(tracker, 0, TRACKER_BOOLEAN_LABELS) }
@@ -820,18 +821,18 @@
 				value={booleanEntry}
 				onchange={(value) => (booleanEntry = value === 'nao' ? 'nao' : 'sim')}
 			/>
-			<Field label="Hora" hint="opcional">
+			<Field label={m.common_time()} hint={m.common_optional()}>
 				<input type="time" bind:value={entryForm.time} />
 			</Field>
-			<Field label="Nota" hint="opcional">
-				<input bind:value={entryForm.note} placeholder="Ex.: em jejum" maxlength="80" />
+			<Field label={m.common_note()} hint={m.common_optional()}>
+				<input bind:value={entryForm.note} placeholder={m.tracker_note_placeholder()} maxlength="80" />
 			</Field>
 			<div class="sheet-actions">
 				{#if editingEntry}
-					<Button variant="danger" onclick={removeEntry}>Excluir</Button>
+					<Button variant="danger" onclick={removeEntry}>{m.common_delete()}</Button>
 				{/if}
-				<Button variant="secondary" onclick={closeForm}>Cancelar</Button>
-				<Button type="submit">Salvar</Button>
+				<Button variant="secondary" onclick={closeForm}>{m.common_cancel()}</Button>
+				<Button type="submit">{m.common_save()}</Button>
 			</div>
 		</form>
 	</Sheet>

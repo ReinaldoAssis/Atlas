@@ -6,6 +6,7 @@
  * O mesmo arquivo SQLite (`atlas.db`) é compartilhado via `getDatabase`.
  */
 import { isTauri } from '@tauri-apps/api/core';
+import { m } from './paraglide/messages.js';
 import { BaseDirectory, mkdir, readDir, readFile, remove, writeFile } from '@tauri-apps/plugin-fs';
 import { getDatabase, getDeviceId, nextWriteStamp, runSerialized } from './storage';
 import { demoNotes } from './fixtures';
@@ -375,7 +376,7 @@ function safeAttachmentName(name: string): string {
 }
 
 export async function saveAttachment(noteId: string, file: File): Promise<string> {
-	if (!isTauri()) throw new Error('Anexos indisponíveis no navegador.');
+	if (!isTauri()) throw new Error(m.notes_error_attachments_browser());
 	await mkdir(attachmentDir(noteId), { baseDir: BaseDirectory.AppData, recursive: true });
 	const name = safeAttachmentName(file.name);
 	const bytes = new Uint8Array(await file.arrayBuffer());

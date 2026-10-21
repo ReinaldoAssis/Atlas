@@ -203,7 +203,7 @@
 	}
 
 	/* ---------- confirmação ---------- */
-	function openConfirm(message: string, action: () => void, label = 'Excluir') {
+	function openConfirm(message: string, action: () => void, label = m.notes_delete()) {
 		confirmState = { message, action, label };
 	}
 
@@ -266,7 +266,7 @@
 				publish();
 			} catch (error) {
 				console.error(error);
-				ontoast('Não foi possível abrir as notas.', { warning: true });
+				ontoast(m.notes_load_failed(), { warning: true });
 			} finally {
 				ready = true;
 				bump();
@@ -363,7 +363,7 @@
 
 	async function newNote() {
 		const folderId = searching || trashedView ? null : currentFolder;
-		const note = createNote(folderId, 'Nova nota');
+		const note = createNote(folderId, m.notes_new_note_title());
 		notes = [note, ...notes];
 		await persist(note);
 		trashedView = false;
@@ -413,7 +413,7 @@
 
 	function requestDelete(note: Note) {
 		closeMenu();
-		openConfirm(`Excluir "${noteTitle(note)}"? A nota vai para a lixeira e pode ser restaurada.`, () => {
+		openConfirm(m.notes_delete_confirm({ name: noteTitle(note) }), () => {
 			void trashNote(note);
 		});
 	}
@@ -447,7 +447,7 @@
 		const note = renameState.note;
 		renameState = null;
 		patchNote(note, { title: value });
-		notify('Nota renomeada');
+		notify(m.notes_renamed());
 		tone(660, 0.08, 'triangle', 0.05);
 	}
 
@@ -460,17 +460,17 @@
 		bump();
 		spark(document.querySelector(`[data-note="${note.id}"]`), 10);
 		tone(560, 0.1, 'triangle', 0.05);
-		notify('Nota duplicada');
+		notify(m.notes_duplicated());
 	}
 
 	async function exportNote(note: Note) {
 		closeMenu();
 		try {
 			const result = await saveNoteMarkdown(note);
-			notify(result === 'saved' ? 'Nota exportada.' : 'Exportação cancelada.');
+			notify(result === 'saved' ? m.notes_exported() : m.notes_export_cancelled());
 		} catch (error) {
 			console.error('Falha ao exportar a nota', error);
-			ontoast('Não foi possível exportar a nota.', { warning: true });
+			ontoast(m.notes_export_failed(), { warning: true });
 		}
 	}
 
@@ -489,7 +489,7 @@
 			document.execCommand('copy');
 			field.remove();
 		}
-		notify('Link copiado');
+		notify(m.notes_link_copied());
 		haptic(8);
 	}
 
@@ -504,7 +504,7 @@
 		tone(200, 0.16);
 		haptic(14);
 		bump();
-		notify('Nota movida para a lixeira', () => {
+		notify(m.notes_trashed(), () => {
 			patchNote(note, { trashedAt: null, folderId });
 			bump();
 		});
@@ -515,11 +515,11 @@
 		tone(660, 0.1, 'triangle', 0.05);
 		haptic([8, 20, 8]);
 		bump();
-		notify('Nota restaurada');
+		notify(m.notes_restored());
 	}
 
 	function requestPurge(note: Note) {
-		openConfirm(`Excluir "${noteTitle(note)}" em definitivo? Esta ação remove a nota e seus anexos.`, () => {
+		openConfirm(m.notes_purge_confirm({ name: noteTitle(note) }), () => {
 			void purgeNote(note);
 		});
 	}
@@ -531,14 +531,14 @@
 		tone(200, 0.16);
 		haptic(14);
 		bump();
-		notify('Nota excluída');
+		notify(m.notes_purged());
 	}
 
 	function requestEmptyTrash() {
 		if (!trashedNotes.length) return;
-		openConfirm(`Esvaziar a lixeira? ${trashedNotes.length} nota(s) serão excluídas em definitivo.`, () => {
+		openConfirm(m.notes_empty_trash_confirm({ count: trashedNotes.length }), () => {
 			void emptyTrash();
-		}, 'Esvaziar');
+		}, m.notes_empty_trash_action());
 	}
 
 	async function emptyTrash() {
@@ -549,7 +549,7 @@
 		tone(200, 0.16);
 		haptic(14);
 		bump();
-		notify('Lixeira esvaziada');
+		notify(m.notes_trash_emptied());
 	}
 
 	function togglePin(note: Note, element?: Element | null) {
@@ -575,7 +575,7 @@
 		setTimeout(() => tone(660, 0.14, 'triangle', 0.05), 80);
 		haptic([12, 30, 12]);
 		bump();
-		notify(`Movida para ${folderId ? folders.find((f) => f.id === folderId)?.name ?? 'pasta' : 'Notas'}`, () => {
+		notify(m.notes_moved_to({ name: folderId ? folders.find((f) => f.id === folderId)?.name ?? m.notes_folder_fallback() : m.notes_root() }), () => {
 			patchNote(note, { folderId: from });
 			bump();
 		});
@@ -587,7 +587,7 @@
 		if (parentId && (parentId === folder.id || descendantFolderIds(folders, folder.id).includes(parentId))) {
 			tone(260, 0.1);
 			haptic(20);
-			notify('Uma pasta não pode ir para dentro dela mesma.');
+			notify(m.notes_folder_cycle());
 			return;
 		}
 		const updated: NoteFolder = { ...folder, parentId, updatedAt: new Date().toISOString() };
@@ -600,7 +600,7 @@
 		tone(220, 0.14, 'sine', 0.08);
 		setTimeout(() => tone(660, 0.14, 'triangle', 0.05), 80);
 		haptic([12, 30, 12]);
-		notify(`Pasta movida para ${parentId ? folders.find((f) => f.id === parentId)?.name ?? 'pasta' : 'Notas'}`, () => {
+		notify(m.notes_folder_moved_to({ name: parentId ? folders.find((f) => f.id === parentId)?.name ?? m.notes_folder_fallback() : m.notes_root() }), () => {
 			folders = folders.map((item) => (item.id === folder.id ? folder : item));
 			void upsertFolder(folder);
 			publish();
@@ -652,9 +652,14 @@
 	async function deleteFolder(folder: NoteFolder) {
 		const ids = descendantFolderIds(folders, folder.id);
 		const count = activeNotes.filter((note) => note.folderId && ids.includes(note.folderId)).length;
-		openConfirm(`Excluir "${folder.name}"? ${count ? `Isto remove ${count} nota(s) e suas subpastas.` : 'Isto remove também suas subpastas.'}`, () => {
-			void performDeleteFolder(folder, ids);
-		});
+		openConfirm(
+			count
+				? m.notes_folder_delete_confirm({ name: folder.name, count })
+				: m.notes_folder_delete_confirm_empty({ name: folder.name }),
+			() => {
+				void performDeleteFolder(folder, ids);
+			}
+		);
 	}
 
 	async function performDeleteFolder(folder: NoteFolder, ids: string[]) {
@@ -668,7 +673,7 @@
 		tone(200, 0.16);
 		haptic(14);
 		bump();
-		notify('Pasta excluída', () => {
+		notify(m.notes_folder_deleted(), () => {
 			folders = folderBackup;
 			notes = noteBackup;
 			publish();
@@ -920,11 +925,11 @@
 <section class="nt-prototype nt-anim">
 	<div class="nt-top">
 		<div>
-			<h1>Notas</h1>
-			<small>{activeNotes.length} notas · {folderCount} pastas</small>
+			<h1>{m.notes_title()}</h1>
+			<small>{m.notes_counts({ notes: activeNotes.length, folders: folderCount })}</small>
 		</div>
 		<div class="nt-top-actions">
-			<button class="nt-ic trash" class:on={trashedView} aria-label="Lixeira" onclick={toggleTrash}>
+			<button class="nt-ic trash" class:on={trashedView} aria-label={m.notes_trash()} onclick={toggleTrash}>
 				<Trash2 size={17} />
 				{#if trashedNotes.length}<span class="nt-badge">{trashedNotes.length}</span>{/if}
 			</button>
@@ -937,12 +942,12 @@
 		</svg>
 		<input
 			value={query}
-			placeholder={trashedView ? 'Pesquisar na lixeira' : 'Pesquisar'}
-			aria-label="Pesquisar"
+			placeholder={trashedView ? m.notes_search_trash() : m.notes_search()}
+			aria-label={m.notes_search()}
 			autocomplete="off"
 			oninput={(event) => onQuery(event.currentTarget.value)}
 		/>
-		<button class="nt-qx" aria-label="Limpar" onclick={() => { query = ''; searchIds = null; tone(420, 0.05); haptic(5); }}>×</button>
+		<button class="nt-qx" aria-label={m.notes_clear_search()} onclick={() => { query = ''; searchIds = null; tone(420, 0.05); haptic(5); }}>×</button>
 	</div>
 
 	{#if tags.length && !trashedView}
@@ -963,15 +968,15 @@
 
 	<div class="nt-cr">
 		{#if trashedView}
-			<button onclick={toggleTrash}>Notas</button>
+			<button onclick={toggleTrash}>{m.notes_root()}</button>
 			<span>›</span>
-			<span style="color:var(--acc);font-weight:600">Lixeira ({trashedNotes.length})</span>
+			<span style="color:var(--acc);font-weight:600">{m.notes_trash_count({ count: trashedNotes.length })}</span>
 		{:else if searching}
-			<button onclick={() => { query = ''; searchIds = null; activeTags = []; }}>Notas</button>
+			<button onclick={() => { query = ''; searchIds = null; activeTags = []; }}>{m.notes_root()}</button>
 			<span>›</span>
-			<span style="color:var(--acc);font-weight:600">{visibleNotes.length} {visibleNotes.length === 1 ? 'resultado' : 'resultados'}</span>
+			<span style="color:var(--acc);font-weight:600">{visibleNotes.length === 1 ? m.notes_results_one({ count: visibleNotes.length }) : m.notes_results_other({ count: visibleNotes.length })}</span>
 		{:else}
-			<button data-folder="root" onclick={() => openFolder(null)}>Notas</button>
+			<button data-folder="root" onclick={() => openFolder(null)}>{m.notes_root()}</button>
 			{#each path as folder (folder.id)}
 				<span>›</span>
 				<button data-folder={folder.id} style={`--cc:${folder.color}`} onclick={() => openFolder(folder.id)}>{folder.name}</button>
@@ -983,7 +988,7 @@
 		{#if trashedView}
 			{#if trashedNotes.length}
 				<div class="nt-trash-actions">
-					<button class="nt-trash-empty" onclick={requestEmptyTrash}>Esvaziar lixeira</button>
+					<button class="nt-trash-empty" onclick={requestEmptyTrash}>{m.notes_empty_trash()}</button>
 				</div>
 			{/if}
 			<div class="nt-rows">
@@ -992,27 +997,27 @@
 						<div class="nt-row-main">
 							<div class="tt">{noteTitle(note)}</div>
 							<div class="sn">{noteExcerpt(note)}</div>
-							<div class="mt"><span>Na lixeira {formatNoteDate(note.trashedAt ?? note.updatedAt)}</span></div>
+							<div class="mt"><span>{m.notes_trashed_at({ date: formatNoteDate(note.trashedAt ?? note.updatedAt) })}</span></div>
 						</div>
 						<div class="nt-row-actions">
-							<button aria-label="Restaurar" title="Restaurar" onclick={() => requestRestore(note)}><RotateCcw size={15} /></button>
-							<button aria-label="Excluir definitivamente" title="Excluir" onclick={() => requestPurge(note)}><Trash2 size={15} /></button>
+							<button aria-label={m.notes_restore()} title={m.notes_restore()} onclick={() => requestRestore(note)}><RotateCcw size={15} /></button>
+							<button aria-label={m.notes_purge()} title={m.notes_delete()} onclick={() => requestPurge(note)}><Trash2 size={15} /></button>
 						</div>
 					</div>
 				{:else}
-					<div class="nt-empty">{query ? 'Nada encontrado na lixeira' : 'Lixeira vazia'}</div>
+					<div class="nt-empty">{query ? m.notes_trash_no_results() : m.notes_trash_empty()}</div>
 				{/each}
 			</div>
 		{:else}
 			{#if !searching}
 				<div class="nt-g">
-					<button class="nt-fo new" data-nt-new onclick={newNote}>+ Nota</button>
-					<button class="nt-fo new" onclick={openNewFolder}>+ Pasta</button>
+					<button class="nt-fo new" data-nt-new onclick={newNote}>{m.notes_new_note()}</button>
+					<button class="nt-fo new" onclick={openNewFolder}>{m.notes_new_folder()}</button>
 					{#each children as folder (folder.id)}
 						<button class="nt-fo" class:nt-armed={armedKey === armKey('folder', folder.id)} data-folder={folder.id} style={`--cc:${folder.color}`} onpointerdown={(event) => folderPointerDown(event, folder)} onclick={() => { if (suppressClick) return; openFolder(folder.id); }}>
 							<FolderIcon color={folder.color} />
 							<span class="nt-fo-name">{folder.name}</span>
-							<span class="nt-fo-tip" role="tooltip">{folderTotalCount(activeNotes, folders, folder.id)} notas</span>
+							<span class="nt-fo-tip" role="tooltip">{m.notes_folder_note_count({ count: folderTotalCount(activeNotes, folders, folder.id) })}</span>
 						</button>
 					{/each}
 				</div>
@@ -1048,12 +1053,12 @@
 						<button
 							class="nt-pin"
 							class:on={note.pinned}
-							aria-label={note.pinned ? 'Desafixar' : 'Fixar'}
+							aria-label={note.pinned ? m.notes_unpin() : m.notes_pin()}
 							onclick={(event) => { event.stopPropagation(); togglePin(note, event.currentTarget); }}
 						>{note.pinned ? '★' : '☆'}</button>
 					</div>
 				{:else}
-					<div class="nt-empty">{searching ? 'Nada encontrado' : 'Pasta vazia'}</div>
+					<div class="nt-empty">{searching ? m.notes_no_results() : m.notes_folder_empty()}</div>
 				{/each}
 			</div>
 		{/if}
@@ -1067,7 +1072,7 @@
 		<div
 			class="nt-sh on nt-mmenu nt-sh-fly"
 			role="menu"
-			aria-label="Ações da nota"
+			aria-label={m.notes_note_actions()}
 			style="--nt-tint:#8d968a"
 			in:fly={{ y: 120, duration: prefersReducedMotion() ? 0 : 300 }}
 			out:fly={{ y: 120, duration: prefersReducedMotion() ? 0 : 180 }}
@@ -1077,11 +1082,11 @@
 				<b>{noteTitle(target)}</b>
 				<small>{formatNoteDate(target.updatedAt)}</small>
 			</div>
-			<button role="menuitem" class="nt-mrow" onclick={() => void openRename(target)}><Pencil size={17} /> Renomear</button>
-			<button role="menuitem" class="nt-mrow" onclick={() => duplicate(target)}><Copy size={17} /> Duplicar</button>
-			<button role="menuitem" class="nt-mrow" onclick={() => void exportNote(target)}><Download size={17} /> Exportar .md</button>
-			<button role="menuitem" class="nt-mrow" onclick={() => void copyLink(target)}><Link2 size={17} /> Copiar link</button>
-			<button role="menuitem" class="nt-mrow danger" onclick={() => requestDelete(target)}><Trash2 size={17} /> Excluir nota</button>
+			<button role="menuitem" class="nt-mrow" onclick={() => void openRename(target)}><Pencil size={17} /> {m.notes_rename()}</button>
+			<button role="menuitem" class="nt-mrow" onclick={() => duplicate(target)}><Copy size={17} /> {m.notes_duplicate()}</button>
+			<button role="menuitem" class="nt-mrow" onclick={() => void exportNote(target)}><Download size={17} /> {m.notes_export_md()}</button>
+			<button role="menuitem" class="nt-mrow" onclick={() => void copyLink(target)}><Link2 size={17} /> {m.notes_copy_link()}</button>
+			<button role="menuitem" class="nt-mrow danger" onclick={() => requestDelete(target)}><Trash2 size={17} /> {m.notes_delete_note()}</button>
 		</div>
 	{:else}
 		<div
@@ -1089,11 +1094,11 @@
 			role="menu"
 			style={`left:${menuState.x}px; top:${menuState.y}px; --nt-tint:${(target.folderId && folders.find((f) => f.id === target.folderId)?.color) || '#8d968a'}`}
 		>
-			<button role="menuitem" onclick={() => void openRename(target)}><Pencil size={15} /> Renomear</button>
-			<button role="menuitem" onclick={() => duplicate(target)}><Copy size={15} /> Duplicar</button>
-			<button role="menuitem" onclick={() => void exportNote(target)}><Download size={15} /> Exportar .md</button>
-			<button role="menuitem" onclick={() => void copyLink(target)}><Link2 size={15} /> Copiar link</button>
-			<button class="danger" role="menuitem" onclick={() => requestDelete(target)}><Trash2 size={15} /> Excluir nota</button>
+			<button role="menuitem" onclick={() => void openRename(target)}><Pencil size={15} /> {m.notes_rename()}</button>
+			<button role="menuitem" onclick={() => duplicate(target)}><Copy size={15} /> {m.notes_duplicate()}</button>
+			<button role="menuitem" onclick={() => void exportNote(target)}><Download size={15} /> {m.notes_export_md()}</button>
+			<button role="menuitem" onclick={() => void copyLink(target)}><Link2 size={15} /> {m.notes_copy_link()}</button>
+			<button class="danger" role="menuitem" onclick={() => requestDelete(target)}><Trash2 size={15} /> {m.notes_delete_note()}</button>
 		</div>
 	{/if}
 {/if}
@@ -1104,14 +1109,14 @@
 		class="nt-sh on nt-rename nt-sh-fly"
 		role="dialog"
 		aria-modal="true"
-		aria-label="Renomear nota"
+		aria-label={m.notes_rename_title()}
 		in:fly={{ y: 120, duration: prefersReducedMotion() ? 0 : 300 }}
 		out:fly={{ y: 120, duration: prefersReducedMotion() ? 0 : 180 }}
 	>
 		<div class="nt-grip"></div>
 		<input
 			class="nt-inp"
-			aria-label="Novo título"
+			aria-label={m.notes_rename_placeholder()}
 			maxlength="60"
 			bind:value={renameState.value}
 			onkeydown={(event) => {
@@ -1121,8 +1126,8 @@
 				}
 			}}
 		/>
-		<button class="nt-btn" onclick={confirmRename}>Salvar</button>
-		<button class="nt-btn ghost" onclick={closeRename}>Cancelar</button>
+		<button class="nt-btn" onclick={confirmRename}>{m.notes_save()}</button>
+		<button class="nt-btn ghost" onclick={closeRename}>{m.notes_cancel()}</button>
 	</div>
 {/if}
 
@@ -1167,37 +1172,37 @@
 		class="nt-sh on nt-sh-fly"
 		role="dialog"
 		aria-modal="true"
-		aria-label="Confirmação"
+		aria-label={m.notes_confirm_title()}
 		in:fly={{ y: 120, duration: prefersReducedMotion() ? 0 : 300 }}
 		out:fly={{ y: 120, duration: prefersReducedMotion() ? 0 : 180 }}
 	>
 		<div class="nt-grip"></div>
 		<p class="nt-confirm-text">{confirmState.message}</p>
 		<button class="nt-btn danger" onclick={runConfirm}>{confirmState.label}</button>
-		<button class="nt-btn ghost" onclick={closeConfirm}>Cancelar</button>
+		<button class="nt-btn ghost" onclick={closeConfirm}>{m.notes_cancel()}</button>
 	</div>
 {/if}
 
 {#if sheetKind !== 'none'}
 	<div class="nt-ov" class:on={sheetIn} role="presentation" onclick={closeSheet}></div>
-	<div class="nt-sh" class:on={sheetIn} role="dialog" aria-modal="true" aria-label={sheetKind === 'newfolder' ? 'Nova pasta' : 'Mover nota'}>
+	<div class="nt-sh" class:on={sheetIn} role="dialog" aria-modal="true" aria-label={sheetKind === 'newfolder' ? m.notes_new_folder_label() : m.notes_move_note()}>
 		<div class="nt-grip"></div>
 		{#if sheetKind === 'newfolder'}
 			<input
 				class="nt-inp"
-				placeholder="Nome da pasta"
+				placeholder={m.notes_folder_name()}
 				maxlength="22"
-				aria-label="Nome da pasta"
+				aria-label={m.notes_folder_name()}
 				bind:value={newFolderName}
 			/>
 			<div class="nt-sw">
 				{#each NOTE_COLORS as color (color)}
-					<button class:on={newFolderColor === color} style={`--cc:${color}`} aria-label="Cor" onclick={() => { newFolderColor = color; tone(600, 0.06); haptic(5); }}></button>
+					<button class:on={newFolderColor === color} style={`--cc:${color}`} aria-label={m.notes_folder_color()} onclick={() => { newFolderColor = color; tone(600, 0.06); haptic(5); }}></button>
 				{/each}
 			</div>
-			<button class="nt-btn" onclick={createFolderConfirm}>Criar pasta</button>
+			<button class="nt-btn" onclick={createFolderConfirm}>{m.notes_create_folder()}</button>
 		{:else}
-			<button class="nt-pk" style="--cc:#8d968a" onclick={() => pickFolder(null)}><i></i>Notas (raiz)</button>
+			<button class="nt-pk" style="--cc:#8d968a" onclick={() => pickFolder(null)}><i></i>{m.notes_root_option()}</button>
 			{#each buildPickerRows(folders, null, 0) as row (row.folder.id)}
 				<button class="nt-pk" style={`--cc:${row.folder.color};padding-left:${10 + row.depth * 22}px`} onclick={() => pickFolder(row.folder.id)}>
 					<FolderIcon color={row.folder.color} mini />{row.folder.name}

@@ -1,4 +1,5 @@
 import type { BackupAttachment, BackupData } from './storage';
+import { m } from './paraglide/messages.js';
 
 /** Resumo do que vem num backup, usado na confirmação do import. */
 export interface BackupSummary {
@@ -23,21 +24,24 @@ export function summarizeBackup(data: BackupData, attachments: BackupAttachment[
 	};
 }
 
-function count(value: number, singular: string, plural: string): string {
-	return value === 1 ? `1 ${singular}` : `${value} ${plural}`;
+function count(value: number, one: string, many: (count: number) => string): string {
+	return value === 1 ? one : many(value);
 }
 
-/** Lista curta em pt-BR: "2 hábitos, 3 notas e 1 anexo". */
+/** Lista curta no idioma atual: "2 hábitos, 3 notas e 1 anexo". */
 export function describeBackup(summary: BackupSummary): string {
 	const parts = [
-		summary.habits ? count(summary.habits, 'hábito', 'hábitos') : '',
-		summary.trackers ? count(summary.trackers, 'tracker', 'trackers') : '',
-		summary.transactions ? count(summary.transactions, 'lançamento', 'lançamentos') : '',
-		summary.timeBlocks ? count(summary.timeBlocks, 'bloco de tempo', 'blocos de tempo') : '',
-		summary.notes ? count(summary.notes, 'nota', 'notas') : '',
-		summary.attachments ? count(summary.attachments, 'anexo', 'anexos') : ''
+		summary.habits ? count(summary.habits, m.backup_habits_one(), (count) => m.backup_habits_many({ count })) : '',
+		summary.trackers ? count(summary.trackers, m.backup_trackers_one(), (count) => m.backup_trackers_many({ count })) : '',
+		summary.transactions ? count(summary.transactions, m.backup_transactions_one(), (count) => m.backup_transactions_many({ count })) : '',
+		summary.timeBlocks ? count(summary.timeBlocks, m.backup_blocks_one(), (count) => m.backup_blocks_many({ count })) : '',
+		summary.notes ? count(summary.notes, m.backup_notes_one(), (count) => m.backup_notes_many({ count })) : '',
+		summary.attachments ? count(summary.attachments, m.backup_attachments_one(), (count) => m.backup_attachments_many({ count })) : ''
 	].filter(Boolean);
-	if (!parts.length) return 'nenhum registro';
+	if (!parts.length) return m.backup_summary_none();
 	if (parts.length === 1) return parts[0];
-	return `${parts.slice(0, -1).join(', ')} e ${parts[parts.length - 1]}`;
+	return m.backup_summary_join({
+		head: parts.slice(0, -1).join(', '),
+		last: parts[parts.length - 1]
+	});
 }

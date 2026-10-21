@@ -1,4 +1,5 @@
 /** Janela de datas do planejador: padrão de 7 dias, máximo de 14. */
+import { intlLocale } from './i18n/intl';
 
 export const TIME_RANGE_MAX_DAYS = 14;
 
@@ -61,7 +62,7 @@ export function shiftMonth(month: string, delta: number): string {
 
 export function monthLabel(month: string): string {
 	return noon(month)
-		.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
+		.toLocaleDateString(intlLocale(), { month: 'long', year: 'numeric' })
 		.replace(/^./, (letter) => letter.toUpperCase());
 }
 

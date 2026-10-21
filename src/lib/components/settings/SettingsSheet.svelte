@@ -1,11 +1,14 @@
 <script lang="ts">
-	import { Bell, CalendarDays, CircleDollarSign, FlaskConical, Keyboard, Volume2, Vibrate, ArrowDownRight, ArrowUpRight, Flame, RefreshCw, Wifi, Link2, Smartphone, Timer } from '@lucide/svelte';
+	import { Bell, CalendarDays, CircleDollarSign, FlaskConical, Keyboard, Languages, Volume2, Vibrate, ArrowDownRight, ArrowUpRight, Flame, RefreshCw, Wifi, Link2, Smartphone, Timer } from '@lucide/svelte';
 	import type { AtlasSnapshot, FirstDayOfWeek } from '#lib/atlas';
+	import type { LocaleChoice } from '#lib/i18n/locale';
 	import { m } from '#lib/paraglide/messages.js';
+	import { intlLocale } from '#lib/i18n/intl';
 	import Sheet from '#lib/components/ui/Sheet.svelte';
 	import Segmented from '#lib/components/ui/Segmented.svelte';
 	import Toggle from '#lib/components/ui/Toggle.svelte';
 	import { lastSyncLabel, type SyncPeerStatus, type SyncStatus, type SyncDiscoveryStatus } from '#lib/sync';
+	import { i18n, setLocaleChoice } from '#lib/i18n/locale.svelte';
 
 	/**
 	 * Configurações seguindo `docs/DESIGN.md` §4: sheet com tiles, sem
@@ -86,7 +89,7 @@
 
 	function diagnosticsWhen(value: string | null): string {
 		if (!value) return 'nenhuma';
-		return new Date(value).toLocaleString('pt-BR');
+		return new Date(value).toLocaleString(intlLocale());
 	}
 
 	/** Paleta de categorias do guia (`docs/DESIGN.md` §2). */
@@ -142,6 +145,23 @@
 		<section>
 			<h3>{m.settings_section_local()}</h3>
 			<div class="tile">
+				<div class="row">
+					<span class="lead"><Languages size={17} /></span>
+					<span class="text">
+						<strong>{m.settings_language_title()}</strong>
+						<small>{m.settings_language_hint()}</small>
+					</span>
+					<select
+						class="select"
+						aria-label={m.settings_language_title()}
+						value={i18n.mode}
+						onchange={(event) => setLocaleChoice(event.currentTarget.value as LocaleChoice)}
+					>
+						<option value="system">{m.settings_language_system()}</option>
+						<option value="pt-BR">{m.settings_language_pt()}</option>
+						<option value="en">{m.settings_language_en()}</option>
+					</select>
+				</div>
 				<div class="row">
 					<span class="lead"><Bell size={17} /></span>
 					<span class="text">
@@ -202,22 +222,22 @@
 						value={snapshot.preferences.currency}
 						onchange={handleCurrency}
 					>
-						<option value="BRL">BRL · Real</option>
-						<option value="USD">USD · Dólar</option>
-						<option value="EUR">EUR · Euro</option>
+						<option value="BRL">{m.settings_currency_brl()}</option>
+						<option value="USD">{m.settings_currency_usd()}</option>
+						<option value="EUR">{m.settings_currency_eur()}</option>
 					</select>
 				</div>
 				<div class="row">
 					<span class="lead"><CalendarDays size={17} /></span>
 					<span class="text">
-						<strong>Primeiro dia da semana</strong>
-						<small>Afeta hábito semanal, metas e calendários.</small>
+						<strong>{m.settings_first_day_title()}</strong>
+						<small>{m.settings_first_day_hint()}</small>
 					</span>
 					<Segmented
-						label="Primeiro dia da semana"
+						label={m.settings_first_day_title()}
 						options={[
-							{ value: 'mon', label: 'Seg' },
-							{ value: 'sun', label: 'Dom' }
+							{ value: 'mon', label: m.settings_day_mon() },
+							{ value: 'sun', label: m.settings_day_sun() }
 						]}
 						value={snapshot.preferences.firstDayOfWeek}
 						onchange={(value) => onfirstday(value === 'sun' ? 'sun' : 'mon')}
@@ -352,17 +372,17 @@
 					{#if testMode && notificationsDiagnostics}
 						<div class="row diag">
 							<span class="text">
-								<strong>Diagnóstico de notificações</strong>
+								<strong>{m.settings_diag_title()}</strong>
 								<small>
-									Permissão: {notificationsDiagnostics.permission === null ? '—' : notificationsDiagnostics.permission ? 'concedida' : 'negada'} ·
-									{notificationsDiagnostics.scheduled} agendadas · {notificationsDiagnostics.delivered ?? 0} entregues · próxima: {diagnosticsWhen(notificationsDiagnostics.next)}
+									{m.settings_diag_permission({ state: notificationsDiagnostics.permission === null ? '—' : notificationsDiagnostics.permission ? m.settings_diag_granted() : m.settings_diag_denied() })} ·
+									{m.settings_diag_counts({ scheduled: notificationsDiagnostics.scheduled, delivered: notificationsDiagnostics.delivered ?? 0, next: diagnosticsWhen(notificationsDiagnostics.next) })}
 								</small>
 								{#if notificationsDiagnostics.error}<small class="err">{notificationsDiagnostics.error}</small>{/if}
-								<small>Sem banner? Confira Foco/Resumo Agendado e o estilo em Ajustes → Notificações.</small>
+								<small>{m.settings_diag_hint()}</small>
 							</span>
 							<span class="actions">
-								<button type="button" class="btn compact" onclick={onnotificationsdiagnostics}>Atualizar</button>
-								<button type="button" class="btn compact" onclick={onnotificationstest}>Testar agora</button>
+								<button type="button" class="btn compact" onclick={onnotificationsdiagnostics}>{m.settings_diag_refresh()}</button>
+								<button type="button" class="btn compact" onclick={onnotificationstest}>{m.settings_diag_test()}</button>
 							</span>
 						</div>
 					{/if}
@@ -415,7 +435,7 @@
 			{m.settings_pause()}
 		</button>
 
-		<p class="version" aria-label="Versão do app">
+		<p class="version" aria-label={m.settings_version_label()}>
 			Atlas {__ATLAS_VERSION__} · {__ATLAS_COMMIT__}
 		</p>
 	</div>

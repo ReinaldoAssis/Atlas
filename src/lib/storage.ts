@@ -1,4 +1,5 @@
 import Database from '@tauri-apps/plugin-sql';
+import { m } from './paraglide/messages.js';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import JSZip from 'jszip';
 import {
@@ -195,7 +196,7 @@ async function initializeDatabase(db: Database): Promise<void> {
 		// As categorias padrão já entram carimbadas: linha com `updated_at = 0`
 		// nunca seria enviada a um par (o cursor começa em 0).
 		const at = await nextWriteStamp(db);
-		for (const category of defaultCategories) {
+		for (const category of defaultCategories()) {
 			await db.execute(
 				'INSERT INTO categories (id, module, payload, updated_at, device_id) VALUES ($1, $2, $3, $4, $5)',
 				[category.id, category.module, JSON.stringify(category), String(at), deviceId]
@@ -790,7 +791,7 @@ export async function importBackup(file: File, password?: string): Promise<Atlas
 	};
 	let snapshot = parsed.snapshot;
 	if (parsed.format === 'atlas-backup-encrypted-v1') {
-		if (!password) throw new Error('Informe a senha usada para criptografar este backup.');
+		if (!password) throw new Error(m.backup_error_password_missing());
 		try {
 			const key = await deriveBackupKey(password, fromBase64(parsed.salt ?? ''));
 			const plaintext = await crypto.subtle.decrypt(
@@ -801,13 +802,13 @@ export async function importBackup(file: File, password?: string): Promise<Atlas
 			const decrypted = JSON.parse(new TextDecoder().decode(plaintext)) as { snapshot?: AtlasSnapshot };
 			snapshot = decrypted.snapshot;
 		} catch {
-			throw new Error('Senha incorreta ou backup criptografado inválido.');
+			throw new Error(m.backup_error_password_wrong());
 		}
 	} else if (parsed.format !== 'atlas-backup-v1') {
-		throw new Error('Esse arquivo não parece ser um backup do Atlas.');
+		throw new Error(m.backup_error_not_atlas());
 	}
 	if (!snapshot || !Array.isArray(snapshot.transactions) || !Array.isArray(snapshot.habits) || !Array.isArray(snapshot.timeBlocks)) {
-		throw new Error('O backup está incompleto ou foi alterado.');
+		throw new Error(m.backup_error_incomplete());
 	}
 	return normalizeImportedSnapshot(snapshot);
 }
@@ -908,9 +909,9 @@ export async function importBackupV2(file: File, password?: string): Promise<Imp
 	if (isZip) {
 		const zip = await JSZip.loadAsync(await file.arrayBuffer());
 		const entry = zip.file('atlas-backup.json');
-		if (!entry) throw new Error('O backup não contém atlas-backup.json.');
+		if (!entry) throw new Error(m.backup_error_no_manifest());
 		const parsed = JSON.parse(await entry.async('string')) as { format?: string } & Partial<BackupData>;
-		if (parsed.format !== 'atlas-backup-v2') throw new Error('Formato de backup não reconhecido.');
+		if (parsed.format !== 'atlas-backup-v2') throw new Error(m.backup_error_format());
 		const attachments: BackupAttachment[] = [];
 		for (const path of Object.keys(zip.files)) {
 			const zipEntry = zip.files[path];
@@ -924,12 +925,12 @@ export async function importBackupV2(file: File, password?: string): Promise<Imp
 
 	const parsed = JSON.parse(await file.text()) as Record<string, unknown> & { format?: string; snapshot?: AtlasSnapshot };
 	if (parsed.format === 'atlas-backup-encrypted-v2') {
-		if (!password) throw new Error('Informe a senha usada para criptografar este backup.');
+		if (!password) throw new Error(m.backup_error_password_missing());
 		try {
 			const core = JSON.parse(await decryptJson(parsed as { salt?: string; iv?: string; ciphertext?: string }, password)) as Partial<BackupData>;
 			return { data: buildBackupData(core), attachments: [] };
 		} catch {
-			throw new Error('Senha incorreta ou backup criptografado inválido.');
+			throw new Error(m.backup_error_password_wrong());
 		}
 	}
 	if (parsed.format === 'atlas-backup-v2') {
@@ -942,7 +943,7 @@ export async function importBackupV2(file: File, password?: string): Promise<Imp
 
 function buildBackupData(source: Partial<BackupData>): BackupData {
 	if (!source.snapshot || !Array.isArray(source.snapshot.transactions) || !Array.isArray(source.snapshot.habits)) {
-		throw new Error('O backup está incompleto ou foi alterado.');
+		throw new Error(m.backup_error_incomplete());
 	}
 	const notesState = normalizeNotesState({ notes: source.notes, folders: source.folders });
 	return {

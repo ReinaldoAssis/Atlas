@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Segmented from '#lib/components/ui/Segmented.svelte';
 	import Sheet from '#lib/components/ui/Sheet.svelte';
+	import { m } from '#lib/paraglide/messages.js';
 	import { formatClock } from '#lib/duration';
 	import { buildHistoryChart } from '#lib/history-chart';
 	import HistoryList from './HistoryList.svelte';
@@ -32,8 +33,8 @@
 	let range = $state<'7' | '30' | 'all'>('30');
 
 	function dateLabel(date: string): string {
-		if (date === today) return 'Hoje';
-		if (date === dateOffset(today, -1)) return 'Ontem';
+		if (date === today) return m.habit_today();
+		if (date === dateOffset(today, -1)) return m.habit_yesterday();
 		const [year, month, day] = date.split('-');
 		return `${day}/${month}${year !== today.slice(0, 4) ? `/${year}` : ''}`;
 	}
@@ -41,7 +42,7 @@
 	function valueLabel(value: number): string {
 		if (habit.metric === 'duration') return formatClock(value);
 		if (habit.metric === 'boolean') return booleanLabelOf(habit, value, HABIT_BOOLEAN_LABELS);
-		if (habit.metric === 'weekly') return `${value} de ${habit.target} na semana`;
+		if (habit.metric === 'weekly') return m.habit_weekly_progress({ value, target: habit.target });
 		return `${value} ${habit.unit}`.trim();
 	}
 
@@ -75,7 +76,7 @@
 	);
 </script>
 
-<Sheet title={habit.name} closeLabel="Fechar" {onclose}>
+<Sheet title={habit.name} closeLabel={m.common_close()} {onclose}>
 	<div class="hh-head">
 		<span class="hh-value">
 			{#if latest}
@@ -83,16 +84,16 @@
 				<small>{dateLabel(latest.date)}</small>
 			{:else}
 				<b>—</b>
-				<small>Sem registros</small>
+				<small>{m.common_no_records()}</small>
 			{/if}
 		</span>
 		<span class="hh-goal">
-			Meta {valueLabel(habit.target)}{#if habit.metric !== 'boolean'}<span class:ok={latest ? didMeetTarget(habit, latest.value) : false}></span>{/if}
+			{m.common_goal_value({ value: valueLabel(habit.target) })}{#if habit.metric !== 'boolean'}<span class:ok={latest ? didMeetTarget(habit, latest.value) : false}></span>{/if}
 		</span>
 	</div>
 
 	{#if chart}
-		<svg class="hh-chart" viewBox={`0 0 ${chart.width} ${chart.height}`} role="img" aria-label={`Histórico de ${habit.name}`}>
+		<svg class="hh-chart" viewBox={`0 0 ${chart.width} ${chart.height}`} role="img" aria-label={m.common_history_of({ name: habit.name })}>
 			<path class="hh-area" d={chart.area} />
 			<path class="hh-line" d={chart.line} />
 			{#if chart.targetY != null}
@@ -103,11 +104,11 @@
 			{/each}
 		</svg>
 		<Segmented
-			label="Período do gráfico"
+			label={m.common_chart_period()}
 			options={[
-				{ value: '7', label: '7 dias' },
-				{ value: '30', label: '30 dias' },
-				{ value: 'all', label: 'Tudo' }
+				{ value: '7', label: m.common_range_days({ count: 7 }) },
+				{ value: '30', label: m.common_range_days({ count: 30 }) },
+				{ value: 'all', label: m.common_range_all() }
 			]}
 			bind:value={range}
 		/>
@@ -122,7 +123,7 @@
 			}}
 		/>
 	{:else}
-		<p class="hh-empty">Nenhum registro no período.</p>
+		<p class="hh-empty">{m.common_empty_period()}</p>
 	{/if}
 </Sheet>
 

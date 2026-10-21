@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { ArchiveRestore, CalendarDays, Route, Target, Trash2, Wallet } from '@lucide/svelte';
 	import Sheet from '#lib/components/ui/Sheet.svelte';
+	import { m } from '#lib/paraglide/messages.js';
+	import { intlLocale } from '#lib/i18n/intl';
 	import { TRASH_RETENTION_DAYS, type TrashEvent, type TrashModule } from '#lib/trash';
 
 	let {
@@ -16,35 +18,35 @@
 	} = $props();
 
 	type Filter = 'all' | TrashModule;
-	const FILTERS: { id: Filter; label: string }[] = [
-		{ id: 'all', label: 'Tudo' },
-		{ id: 'finance', label: 'Finanças' },
-		{ id: 'habits', label: 'Hábitos' },
-		{ id: 'time', label: 'Tempo' },
-		{ id: 'graph', label: 'Planejamento' }
+	const FILTERS: { id: Filter; label: () => string }[] = [
+		{ id: 'all', label: () => m.trash_filter_all() },
+		{ id: 'finance', label: () => m.settings_module_finance() },
+		{ id: 'habits', label: () => m.trash_module_habits() },
+		{ id: 'time', label: () => m.settings_module_time() },
+		{ id: 'graph', label: () => m.trash_module_planning() }
 	];
 
-	const MODULE_LABEL: Record<TrashModule, string> = {
-		finance: 'Finanças',
-		habits: 'Hábitos',
-		time: 'Tempo',
-		graph: 'Planejamento',
-		notes: 'Notas'
+	const MODULE_LABEL: Record<TrashModule, () => string> = {
+		finance: () => m.settings_module_finance(),
+		habits: () => m.trash_module_habits(),
+		time: () => m.settings_module_time(),
+		graph: () => m.trash_module_planning(),
+		notes: () => m.trash_module_notes()
 	};
 
-	const KIND_LABEL: Record<string, string> = {
-		transaction: 'Lançamento',
-		category: 'Categoria',
-		habit: 'Hábito',
-		habitLog: 'Registro de hábito',
-		tracker: 'Tracker',
-		trackerEntry: 'Registro de tracker',
-		timeBlock: 'Bloco de tempo',
-		graphNode: 'Nó',
-		graphEdge: 'Transição',
-		graphDomain: 'Domínio',
-		note: 'Nota',
-		folder: 'Pasta'
+	const KIND_LABEL: Record<string, () => string> = {
+		transaction: () => m.trash_kind_transaction(),
+		category: () => m.trash_kind_category(),
+		habit: () => m.trash_kind_habit(),
+		habitLog: () => m.trash_kind_habit_log(),
+		tracker: () => m.trash_kind_tracker(),
+		trackerEntry: () => m.trash_kind_tracker_entry(),
+		timeBlock: () => m.trash_kind_time_block(),
+		graphNode: () => m.trash_kind_graph_node(),
+		graphEdge: () => m.trash_kind_graph_edge(),
+		graphDomain: () => m.trash_kind_graph_domain(),
+		note: () => m.trash_kind_note(),
+		folder: () => m.trash_kind_folder()
 	};
 
 	const now = Date.now();
@@ -71,9 +73,9 @@
 		const start = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
 		const day = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 		const diff = Math.round((start - day) / 86_400_000);
-		if (diff === 0) return 'Hoje';
-		if (diff === 1) return 'Ontem';
-		return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
+		if (diff === 0) return m.trash_day_today();
+		if (diff === 1) return m.trash_day_yesterday();
+		return date.toLocaleDateString(intlLocale(), { day: '2-digit', month: 'short' });
 	}
 
 	function remaining(event: TrashEvent): number {
@@ -115,14 +117,14 @@
 	}
 </script>
 
-<Sheet title="Lixeira" closeLabel="Fechar lixeira" {onclose}>
+<Sheet title={m.trash_title()} closeLabel={m.trash_close()} {onclose}>
 	<div class="trash">
-		<p class="hint">Itens ficam aqui por {TRASH_RETENTION_DAYS} dias. Restaurar devolve tudo que foi excluído junto.</p>
+		<p class="hint">{m.trash_hint({ days: TRASH_RETENTION_DAYS })}</p>
 
-		<div class="filters" role="tablist" aria-label="Filtrar lixeira">
+		<div class="filters" role="tablist" aria-label={m.trash_filter_aria()}>
 			{#each FILTERS as item}
 				<button class:on={filter === item.id} role="tab" aria-selected={filter === item.id} onclick={() => (filter = item.id)}>
-					{item.label}
+					{item.label()}
 				</button>
 			{/each}
 		</div>
@@ -130,8 +132,8 @@
 		{#if groups.length === 0}
 			<div class="empty">
 				<Trash2 size={28} />
-				<strong>Lixeira vazia</strong>
-				<p>{filter === 'all' ? 'Nada foi excluído nos últimos dias.' : 'Nada excluído nesta categoria.'}</p>
+				<strong>{m.trash_empty_title()}</strong>
+				<p>{filter === 'all' ? m.trash_empty_all() : m.trash_empty_filtered()}</p>
 			</div>
 		{:else}
 			{#each groups as group}
@@ -141,16 +143,16 @@
 						{@const Icon = iconOf(event.module)}
 						<div class="item" class:busy={busy === event.id}>
 							<div class="meta">
-								<span class="kind"><Icon size={14} />{KIND_LABEL[event.kind] ?? event.kind}</span>
+								<span class="kind"><Icon size={14} />{KIND_LABEL[event.kind]?.() ?? event.kind}</span>
 								<strong title={event.label}>{event.label}</strong>
-								<small>{MODULE_LABEL[event.module]} · {remaining(event)} dia{remaining(event) === 1 ? '' : 's'} restante{remaining(event) === 1 ? '' : 's'}</small>
+								<small>{MODULE_LABEL[event.module]()} · {remaining(event) === 1 ? m.trash_day_left({ count: remaining(event) }) : m.trash_days_left({ count: remaining(event) })}</small>
 							</div>
 							<div class="actions">
-								<button class="restore" aria-label={`Restaurar ${event.label}`} disabled={busy === event.id} onclick={() => void restore(event)}>
-									<ArchiveRestore size={16} /> Restaurar
+								<button class="restore" aria-label={m.trash_restore_item({ label: event.label })} disabled={busy === event.id} onclick={() => void restore(event)}>
+									<ArchiveRestore size={16} /> {m.trash_restore()}
 								</button>
-								<button class:armed={confirmId === event.id} class="forget" aria-label={`Excluir ${event.label} de vez`} disabled={busy === event.id} onclick={() => void forget(event)}>
-									<Trash2 size={16} /> {confirmId === event.id ? 'Confirmar' : 'Excluir'}
+								<button class:armed={confirmId === event.id} class="forget" aria-label={m.trash_forget_item({ label: event.label })} disabled={busy === event.id} onclick={() => void forget(event)}>
+									<Trash2 size={16} /> {confirmId === event.id ? m.trash_confirm() : m.trash_delete()}
 								</button>
 							</div>
 						</div>

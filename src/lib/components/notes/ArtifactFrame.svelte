@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { m } from '#lib/paraglide/messages.js';
+
 	/**
 	 * Renderiza uma fence ```artifact num iframe sandbox isolado.
 	 * Nada executa até o usuário optar por executar (click-to-play).
@@ -45,13 +47,13 @@
 
 <div class="nt-artifact">
 	<div class="nt-artifact-bar">
-		<span class="nt-artifact-tag">artefato</span>
-		<span class="nt-artifact-hint">HTML isolado em sandbox · sem acesso ao sistema</span>
+		<span class="nt-artifact-tag">{m.artifact_tag()}</span>
+		<span class="nt-artifact-hint">{m.artifact_hint()}</span>
 		{#if running}
-			<button type="button" class="nt-artifact-action" onclick={() => (nonce += 1)}>Recarregar</button>
-			<button type="button" class="nt-artifact-action danger" onclick={stop}>Parar</button>
+			<button type="button" class="nt-artifact-action" onclick={() => (nonce += 1)}>{m.artifact_reload()}</button>
+			<button type="button" class="nt-artifact-action danger" onclick={stop}>{m.artifact_stop()}</button>
 		{:else}
-			<button type="button" class="nt-artifact-action" onclick={run}>Executar</button>
+			<button type="button" class="nt-artifact-action" onclick={run}>{m.artifact_run()}</button>
 		{/if}
 	</div>
 	{#if running}
@@ -59,7 +61,7 @@
 			<iframe
 				bind:this={frame}
 				class="nt-artifact-frame"
-				title="Artefato executável"
+				title={m.artifact_frame_title()}
 				sandbox="allow-scripts"
 				referrerpolicy="no-referrer"
 				srcdoc={srcdoc}

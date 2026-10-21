@@ -2,6 +2,7 @@
 	import { untrack } from 'svelte';
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import Sheet from '#lib/components/ui/Sheet.svelte';
+	import { m } from '#lib/paraglide/messages.js';
 	import { addDays, monthLabel, monthStart, shiftMonth } from '#lib/time-range';
 
 	let {
@@ -22,7 +23,27 @@
 	let sheet = $state<{ close: () => void } | null>(null);
 	let pending = $state<string | null>(null);
 
-	const weekLabels = $derived(firstDay === 'sun' ? ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'] : ['S', 'T', 'Q', 'Q', 'S', 'S', 'D']);
+	const weekLabels = $derived(
+		firstDay === 'sun'
+			? [
+					m.habit_weekday_sun(),
+					m.habit_weekday_mon(),
+					m.habit_weekday_tue(),
+					m.habit_weekday_wed(),
+					m.habit_weekday_thu(),
+					m.habit_weekday_fri(),
+					m.habit_weekday_sat()
+				]
+			: [
+					m.habit_weekday_mon(),
+					m.habit_weekday_tue(),
+					m.habit_weekday_wed(),
+					m.habit_weekday_thu(),
+					m.habit_weekday_fri(),
+					m.habit_weekday_sat(),
+					m.habit_weekday_sun()
+				]
+	);
 	const days = $derived.by(() => {
 		const first = new Date(`${month}T12:00:00`);
 		const offset = firstDay === 'sun' ? first.getDay() : (first.getDay() + 6) % 7;
@@ -45,8 +66,8 @@
 </script>
 
 <Sheet
-	title="Escolher dia"
-	closeLabel="Fechar"
+	title={m.habit_pick_day()}
+	closeLabel={m.common_close()}
 	backdropGuardMs={450}
 	bind:this={sheet}
 	onclose={() => {
@@ -57,11 +78,11 @@
 	}}
 >
 	<div class="hd">
-		<button type="button" class="nav" aria-label="Mês anterior" onclick={() => goMonth(-1)}>
+		<button type="button" class="nav" aria-label={m.habit_prev_month()} onclick={() => goMonth(-1)}>
 			<ChevronLeft size={18} />
 		</button>
 		<strong>{monthLabel(month)}</strong>
-		<button type="button" class="nav" aria-label="Próximo mês" disabled={atCurrentMonth} onclick={() => goMonth(1)}>
+		<button type="button" class="nav" aria-label={m.habit_next_month()} disabled={atCurrentMonth} onclick={() => goMonth(1)}>
 			<ChevronRight size={18} />
 		</button>
 	</div>
@@ -69,7 +90,7 @@
 	<div class="week" aria-hidden="true">
 		{#each weekLabels as label}<span>{label}</span>{/each}
 	</div>
-	<div class="grid" role="grid" aria-label="Dias">
+	<div class="grid" role="grid" aria-label={m.habit_days()}>
 		{#each days as date}
 			<button
 				type="button"
@@ -85,7 +106,7 @@
 		{/each}
 	</div>
 
-	<button type="button" class="today-btn" onclick={() => choose(today)}>Hoje</button>
+	<button type="button" class="today-btn" onclick={() => choose(today)}>{m.habit_today()}</button>
 </Sheet>
 
 <style>
