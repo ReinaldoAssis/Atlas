@@ -203,11 +203,9 @@ export const defaultCategories: Category[] = [
 	{ id: 'sal', module: 'finance', name: 'Salário', color: '#d4f25a', kind: 'in' },
 	{ id: 'moa', module: 'finance', name: 'Moradia', color: '#9cc8ff', kind: 'out', limitMinor: 120000, limitMode: 'limit' },
 	{ id: 'ali', module: 'finance', name: 'Alimentação', color: '#ffb347', kind: 'out', limitMinor: 80000, limitMode: 'limit' },
-	{ id: 'trn', module: 'finance', name: 'Transporte', color: '#c6a8ff', kind: 'out', limitMinor: 30000, limitMode: 'limit' },
 	{ id: 'laz', module: 'finance', name: 'Lazer', color: '#f1a5c5', kind: 'out', limitMinor: 25000, limitMode: 'limit' },
 	{ id: 'deep-work', module: 'time', name: 'Foco profundo', color: '#d4f25a', weeklyGoalHours: 10 },
 	{ id: 'reading', module: 'time', name: 'Leitura', color: '#c6a8ff', weeklyGoalHours: 5 },
-	{ id: 'admin', module: 'time', name: 'Administração', color: '#9cc8ff', weeklyGoalHours: 0 },
 	{ id: 'health-time', module: 'time', name: 'Saúde', color: '#f1a5c5', weeklyGoalHours: 4 },
 	{ id: 'personal', module: 'time', name: 'Pessoal', color: '#ffb347', weeklyGoalHours: 0 },
 	{ id: 'rest', module: 'time', name: 'Descanso', color: '#7fe3c4', weeklyGoalHours: 0 }
