@@ -50,17 +50,16 @@ categoria custom) para valer também no PC.
 
 ## Fatias
 
-1. **Fundação** — versão 0.4.0, `tauri android init`, JDK 17 + NDK, build debug
-   no device, ajustes de identifier/minSdk/targetSdk.
-2. **Sync Android** — plugin Kotlin com `MulticastLock`, remover o `cfg` que
-   exclui `sync` no Android, validar pareamento Android↔desktop/Android.
-3. **i18n completo** — `locales: [pt-BR, en]`, `strategy: ['localStorage',
-   'baseLocale']`, seletor nas Configurações, migração das ~600 strings
-   (markup, atributos e `.ts`), `Intl` por locale, teste que barra string nova
-   hardcoded.
-4. **Gating + entitlement** — feature `mobile`, limites checados no Rust,
-   `Entitlement` com cache local e grace, paywall (sheet no limite + linha em
-   Configurações + sheet ocasional de benefícios).
+1. **Fundação** ✅ — versão 0.4.0, `tauri android init`, JDK 17 + NDK 27,
+   build debug no device, identifier/minSdk/targetSdk ajustados.
+2. **Sync Android** ✅ — plugin Kotlin com `MulticastLock`, `sync` compilando
+   no Android, pareamento a validar em device real.
+3. **i18n completo** ✅ — pt-BR + en, seletor nas Configurações, migração de
+   toda a copy (markup, atributos, toasts, erros), `Intl` por locale, guard
+   sem allowlist. Ver `docs/I18N.md`.
+4. **Gating + entitlement** — limites checados no Rust, `Entitlement` com
+   cache local e grace, paywall (sheet no limite + linha em Configurações +
+   sheet ocasional de benefícios).
 5. **Billing** — `tauri-plugin-iap`, produtos na Play, license testers,
    restore/acknowledge.
 6. **Pipeline de release** — job Android no CI, keystore/secrets, upload no
