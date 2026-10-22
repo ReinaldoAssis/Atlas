@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "iap",
+  "description": "Google Play Billing (Android) e StoreKit (iOS, futuro).",
+  "platforms": ["android", "iOS"],
+  "windows": ["main"],
+  "permissions": ["iap:default"]
+}

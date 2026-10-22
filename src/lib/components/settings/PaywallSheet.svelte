@@ -14,13 +14,20 @@
 	let {
 		reason = null,
 		pro = false,
+		monthlyPrice = null,
+		annualPrice = null,
+		busy = false,
 		onsubscribe,
 		onrestore,
 		onclose
 	}: {
 		reason?: PlanKey | null;
 		pro?: boolean;
-		onsubscribe?: () => void;
+		/** Preço localizado da Play; sem ele cai no texto fixo. */
+		monthlyPrice?: string | null;
+		annualPrice?: string | null;
+		busy?: boolean;
+		onsubscribe?: (productId: string) => void;
 		onrestore?: () => void;
 		onclose: () => void;
 	} = $props();
@@ -38,20 +45,32 @@
 		</ul>
 
 		<div class="prices">
-			<div class="price">
-				<strong>{m.paywall_price_monthly()}</strong>
-			</div>
-			<div class="price annual">
-				<strong>{m.paywall_price_annual()}</strong>
+			<button
+				type="button"
+				class="price"
+				disabled={pro || busy || !onsubscribe}
+				onclick={() => onsubscribe?.('atlas_pro_monthly')}
+			>
+				<strong>{monthlyPrice ?? m.paywall_price_monthly()}</strong>
+			</button>
+			<button
+				type="button"
+				class="price annual"
+				disabled={pro || busy || !onsubscribe}
+				onclick={() => onsubscribe?.('atlas_pro_annual')}
+			>
+				<strong>{annualPrice ?? m.paywall_price_annual()}</strong>
 				<small>{m.paywall_trial()}</small>
-			</div>
+			</button>
 		</div>
 
-		<Button onclick={onsubscribe} disabled={pro || !onsubscribe}>{m.paywall_subscribe()}</Button>
-		<button type="button" class="restore" onclick={onrestore} disabled={!onrestore}>
+		<Button onclick={() => onsubscribe?.('atlas_pro_annual')} disabled={pro || busy || !onsubscribe}>
+			{m.paywall_subscribe()}
+		</Button>
+		<button type="button" class="restore" onclick={onrestore} disabled={!onrestore || busy}>
 			<RotateCcw size={14} />{m.paywall_restore()}
 		</button>
-		<p class="soon">{m.paywall_soon()}</p>
+		{#if pro}<p class="soon">{m.paywall_settings_pro()}</p>{/if}
 	</div>
 </Sheet>
 
@@ -108,6 +127,11 @@
 		border: 1px solid var(--ln);
 		border-radius: 14px;
 		background: var(--s2);
+		color: inherit;
+		text-align: left;
+	}
+	.price:disabled {
+		opacity: 0.7;
 	}
 	.price.annual {
 		border-color: color-mix(in srgb, var(--lime) 45%, var(--ln));

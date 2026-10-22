@@ -130,6 +130,10 @@ pub fn run() {
   #[cfg(target_os = "android")]
   let builder = builder.plugin(multicast::init());
 
+  // Billing só existe no mobile; o PC não tem paywall.
+  #[cfg(any(target_os = "android", target_os = "ios"))]
+  let builder = builder.plugin(tauri_plugin_iap::init());
+
   let builder = builder
     .manage(sync::commands::SyncState::default())
     .invoke_handler(tauri::generate_handler![

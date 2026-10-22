@@ -92,6 +92,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	import PaywallSheet from '#lib/components/settings/PaywallSheet.svelte';
 	import { paywall, loadPlan, closePaywall, planGated, planPro, requestUpgrade, allowCreate } from '#lib/plan.svelte';
 	import { parsePlanLimitError } from '#lib/plan';
+	import { loadPrices, refreshEntitlement, restore, subscribe, watchPurchases, type BillingPrices } from '#lib/billing';
 	import SyncIntroSheet from '#lib/components/settings/SyncIntroSheet.svelte';
 	import SyncPairSheet from '#lib/components/settings/SyncPairSheet.svelte';
 	import SyncSasSheet from '#lib/components/settings/SyncSasSheet.svelte';
@@ -537,6 +538,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			: 0
 	);
 	onDestroy(() => clearTimeout(financeDeleteTimer));
+	onDestroy(() => stopPurchaseWatch?.());
 	let financeCelebration = $state<number | null>(null);
 	let timeSelected = $state('deep-work');
 	let timeScroll = $state<HTMLElement | null>(null);
@@ -762,10 +764,49 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		return () => clearTimeout(timer);
 	});
 
+	let billingPrices = $state<BillingPrices>({ monthly: null, annual: null });
+	let billingBusy = $state(false);
+	let stopPurchaseWatch: (() => void) | null = null;
+
+	async function initializeBilling() {
+		if (!planGated()) return;
+		billingPrices = await loadPrices();
+		await refreshEntitlement();
+		if (planPro()) closePaywall();
+		stopPurchaseWatch = await watchPurchases(() => {
+			if (planPro()) closePaywall();
+		});
+	}
+
+	async function buyPlan(productId: string) {
+		if (billingBusy) return;
+		billingBusy = true;
+		const outcome = await subscribe(productId);
+		billingBusy = false;
+		if (outcome === 'ok') {
+			toastMessage(m.billing_success());
+			closePaywall();
+		} else if (outcome === 'pending') toastMessage(m.billing_pending());
+		else if (outcome === 'cancelled') toastMessage(m.billing_cancelled());
+		else toastMessage(m.billing_failed());
+	}
+
+	async function restorePlan() {
+		if (billingBusy) return;
+		billingBusy = true;
+		const restored = await restore();
+		billingBusy = false;
+		if (restored) {
+			toastMessage(m.billing_restored());
+			closePaywall();
+		} else toastMessage(m.billing_nothing_to_restore());
+	}
+
 	async function initialize() {
 		testModeActive = readTestMode();
 		updaterAvailable = updaterSupportedHere();
 		await loadPlan();
+		await initializeBilling();
 		try {
 			const loaded = await loadSnapshot();
 			advanceLifeForce(loaded);
@@ -5226,6 +5267,11 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		<PaywallSheet
 			reason={paywall.reason}
 			pro={planPro()}
+			monthlyPrice={billingPrices.monthly}
+			annualPrice={billingPrices.annual}
+			busy={billingBusy}
+			onsubscribe={buyPlan}
+			onrestore={restorePlan}
 			onclose={closePaywall}
 		/>
 	{/if}

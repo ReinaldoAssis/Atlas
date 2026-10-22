@@ -784,5 +784,11 @@
 	"paywall_settings_free": "Plano free",
 	"paywall_settings_pro": "Pro ativo",
 	"paywall_settings_hint": "Ver planos e benefícios",
-	"history_locked": "Ver histórico completo no Pro"
+	"history_locked": "Ver histórico completo no Pro",
+	"billing_pending": "Compra pendente de aprovação.",
+	"billing_cancelled": "Compra cancelada.",
+	"billing_failed": "Não foi possível concluir a compra.",
+	"billing_restored": "Assinatura restaurada.",
+	"billing_nothing_to_restore": "Nenhuma assinatura ativa encontrada.",
+	"billing_success": "Atlas Pro liberado."
 }
