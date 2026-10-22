@@ -10,7 +10,8 @@ série **0.4.x**; o PC (macOS/Windows) continua **100% grátis**.
 
 **Código** — PR [#46](https://github.com/ReinaldoAssis/Atlas/pull/46), 9 commits,
 CI principal 4/4 verde (frontend ubuntu/windows, rust, instalador Windows).
-O workflow `Android` (`workflow_dispatch`) valida o build assinado no CI.
+O workflow `Android` (`workflow_dispatch`/tag) está em validação piloto no CI
+(último run: SDK/NDK resolvidos; build do AAB em andamento).
 
 **Verificado localmente (Mac)**
 
