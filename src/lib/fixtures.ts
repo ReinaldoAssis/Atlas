@@ -59,7 +59,7 @@ export function demoTimeBlocks(): TimeBlock[] {
 		const endMinutes = hour * 60 + minute + TIME_SLOT_MINUTES;
 		blocks.push({
 			id: `demo-tb-${dayIndex}-${slot}`,
-			title: defaultCategories.find((item) => item.id === categoryId)?.name ?? '',
+			title: defaultCategories().find((item) => item.id === categoryId)?.name ?? '',
 			categoryId,
 			startAt: `${date}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00`,
 			endAt: `${date}T${String(Math.floor(endMinutes / 60)).padStart(2, '0')}:${String(endMinutes % 60).padStart(2, '0')}:00`,

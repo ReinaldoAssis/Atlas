@@ -4,6 +4,7 @@
 // cada ocorrência é agendada com `Schedule.at`. Este módulo monta a lista pura
 // (sem tocar no plugin) para poder ser testado.
 import { dateOffset, localDate, type AtlasSnapshot } from './atlas';
+import { m } from './paraglide/messages.js';
 
 /** Dias de lembretes agendados de antemão. */
 export const NOTIFICATION_HORIZON_DAYS = 14;
@@ -78,7 +79,7 @@ export function buildReminderSchedule(
 			items.push({
 				id: numericNotificationId(`habit:${habit.id}:${date}`),
 				at,
-				title: 'Atlas · hábito',
+				title: m.notification_habit_title(),
 				body: habit.name
 			});
 		}
@@ -88,7 +89,7 @@ export function buildReminderSchedule(
 		if (!block.reminder || block.status !== 'planned') continue;
 		const at = new Date(`${block.startAt.slice(0, 10)}T${block.reminder}:00`);
 		if (Number.isNaN(at.getTime()) || at.getTime() <= now.getTime() || at > horizonEnd) continue;
-		items.push({ id: numericNotificationId(`time:${block.id}`), at, title: 'Atlas · tempo', body: block.title });
+		items.push({ id: numericNotificationId(`time:${block.id}`), at, title: m.notification_time_title(), body: block.title });
 	}
 
 	return items.sort((a, b) => a.at.getTime() - b.at.getTime()).slice(0, cap);

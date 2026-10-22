@@ -18,6 +18,8 @@
 	import GraphNodeSheet from './GraphNodeSheet.svelte';
 	import GraphEdgeSheet from './GraphEdgeSheet.svelte';
 	import GraphList from './GraphList.svelte';
+	import { m } from '#lib/paraglide/messages.js';
+	import { allowCreate } from '#lib/plan.svelte';
 
 	let {
 		snapshot,
@@ -101,7 +103,7 @@
 			}
 			[523, 659, 784, 1047].forEach((frequency, index) => setTimeout(() => playTone(frequency, 0.24, 'triangle', 0.06, sound), index * 90));
 			pulseHaptic(haptics, [20, 40, 20, 40, 70]);
-			ontoast(`Transição concluída: ${editEdge.label}`);
+			ontoast(m.graph_toast_edge_done({ label: editEdge.label }));
 		}
 	}
 
@@ -148,17 +150,18 @@
 	}
 
 	function openNewNode(x: number, y: number, from?: string) {
+		if (!allowCreate('graph_nodes', graph.nodes.filter((node) => !node.origin).length)) return;
 		const origin = graph.nodes.find((node) => node.origin);
 		const node: GraphNode = {
 			id: graphId(),
-			name: 'Novo nó',
+			name: m.graph_new_node(),
 			horizon: 'quarter',
 			domainId: origin?.domainId ?? graph.domains[0]?.id ?? '',
 			x,
 			y
 		};
 		const edges = from
-			? [...graph.edges, { id: graphId(), from, to: node.id, label: 'Nova ação', source: 'manual' as const, target: 0, window: 'month' as const, manualProgress: 0 }]
+			? [...graph.edges, { id: graphId(), from, to: node.id, label: m.graph_new_action(), source: 'manual' as const, target: 0, window: 'month' as const, manualProgress: 0 }]
 			: graph.edges;
 		commit({ ...graph, nodes: [...graph.nodes, node], edges });
 		editNode = node;
@@ -184,11 +187,11 @@
 
 	function connect(from: string, to: string) {
 		const origin = graph.nodes.find((node) => node.origin);
-		if (from === to) return ontoast('Um nó não pode se ligar a si mesmo');
-		if (origin && to === origin.id) return ontoast('O nó de origem não recebe conexões');
-		if (graph.edges.some((edge) => edge.from === from && edge.to === to)) return ontoast('Essa transição já existe');
-		if (wouldCreateCycle(graph.edges, from, to)) return ontoast('Isso criaria um ciclo');
-		const edge: GraphEdge = { id: graphId(), from, to, label: 'Nova ação', source: 'manual', target: 0, window: 'month', manualProgress: 0 };
+		if (from === to) return ontoast(m.graph_toast_self_link());
+		if (origin && to === origin.id) return ontoast(m.graph_toast_origin_no_incoming());
+		if (graph.edges.some((edge) => edge.from === from && edge.to === to)) return ontoast(m.graph_toast_edge_exists());
+		if (wouldCreateCycle(graph.edges, from, to)) return ontoast(m.graph_toast_cycle());
+		const edge: GraphEdge = { id: graphId(), from, to, label: m.graph_new_action(), source: 'manual', target: 0, window: 'month', manualProgress: 0 };
 		commit({ ...graph, edges: [...graph.edges, edge] });
 		const target = findNode(to);
 		if (target) {
@@ -209,7 +212,7 @@
 		commit({ ...graph, nodes: graph.nodes.filter((item) => item.id !== id), edges: graph.edges.filter((edge) => edge.from !== id && edge.to !== id) });
 		playFeedback('erase', sound);
 		pulseHaptic(haptics, 12);
-		ontoast('Nó removido', () => commit(JSON.parse(before) as GraphState));
+		ontoast(m.graph_toast_node_removed(), () => commit(JSON.parse(before) as GraphState));
 	}
 
 	function deleteSelectedNode() {
@@ -224,12 +227,12 @@
 		commit({ ...graph, edges: graph.edges.filter((edge) => edge.id !== id) });
 		playFeedback('erase', sound);
 		pulseHaptic(haptics, 12);
-		ontoast('Transição removida', () => commit(JSON.parse(before) as GraphState));
+		ontoast(m.graph_toast_edge_removed(), () => commit(JSON.parse(before) as GraphState));
 	}
 
 	function resetDemo() {
 		commit(createGraphFromDemo());
-		ontoast('Grafo de exemplo restaurado.');
+		ontoast(m.graph_toast_demo_reset());
 	}
 
 	onMount(() => {
@@ -283,16 +286,16 @@
 <div class="graph-view">
 	<div class="gv-head">
 		<div>
-			<h1>Planejamento</h1>
-			<small>{nodeCount} nós · {edgeCount} transições</small>
+			<h1>{m.graph_title()}</h1>
+			<small>{m.graph_counts({ nodes: nodeCount, edges: edgeCount })}</small>
 		</div>
 		<div class="gv-head-actions">
-			<button class="gv-ic" class:on={showList} aria-pressed={showList} aria-label="Alternar visão em lista" onclick={() => (showList = !showList)}>☰</button>
-			<button class="gv-ic" aria-label="Centralizar grafo" onclick={() => canvas?.fit()}>◎</button>
+			<button class="gv-ic" class:on={showList} aria-pressed={showList} aria-label={m.graph_toggle_list()} onclick={() => (showList = !showList)}>☰</button>
+			<button class="gv-ic" aria-label={m.graph_center()} onclick={() => canvas?.fit()}>◎</button>
 		</div>
 	</div>
 
-	<div class="gv-legend"><span><i class="gv-lg-dot"></i>Objetivo</span><span><i class="gv-lg-tri"></i>Marco</span></div>
+	<div class="gv-legend"><span><i class="gv-lg-dot"></i>{m.graph_role_goal()}</span><span><i class="gv-lg-tri"></i>{m.graph_role_milestone()}</span></div>
 
 	<div class="gv-stage" bind:this={stageEl}>
 		<GraphCanvas
@@ -310,7 +313,7 @@
 			ondeletenode={deleteNode}
 			onclose={closeEditor}
 		/>
-		<button class="gv-fab" aria-label="Novo nó" onclick={newAtCenter}>+</button>
+		<button class="gv-fab" aria-label={m.graph_new_node()} onclick={newAtCenter}>+</button>
 	</div>
 
 	{#if showList}
@@ -320,7 +323,7 @@
 
 {#if editNode}
 	{@const node = editNode}
-	<GraphSheet label={isNewNode ? 'Novo nó' : 'Editar nó'} bx={bubble.left} by={bubble.top} side={bubble.side} onclose={closeEditor}>
+	<GraphSheet label={isNewNode ? m.graph_new_node() : m.graph_edit_node()} bx={bubble.left} by={bubble.top} side={bubble.side} onclose={closeEditor}>
 		<GraphNodeSheet
 			node={node}
 			domains={graph.domains}
@@ -336,7 +339,7 @@
 
 {#if editEdge}
 	{@const edge = editEdge}
-	<GraphSheet label="Editar transição" bx={bubble.left} by={bubble.top} side={bubble.side} onclose={closeEditor}>
+	<GraphSheet label={m.graph_edit_edge()} bx={bubble.left} by={bubble.top} side={bubble.side} onclose={closeEditor}>
 		<GraphEdgeSheet
 			edge={edge}
 			{snapshot}

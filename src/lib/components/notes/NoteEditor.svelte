@@ -26,6 +26,7 @@
 	import { TimeBubble } from '#lib/bubble';
 	import { formatMinutes, type TimeBlock } from '#lib/atlas';
 	import { Clock, Download, MoreHorizontal } from '@lucide/svelte';
+	import { m } from '#lib/paraglide/messages.js';
 	import FolderIcon from './FolderIcon.svelte';
 	import ArtifactFrame from './ArtifactFrame.svelte';
 
@@ -84,7 +85,7 @@
 	let tags = $state<string[]>(untrack(() => [...note.tags]));
 	let tagDraft = $state('');
 	let mode = $state<NoteMode>(untrack(() => initialMode));
-	let status = $state('Salvo');
+	let status = $state(m.editor_status_saved());
 	let attachments = $state<string[]>([]);
 	let paneEl = $state<HTMLElement | null>(null);
 	let rootEl = $state<HTMLElement | null>(null);
@@ -126,7 +127,7 @@
 	/* ---------- persistência ---------- */
 	function commit() {
 		dirty = false;
-		onpatch({ title: title.trim() || 'Sem título', body, tags });
+		onpatch({ title: title.trim() || m.editor_untitled(), body, tags });
 	}
 
 	function flush() {
@@ -146,12 +147,12 @@
 
 	function markChange() {
 		dirty = true;
-		status = 'Salvando…';
+		status = m.editor_status_saving();
 		if (saveTimer) clearTimeout(saveTimer);
 		saveTimer = setTimeout(() => {
 			saveTimer = undefined;
 			commit();
-			status = 'Salvo ✓';
+			status = m.editor_status_saved_check();
 			tone(880, 0.06, 'sine', 0.03);
 			if (!prefersReducedMotion()) {
 				document.querySelector('.nt-status')?.animate?.([{ transform: 'scale(1.3)' }, { transform: 'none' }], { duration: 260 });
@@ -213,7 +214,7 @@
 			previewEl.innerHTML = html;
 		} catch (error) {
 			console.error('Falha ao renderizar a pré-visualização', error);
-			previewEl.innerHTML = '<p class="nt-empty">Não foi possível renderizar a pré-visualização.</p>';
+			previewEl.innerHTML = `<p class="nt-empty">${m.editor_preview_error()}</p>`;
 			return;
 		}
 		mountArtifacts();
@@ -326,7 +327,7 @@
 				lastSaved = '';
 			} catch (error) {
 				console.error(error);
-				ontoast('Não foi possível anexar o arquivo.', { warning: true });
+				ontoast(m.editor_attach_failed(), { warning: true });
 			}
 		}
 		await refreshAttachments();
@@ -351,10 +352,10 @@
 		if (!isTauriApp() || isIOSWebView()) {
 			try {
 				const result = await saveBytes(bytes, name);
-				ontoast(result === 'saved' ? 'Anexo exportado.' : 'Exportação cancelada.');
+				ontoast(result === 'saved' ? m.editor_attachment_exported() : m.editor_export_cancelled());
 			} catch (error) {
 				console.error('Falha ao exportar o anexo', error);
-				ontoast('Não foi possível exportar o anexo.', { warning: true });
+				ontoast(m.editor_attachment_export_failed(), { warning: true });
 			}
 			return;
 		}
@@ -400,7 +401,7 @@
 			? blocks
 					.map((block) => `<div class="tbb-1">${escapeHtml(block.title || '—')}</div><div class="tbb-2">${blockLabel(block)}</div>`)
 					.join('')
-			: '<div class="tbb-2">Sem bloco no planejador.</div>';
+			: `<div class="tbb-2">${m.editor_tempo_no_block()}</div>`;
 		bubble?.show(element, html, blocks.length ? '#d4f25a' : '#8d968a');
 	}
 
@@ -424,12 +425,12 @@
 		flush();
 		try {
 			const result = await saveNoteMarkdown({ title, body, tags });
-			ontoast(result === 'saved' ? 'Nota exportada.' : 'Exportação cancelada.');
+			ontoast(result === 'saved' ? m.editor_note_exported() : m.editor_export_cancelled());
 			tone(560, 0.08, 'triangle', 0.05);
 			pulseHaptic(haptics, 6);
 		} catch (error) {
 			console.error('Falha ao exportar a nota', error);
-			ontoast('Não foi possível exportar a nota.', { warning: true });
+			ontoast(m.editor_export_failed(), { warning: true });
 		}
 	}
 
@@ -527,19 +528,19 @@
 
 <div class="nt-ed" class:on={open} class:morphing bind:this={rootEl}>
 	<div class="nt-eh">
-		<button class="nt-ic" aria-label="Voltar" onclick={onclose}>‹</button>
+		<button class="nt-ic" aria-label={m.editor_back()} onclick={onclose}>‹</button>
 		<button class="nt-fc" style={`--cc:${folder?.color ?? '#454c45'}`} onclick={onopenfolder}>
-			<FolderIcon color={folder?.color ?? '#454c45'} mini />{folder?.name ?? 'Notas'}
+			<FolderIcon color={folder?.color ?? '#454c45'} mini />{folder?.name ?? m.editor_folder_root()}
 		</button>
 		<div class="nt-actions">
-			<button class="nt-ic" class:on={note.pinned} aria-label={note.pinned ? 'Desafixar' : 'Fixar'} onclick={(event) => onpin(event.currentTarget)}>{note.pinned ? '★' : '☆'}</button>
-			<button class="nt-ic" aria-label="Excluir" onclick={ondeletenote}>⌫</button>
-			<button class="nt-ic nt-export" aria-label="Exportar Markdown" title="Exportar Markdown" onclick={exportMarkdown}><Download size={17} /></button>
+			<button class="nt-ic" class:on={note.pinned} aria-label={note.pinned ? m.editor_unpin() : m.editor_pin()} onclick={(event) => onpin(event.currentTarget)}>{note.pinned ? '★' : '☆'}</button>
+			<button class="nt-ic" aria-label={m.editor_delete()} onclick={ondeletenote}>⌫</button>
+			<button class="nt-ic nt-export" aria-label={m.editor_export_markdown()} title={m.editor_export_markdown()} onclick={exportMarkdown}><Download size={17} /></button>
 		</div>
 		<div class="nt-more" bind:this={moreEl}>
-			<button class="nt-ic" aria-label="Mais ações" aria-haspopup="menu" aria-expanded={moreOpen} onclick={toggleMore}><MoreHorizontal size={18} /></button>
+			<button class="nt-ic" aria-label={m.editor_more()} aria-haspopup="menu" aria-expanded={moreOpen} onclick={toggleMore}><MoreHorizontal size={18} /></button>
 			{#if moreOpen}
-				<div class="nt-more-menu" role="menu" aria-label="Ações da nota">
+				<div class="nt-more-menu" role="menu" aria-label={m.editor_note_actions()}>
 					<button
 						role="menuitem"
 						onclick={(event) => {
@@ -548,22 +549,22 @@
 							moreOpen = false;
 						}}
 					>
-						{note.pinned ? 'Desafixar' : 'Fixar'}
+						{note.pinned ? m.editor_unpin() : m.editor_pin()}
 					</button>
-					<button role="menuitem" class="danger" onclick={() => { moreOpen = false; ondeletenote(); }}>Excluir</button>
-					<button role="menuitem" onclick={() => { moreOpen = false; void exportMarkdown(); }}>Exportar .md</button>
+					<button role="menuitem" class="danger" onclick={() => { moreOpen = false; ondeletenote(); }}>{m.editor_delete()}</button>
+					<button role="menuitem" onclick={() => { moreOpen = false; void exportMarkdown(); }}>{m.editor_export_md()}</button>
 				</div>
 			{/if}
 		</div>
 		<div class="nt-seg" data-m={mode}>
 			<i></i>
-			<button class:on={mode === 'write'} onclick={() => setMode('write')}>Editar</button>
-			<button class:on={mode === 'preview'} onclick={() => setMode('preview')}>Ler</button>
-			<button class:on={mode === 'split'} onclick={() => setMode('split')}>Split</button>
+			<button class:on={mode === 'write'} onclick={() => setMode('write')}>{m.editor_mode_write()}</button>
+			<button class:on={mode === 'preview'} onclick={() => setMode('preview')}>{m.editor_mode_read()}</button>
+			<button class:on={mode === 'split'} onclick={() => setMode('split')}>{m.editor_mode_split()}</button>
 		</div>
 	</div>
 
-	<input class="nt-ti" placeholder="Título" maxlength="60" aria-label="Título" bind:value={title} oninput={() => { typingClick(); markChange(); }} />
+	<input class="nt-ti" placeholder={m.editor_title()} maxlength="60" aria-label={m.editor_title()} bind:value={title} oninput={() => { typingClick(); markChange(); }} />
 
 	<div class="nt-pa" bind:this={paneEl} data-m={mode}>
 		<textarea
@@ -571,8 +572,8 @@
 			bind:this={editorEl}
 			bind:value={body}
 			spellcheck="false"
-			aria-label="Markdown"
-			placeholder="Escreva em Markdown…  [[outra nota]]  #tag"
+			aria-label={m.editor_body_label()}
+			placeholder={m.editor_body_placeholder()}
 			oninput={(event) => {
 				typingClick();
 				const element = event.currentTarget;
@@ -595,32 +596,32 @@
 	</div>
 
 	{#if slashOpen}
-		<div class="nt-slash" role="listbox" aria-label="Referências de tempo">
-			<span class="nt-slash-lb">Inserir referência de tempo</span>
+		<div class="nt-slash" role="listbox" aria-label={m.editor_tempo_refs()}>
+			<span class="nt-slash-lb">{m.editor_tempo_insert()}</span>
 			{#if slashOptions.length}
 				{#each slashOptions as block (block.id)}
 					<button type="button" role="option" aria-selected="false" onclick={() => insertTempo(block)}>
 						<b>{block.startAt.slice(8, 10)}/{block.startAt.slice(5, 7)}</b>
-						<span>{block.startAt.slice(11, 16)}–{block.endAt.slice(11, 16)} · {formatMinutes(block.plannedMinutes)} · {block.title || 'Bloco'}</span>
+						<span>{block.startAt.slice(11, 16)}–{block.endAt.slice(11, 16)} · {formatMinutes(block.plannedMinutes)} · {block.title || m.editor_block_fallback()}</span>
 					</button>
 				{/each}
 			{:else}
-				<small>Nenhum bloco no planejador.</small>
+				<small>{m.editor_tempo_empty()}</small>
 			{/if}
 		</div>
 	{/if}
 
 	<div class="nt-tb">
-		<button aria-label="Negrito" onclick={() => surround('**')}>B</button>
-		<button aria-label="Itálico" onclick={() => surround('*')}>I</button>
-		<button aria-label="Lista" onclick={() => linePrefix('- ')}>•</button>
-		<button aria-label="Tarefa" onclick={() => linePrefix('- [ ] ')}>☐</button>
-		<button aria-label="Link de nota" onclick={() => surround(['[[', ']]'])}>[[ ]]</button>
-		<button aria-label="Título" onclick={() => linePrefix('# ')}>H</button>
-		<button aria-label="Citação" onclick={() => linePrefix('> ')}>❝</button>
-		<button aria-label="Referência de tempo" title="Referência de tempo" onclick={openSlash}><Clock size={16} /></button>
+		<button aria-label={m.editor_bold()} onclick={() => surround('**')}>B</button>
+		<button aria-label={m.editor_italic()} onclick={() => surround('*')}>I</button>
+		<button aria-label={m.editor_list()} onclick={() => linePrefix('- ')}>•</button>
+		<button aria-label={m.editor_task()} onclick={() => linePrefix('- [ ] ')}>☐</button>
+		<button aria-label={m.editor_note_link()} onclick={() => surround(['[[', ']]'])}>[[ ]]</button>
+		<button aria-label={m.editor_heading()} onclick={() => linePrefix('# ')}>H</button>
+		<button aria-label={m.editor_quote()} onclick={() => linePrefix('> ')}>❝</button>
+		<button aria-label={m.editor_tempo_ref()} title={m.editor_tempo_ref()} onclick={openSlash}><Clock size={16} /></button>
 		{#if attachmentsEnabled()}
-			<label class="nt-tb-file" title="Anexar arquivo">
+			<label class="nt-tb-file" title={m.editor_attach_file()}>
 				＋
 				<input type="file" multiple onchange={onAttach} />
 			</label>
@@ -633,7 +634,7 @@
 				{#each attachments as name (name)}
 					<span class="nt-attach">
 						<button onclick={() => openAttachment(name)}>{name}</button>
-						<button aria-label={`Remover ${name}`} onclick={() => removeAttachment(name)}>×</button>
+						<button aria-label={m.editor_attachment_remove({ name })} onclick={() => removeAttachment(name)}>×</button>
 					</span>
 				{/each}
 			</div>
@@ -644,8 +645,8 @@
 			{/each}
 			<input
 				value={tagDraft}
-				placeholder="+ tag"
-				aria-label="Nova tag"
+				placeholder={m.editor_tag_placeholder()}
+				aria-label={m.editor_tag_new()}
 				maxlength="20"
 				oninput={(event) => (tagDraft = event.currentTarget.value)}
 				onkeydown={(event) => {
@@ -659,7 +660,7 @@
 		<div class="r">
 			<small class="nt-backlinks">
 				{#if backlinks.length}
-					Referenciada por
+					{m.editor_backlinks()}
 					{#each backlinks as link, index (link.id)}{index ? ', ' : ' '}<button onclick={() => onopenbacklink(link)}>{noteTitle(link)}</button>{/each}
 				{/if}
 			</small>

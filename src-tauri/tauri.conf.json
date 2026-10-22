@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Atlas",
-  "version": "0.3.3",
-  "identifier": "com.randroi75.atlas",
+  "version": "0.4.0",
+  "identifier": "com.reinaldoassis.atlas",
   "build": {
     "frontendDist": "../build",
     "devUrl": "http://localhost:1420",
@@ -53,7 +53,9 @@
       "icons/icon.ico"
     ],
     "android": {
-      "debugApplicationIdSuffix": ".debug"
+      "minSdkVersion": 29,
+      "debugApplicationIdSuffix": ".debug",
+      "versionCode": 400
     },
     "iOS": {
       "minimumSystemVersion": "15.4",

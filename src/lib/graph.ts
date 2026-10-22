@@ -1,5 +1,6 @@
 // Grafo da vida — modelo, defaults e cálculo de progresso.
 // Fase 1: estrutura completa com progresso manual. Fase 2 liga as fontes de módulo.
+import { m } from './paraglide/messages.js';
 
 export type GraphHorizon = 'today' | 'week' | 'month' | 'quarter' | 'year' | 'five';
 
@@ -66,41 +67,41 @@ export interface GraphState {
 	domains: GraphDomain[];
 }
 
-export const HORIZONS: { id: GraphHorizon; label: string }[] = [
-	{ id: 'today', label: 'Hoje' },
-	{ id: 'week', label: 'Semana' },
-	{ id: 'month', label: '1 mês' },
-	{ id: 'quarter', label: '3 meses' },
-	{ id: 'year', label: '1 ano' },
-	{ id: 'five', label: '5 anos' }
+export const HORIZONS: { id: GraphHorizon }[] = [
+	{ id: 'today' },
+	{ id: 'week' },
+	{ id: 'month' },
+	{ id: 'quarter' },
+	{ id: 'year' },
+	{ id: 'five' }
 ];
 
-export const GRAPH_WINDOWS: { id: GraphWindow; label: string }[] = [
-	{ id: 'week', label: 'Semana' },
-	{ id: 'month', label: 'Mês' },
-	{ id: 'total', label: 'Total' },
-	{ id: 'fixed', label: 'Período' }
+export const GRAPH_WINDOWS: { id: GraphWindow }[] = [
+	{ id: 'week' },
+	{ id: 'month' },
+	{ id: 'total' },
+	{ id: 'fixed' }
 ];
 
-export const GRAPH_SOURCES: { id: GraphSourceKind; label: string }[] = [
-	{ id: 'habitValue', label: 'Hábito · valor' },
-	{ id: 'habitStreak', label: 'Hábito · streak' },
-	{ id: 'timeHours', label: 'Tempo · h/semana' },
-	{ id: 'financeSavings', label: 'Finanças · saldo' },
-	{ id: 'financeLimit', label: 'Finanças · gasto' },
-	{ id: 'trackerLast', label: 'Tracker · último' },
-	{ id: 'trackerAverage', label: 'Tracker · média' },
-	{ id: 'trackerGoal', label: 'Tracker · meta' },
-	{ id: 'manual', label: 'Manual' }
+export const GRAPH_SOURCES: { id: GraphSourceKind }[] = [
+	{ id: 'habitValue' },
+	{ id: 'habitStreak' },
+	{ id: 'timeHours' },
+	{ id: 'financeSavings' },
+	{ id: 'financeLimit' },
+	{ id: 'trackerLast' },
+	{ id: 'trackerAverage' },
+	{ id: 'trackerGoal' },
+	{ id: 'manual' }
 ];
 
 const DOMAIN_SEED: GraphDomain[] = [
-	{ id: 'saude', name: 'Saúde', color: '#f1a5c5' },
-	{ id: 'fin', name: 'Finanças', color: '#ffd45a' },
-	{ id: 'rel', name: 'Relações', color: '#9cc8ff' },
-	{ id: 'car', name: 'Carreira', color: '#c6a8ff' },
-	{ id: 'apr', name: 'Aprendizado', color: '#7fe3c4' },
-	{ id: 'laz', name: 'Lazer', color: '#ffb347' }
+	{ id: 'saude', name: m.domain_saude(), color: '#f1a5c5' },
+	{ id: 'fin', name: m.domain_fin(), color: '#ffd45a' },
+	{ id: 'rel', name: m.domain_rel(), color: '#9cc8ff' },
+	{ id: 'car', name: m.domain_car(), color: '#c6a8ff' },
+	{ id: 'apr', name: m.domain_apr(), color: '#7fe3c4' },
+	{ id: 'laz', name: m.domain_laz(), color: '#ffb347' }
 ];
 
 export function graphId(): string {
@@ -110,7 +111,37 @@ export function graphId(): string {
 }
 
 export function horizonLabel(id: GraphHorizon): string {
-	return HORIZONS.find((item) => item.id === id)?.label ?? id;
+	return {
+		today: m.graph_horizon_today,
+		week: m.graph_horizon_week,
+		month: m.graph_horizon_month,
+		quarter: m.graph_horizon_quarter,
+		year: m.graph_horizon_year,
+		five: m.graph_horizon_five
+	}[id]();
+}
+
+export function windowLabel(id: GraphWindow): string {
+	return {
+		week: m.graph_window_week,
+		month: m.graph_window_month,
+		total: m.graph_window_total,
+		fixed: m.graph_window_fixed
+	}[id]();
+}
+
+export function sourceLabel(id: GraphSourceKind): string {
+	return {
+		habitValue: m.graph_source_habit_value,
+		habitStreak: m.graph_source_habit_streak,
+		timeHours: m.graph_source_time_hours,
+		financeSavings: m.graph_source_finance_savings,
+		financeLimit: m.graph_source_finance_limit,
+		trackerLast: m.graph_source_tracker_last,
+		trackerAverage: m.graph_source_tracker_average,
+		trackerGoal: m.graph_source_tracker_goal,
+		manual: m.graph_source_manual
+	}[id]();
 }
 
 export function defaultDomains(): GraphDomain[] {
@@ -118,7 +149,7 @@ export function defaultDomains(): GraphDomain[] {
 }
 
 export function originNode(domainId = 'car'): GraphNode {
-	return { id: 'origem', name: 'Estado atual', horizon: 'today', domainId, x: 0, y: 0, origin: true };
+	return { id: 'origem', name: m.seed_origin(), horizon: 'today', domainId, x: 0, y: 0, origin: true };
 }
 
 function makeEdge(from: string, to: string, label: string, manualProgress: number): GraphEdge {
@@ -198,7 +229,7 @@ export function isMilestone(node: GraphNode): boolean {
 }
 
 export function nodeRoleLabel(node: GraphNode): string {
-	return isMilestone(node) ? 'Marco' : 'Objetivo';
+	return isMilestone(node) ? m.graph_role_milestone() : m.graph_role_goal();
 }
 
 /** Adicionar `from → to` criaria ciclo? */

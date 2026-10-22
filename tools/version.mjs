@@ -22,6 +22,16 @@ const PATHS = {
 };
 const SEMVER = /^\d+\.\d+\.\d+$/;
 
+/**
+ * `versionCode` da Play: sempre crescente e derivado da tag.
+ * 0.4.0 → 400, 1.2.3 → 10203. O valor é gravado no `tauri.conf.json` porque a
+ * Play não aceita repetir (nem voltar) o código entre uploads.
+ */
+function versionCodeOf(version) {
+	const [major, minor, patch] = version.split('.').map(Number);
+	return major * 10000 + minor * 100 + patch;
+}
+
 function fail(message) {
 	console.error(`version: ${message}`);
 	process.exit(1);
@@ -49,6 +59,8 @@ function setVersion(version) {
 
 	const tauri = readJson(PATHS.tauri);
 	tauri.version = version;
+	tauri.bundle ??= {};
+	tauri.bundle.android = { ...tauri.bundle.android, versionCode: versionCodeOf(version) };
 	writeJson(PATHS.tauri, tauri, 2);
 
 	const cargo = readFileSync(PATHS.cargo, 'utf8').replace(
@@ -88,6 +100,11 @@ function checkVersion(expected) {
 	if (tauri.version !== version) {
 		errors.push(`tauri.conf.json ${tauri.version} != VERSION ${version}`);
 	}
+	const expectedCode = versionCodeOf(version);
+	const actualCode = tauri.bundle?.android?.versionCode;
+	if (actualCode !== expectedCode) {
+		errors.push(`android versionCode ${actualCode ?? '?'} != ${expectedCode} (${version})`);
+	}
 	const cargo = readFileSync(PATHS.cargo, 'utf8');
 	const cargoVersion = /^version\s*=\s*"([^"]*)"/m.exec(cargo)?.[1];
 	if (cargoVersion !== version) {
@@ -104,7 +121,7 @@ function checkVersion(expected) {
 	}
 	if (errors.length) {
 		for (const error of errors) console.error(`version: ${error}`);
-		console.error('version: rode `npm run version:set -- X.Y.Z` e commite os seis arquivos.');
+		console.error('version: rode `npm run version:set -- X.Y.Z` e commite os arquivos de versão.');
 		process.exit(1);
 	}
 	console.log(`version: ${version} ok`);

@@ -3,6 +3,8 @@
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import Sheet from '#lib/components/ui/Sheet.svelte';
 	import { localDate } from '#lib/atlas';
+	import { m } from '#lib/paraglide/messages.js';
+	import { intlLocale } from '#lib/i18n/intl';
 	import {
 		clampRange,
 		defaultRange,
@@ -54,7 +56,7 @@
 	});
 
 	function dayLabel(date: string): string {
-		return new Date(`${date}T12:00:00`).toLocaleDateString('pt-BR', {
+		return new Date(`${date}T12:00:00`).toLocaleDateString(intlLocale(), {
 			weekday: 'long',
 			day: 'numeric',
 			month: 'long',
@@ -82,7 +84,7 @@
 		pendingEnd = result.end;
 		if (result.clamped) {
 			pendingApply = { start: result.start, end: result.end };
-			warning = `Máximo de ${TIME_RANGE_MAX_DAYS} dias. Toque em Aplicar.`;
+			warning = m.planner_range_warning({ days: TIME_RANGE_MAX_DAYS });
 			return;
 		}
 		onapply(result.start, result.end);
@@ -107,19 +109,19 @@
 	}
 </script>
 
-<Sheet title="Período" closeLabel="Fechar" {onclose}>
+<Sheet title={m.planner_range_title()} closeLabel={m.planner_close()} {onclose}>
 	<div class="cal-shortcuts">
-		<button type="button" onclick={presetToday}>Hoje</button>
-		<button type="button" onclick={presetWeek}>7 dias centrados</button>
-		<small>máx. {TIME_RANGE_MAX_DAYS} dias</small>
+		<button type="button" onclick={presetToday}>{m.planner_range_today()}</button>
+		<button type="button" onclick={presetWeek}>{m.planner_range_week()}</button>
+		<small>{m.planner_range_max({ days: TIME_RANGE_MAX_DAYS })}</small>
 	</div>
 
 	<div class="cal-head">
-		<button type="button" class="cal-nav" aria-label="Mês anterior" onclick={() => changeMonth(-1)}>
+		<button type="button" class="cal-nav" aria-label={m.planner_range_prev_month()} onclick={() => changeMonth(-1)}>
 			<ChevronLeft size={18} />
 		</button>
 		<b>{monthLabel(month)}</b>
-		<button type="button" class="cal-nav" aria-label="Próximo mês" onclick={() => changeMonth(1)}>
+		<button type="button" class="cal-nav" aria-label={m.planner_range_next_month()} onclick={() => changeMonth(1)}>
 			<ChevronRight size={18} />
 		</button>
 	</div>
@@ -128,7 +130,7 @@
 		{#each ['S', 'T', 'Q', 'Q', 'S', 'S', 'D'] as label, index (index)}<span>{label}</span>{/each}
 	</div>
 
-	<div class="cal-grid" role="grid" aria-label="Selecionar período">
+	<div class="cal-grid" role="grid" aria-label={m.planner_range_pick()}>
 		{#each cells as date, index (date ?? `blank-${index}`)}
 			{#if date}
 				<button
@@ -154,11 +156,11 @@
 		<div class="cal-warning" role="status">
 			<span>{warning}</span>
 			{#if pendingApply}
-				<button type="button" onclick={() => pendingApply && apply(pendingApply.start, pendingApply.end)}>Aplicar</button>
+				<button type="button" onclick={() => pendingApply && apply(pendingApply.start, pendingApply.end)}>{m.planner_range_apply()}</button>
 			{/if}
 		</div>
 	{:else}
-		<p class="cal-hint">Toque no primeiro e no último dia.</p>
+		<p class="cal-hint">{m.planner_range_hint()}</p>
 	{/if}
 </Sheet>
 

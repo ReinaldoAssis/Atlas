@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { horizonLabel, HORIZONS, isMilestone, nodeRoleLabel, type GraphDomain, type GraphNode } from '#lib/graph';
+	import { m } from '#lib/paraglide/messages.js';
 
 	let {
 		node,
@@ -37,37 +38,37 @@
 	});
 </script>
 
-<div class="gv-from">{node.origin ? 'Origem do grafo' : `${nodeRoleLabel(node)} · ${horizonLabel(node.horizon)}`}</div>
+<div class="gv-from">{node.origin ? m.graph_node_sheet_origin() : `${nodeRoleLabel(node)} · ${horizonLabel(node.horizon)}`}</div>
 <input
 	class="gv-inp"
 	bind:this={nameInput}
 	maxlength="40"
-	aria-label="Nome do nó"
+	aria-label={m.graph_node_name()}
 	value={node.name}
 	oninput={(event) => onpatch({ name: event.currentTarget.value })}
 />
-<div class="gv-lb">Horizonte</div>
+<div class="gv-lb">{m.graph_node_horizon()}</div>
 <div class="gv-chips">
 	{#each HORIZONS as horizon (horizon.id)}
-		<button class="gv-chip" class:on={node.horizon === horizon.id} onclick={() => onpatch({ horizon: horizon.id })}>{horizon.label}</button>
+		<button class="gv-chip" class:on={node.horizon === horizon.id} onclick={() => onpatch({ horizon: horizon.id })}>{horizonLabel(horizon.id)}</button>
 	{/each}
 </div>
 {#if !node.origin}
 	<div class="gv-hint">
 		<span class={isMilestone(node) ? 'gv-hint-tri' : 'gv-hint-dot'}></span>
-		{nodeRoleLabel(node)} · {isMilestone(node) ? 'longo prazo' : 'curto prazo'}
+		{nodeRoleLabel(node)} · {isMilestone(node) ? m.graph_node_long_term() : m.graph_node_short_term()}
 	</div>
 {/if}
-<div class="gv-lb">Domínio</div>
+<div class="gv-lb">{m.graph_node_domain()}</div>
 <div class="gv-chips">
 	{#each domains as domain (domain.id)}
 		<button class="gv-chip" class:on={node.domainId === domain.id} style={`--cc:${domain.color}`} onclick={() => onpatch({ domainId: domain.id })}><i></i>{domain.name}</button>
 	{/each}
 </div>
 {#if !node.origin && !hasIncoming}
-	<button class="gv-btn ghost" aria-pressed={Boolean(node.reachedManual)} onclick={ontoggle}>{node.reachedManual ? '✓ Marcado como alcançado' : 'Marcar como alcançado'}</button>
+	<button class="gv-btn ghost" aria-pressed={Boolean(node.reachedManual)} onclick={ontoggle}>{node.reachedManual ? m.graph_node_reached_on() : m.graph_node_reached_off()}</button>
 {/if}
-<button class="gv-btn" onclick={onclose}>Pronto</button>
+<button class="gv-btn" onclick={onclose}>{m.graph_done()}</button>
 {#if !node.origin}
-	<button class="gv-btn danger" onclick={ondelete}>Excluir nó</button>
+	<button class="gv-btn danger" onclick={ondelete}>{m.graph_node_delete()}</button>
 {/if}

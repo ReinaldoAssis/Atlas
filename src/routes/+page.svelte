@@ -32,6 +32,7 @@
 import { readTestMode, writeTestMode } from '#lib/test-mode';
 import { checkForUpdate, relaunchApp, updaterSupportedHere } from '#lib/updater';
 	import { m } from '#lib/paraglide/messages.js';
+	import { i18n } from '#lib/i18n/locale.svelte';
 	import {
 		onPairRequest,
 		onPaired,
@@ -88,6 +89,10 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	import PlannerNoteSheet from '#lib/components/time/PlannerNoteSheet.svelte';
 	import TimeRangeSheet from '#lib/components/time/TimeRangeSheet.svelte';
 	import SettingsSheet from '#lib/components/settings/SettingsSheet.svelte';
+	import PaywallSheet from '#lib/components/settings/PaywallSheet.svelte';
+	import { paywall, loadPlan, closePaywall, planGated, planPro, requestUpgrade, allowCreate } from '#lib/plan.svelte';
+	import { parsePlanLimitError } from '#lib/plan';
+	import { loadPrices, refreshEntitlement, restore, subscribe, watchPurchases, type BillingPrices } from '#lib/billing';
 	import SyncIntroSheet from '#lib/components/settings/SyncIntroSheet.svelte';
 	import SyncPairSheet from '#lib/components/settings/SyncPairSheet.svelte';
 	import SyncSasSheet from '#lib/components/settings/SyncSasSheet.svelte';
@@ -111,12 +116,12 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	type ModalKind = 'transaction' | 'habit' | 'settings' | 'pause' | null;
 
 	const navItems: { id: NavigationKey; label: string; icon: LucideIcon }[] = [
-		{ id: 'dashboard', label: 'Visão geral', icon: LayoutDashboard },
-		{ id: 'finance', label: 'Finanças', icon: Wallet },
-		{ id: 'habits', label: 'Hábitos', icon: Target },
-		{ id: 'time', label: 'Tempo', icon: CalendarDays },
-		{ id: 'notes', label: 'Notas', icon: NotebookPen },
-		{ id: 'graph', label: 'Planejamento', icon: Route }
+		{ id: 'dashboard', get label() { return m.shell_nav_dashboard(); }, icon: LayoutDashboard },
+		{ id: 'finance', get label() { return m.settings_module_finance(); }, icon: Wallet },
+		{ id: 'habits', get label() { return m.shell_nav_habits(); }, icon: Target },
+		{ id: 'time', get label() { return m.settings_module_time(); }, icon: CalendarDays },
+		{ id: 'notes', get label() { return m.notes_title(); }, icon: NotebookPen },
+		{ id: 'graph', get label() { return m.graph_title(); }, icon: Route }
 	];
 
 	const TAB_ORDER: NavigationKey[] = ['dashboard', 'finance', 'habits', 'time', 'notes', 'graph'];
@@ -298,7 +303,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let timeTotalsLabel = $derived.by(() => {
 		const total = timeGrid.reduce((sum, day) => sum + day.filter(Boolean).length, 0);
 		const free = Math.max(0, timeRangeDays * TIME_SLOT_COUNT - total);
-		return `${rangeLabel(timeRangeStart, timeRangeEnd)} · ${hmSlots(total)} alocadas · ${hmSlots(free)} livres`;
+		return m.time_totals({ range: rangeLabel(timeRangeStart, timeRangeEnd), allocated: hmSlots(total), free: hmSlots(free) });
 	});
 	let timeNow = $derived.by(() => {
 		if (timeTodayIndex < 0) return null;
@@ -354,14 +359,14 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}).length);
 	let financeBudget = $derived(budgetOverview(financeCategories, financeMonthTransactions));
 	let financeRecent = $derived([...(snapshot?.transactions ?? [])].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6));
-	let financeMonthLabel = $derived(new Date().toLocaleDateString('pt-BR', { month: 'long' }).replace(/^./, (character) => character.toUpperCase()));
+	let financeMonthLabel = $derived(new Date().toLocaleDateString(i18n.locale, { month: 'long' }).replace(/^./, (character) => character.toUpperCase()));
 	let financeEntryCategories = $derived(financeCategories.filter((item) => (financeEntry.type === 'income' ? item.kind === 'in' : item.kind !== 'in')));
 
 	// ===== Dashboard (Visão geral) =====
 	let dashMenu = $state(false);
 	let dashHabitPicker = $state(false);
-	let dashPeriodLabel = $derived(period === 'week' ? 'semana' : period === 'month' ? 'mês' : 'período');
-	let lifeForceLabel = $derived(lifeForcePercent >= 70 ? 'Viva' : lifeForcePercent >= 30 ? 'Estável' : 'Apagando');
+	let dashPeriodLabel = $derived(period === 'week' ? m.dash_period_week() : period === 'month' ? m.dash_period_month() : m.dash_period_custom());
+	let lifeForceLabel = $derived(lifeForcePercent >= 70 ? m.dash_life_force_alive() : lifeForcePercent >= 30 ? m.dash_life_force_stable() : m.dash_life_force_fading());
 	let dashGoalPercent = $derived(prototypeTodayGoal ? Math.min(prototypeTodayDone, prototypeTodayGoal) / prototypeTodayGoal : 0);
 	let dashDays = $derived.by(() => {
 		const days: string[] = [];
@@ -453,7 +458,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const hasOther = [...totals.keys()].some((key) => !top.includes(key));
 		const keys = [...top, ...(hasOther ? ['__other'] : [])];
 		const colorOf = (key: string) => (key === '__other' ? '#8d968a' : currentCategory(key)?.color ?? '#8d968a');
-		const nameOf = (key: string) => (key === '__other' ? 'Outros' : currentCategory(key)?.name ?? '—');
+		const nameOf = (key: string) => (key === '__other' ? m.dash_other() : currentCategory(key)?.name ?? '—');
 		const otherHours = (day: Map<string, number>) => [...day.entries()].filter(([key]) => !top.includes(key)).reduce((sum, [, value]) => sum + value, 0);
 		let maxHours = 1;
 		for (const day of perDay.values()) {
@@ -533,6 +538,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			: 0
 	);
 	onDestroy(() => clearTimeout(financeDeleteTimer));
+	onDestroy(() => stopPurchaseWatch?.());
 	let financeCelebration = $state<number | null>(null);
 	let timeSelected = $state('deep-work');
 	let timeScroll = $state<HTMLElement | null>(null);
@@ -758,9 +764,49 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		return () => clearTimeout(timer);
 	});
 
+	let billingPrices = $state<BillingPrices>({ monthly: null, annual: null });
+	let billingBusy = $state(false);
+	let stopPurchaseWatch: (() => void) | null = null;
+
+	async function initializeBilling() {
+		if (!planGated()) return;
+		billingPrices = await loadPrices();
+		await refreshEntitlement();
+		if (planPro()) closePaywall();
+		stopPurchaseWatch = await watchPurchases(() => {
+			if (planPro()) closePaywall();
+		});
+	}
+
+	async function buyPlan(productId: string) {
+		if (billingBusy) return;
+		billingBusy = true;
+		const outcome = await subscribe(productId);
+		billingBusy = false;
+		if (outcome === 'ok') {
+			toastMessage(m.billing_success());
+			closePaywall();
+		} else if (outcome === 'pending') toastMessage(m.billing_pending());
+		else if (outcome === 'cancelled') toastMessage(m.billing_cancelled());
+		else toastMessage(m.billing_failed());
+	}
+
+	async function restorePlan() {
+		if (billingBusy) return;
+		billingBusy = true;
+		const restored = await restore();
+		billingBusy = false;
+		if (restored) {
+			toastMessage(m.billing_restored());
+			closePaywall();
+		} else toastMessage(m.billing_nothing_to_restore());
+	}
+
 	async function initialize() {
 		testModeActive = readTestMode();
 		updaterAvailable = updaterSupportedHere();
+		await loadPlan();
+		await initializeBilling();
 		try {
 			const loaded = await loadSnapshot();
 			advanceLifeForce(loaded);
@@ -775,7 +821,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		} catch (error) {
 			console.error(error);
 			const detail = error instanceof Error ? error.message : String(error);
-			loadError = `Não foi possível abrir os dados locais. (${detail})`;
+			loadError = m.shell_load_error({ detail });
 			ready = true;
 		}
 	}
@@ -1073,17 +1119,17 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function habitDateLabel(date: string): string {
-		if (date === today) return 'Hoje';
-		if (date === dateOffset(today, -1)) return 'Ontem';
+		if (date === today) return m.habit_today();
+		if (date === dateOffset(today, -1)) return m.habit_yesterday();
 		return `${date.slice(8, 10)}/${date.slice(5, 7)}`;
 	}
 
 	function habitDateLongLabel(date: string): string {
-		const weekday = new Date(`${date}T12:00:00`).toLocaleDateString('pt-BR', { weekday: 'long' });
+		const weekday = new Date(`${date}T12:00:00`).toLocaleDateString(i18n.locale, { weekday: 'long' });
 		const day = `${date.slice(8, 10)}/${date.slice(5, 7)}`;
-		if (date === today) return `Hoje · ${weekday} · ${day}`;
-		if (date === dateOffset(today, -1)) return `Ontem · ${weekday} · ${day}`;
-		return `${weekday} · ${day}`;
+		if (date === today) return m.habit_date_long_today({ weekday, day });
+		if (date === dateOffset(today, -1)) return m.habit_date_long_yesterday({ weekday, day });
+		return m.habit_date_long({ weekday, day });
 	}
 
 	function selectHabitDay(date: string) {
@@ -1159,7 +1205,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	function prototypeValue(habit: Habit, value: number): string {
 		if (habit.metric === 'duration') return formatClock(value);
 		if (habit.unit.toLowerCase() === 'ml' && value >= 1000) return `${(value / 1000).toFixed(2).replace(/\.?0+$/, '')} L`;
-		return habit.metric === 'count' ? `${value} ${habit.unit}` : value ? 'Feito' : 'Hoje';
+		return habit.metric === 'count' ? `${value} ${habit.unit}` : value ? m.habit_value_done() : m.habit_today();
 	}
 
 	function prototypeSheetMax(habit: Habit): number {
@@ -1226,7 +1272,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		next.habitLogs = next.habitLogs.filter((item) => item.date !== habitSelectedDate && item.date !== week);
 		void commit(next);
 		playFeedback('tap', snapshot.preferences.soundEnabled);
-		toastMessage('Dia reiniciado.');
+		toastMessage(m.habit_day_reset());
 	}
 
 	const FINANCE_COLORS = ['#d4f25a', '#9cc8ff', '#ffb347', '#c6a8ff', '#f1a5c5', '#7fe3c4'];
@@ -1328,11 +1374,13 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const beforeStatus = categoryLimitStatus(category, previousSpent);
 		const afterStatus = categoryLimitStatus(category, categoryTotal(category.id));
 		const streakNow = snapshot?.finance.streak ?? previousStreak;
-		const streakMessage = `Sequência de ${streakNow} dias`;
+		const streakMessage = m.fin_streak_days({ count: streakNow });
 		if (kind === 'expense' && limit > 0 && category.limitMode === 'goal') {
 			if (!beforeStatus.reached && afterStatus.reached) {
-				const beyond = afterStatus.percentBeyond > 0 ? ` · +${afterStatus.percentBeyond}% além da meta` : '';
-				setTimeout(() => toastMessage(`${category.name} bateu a meta${beyond}`), 500);
+				const reachedMessage = afterStatus.percentBeyond > 0
+					? m.fin_goal_reached_beyond({ name: category.name, percent: afterStatus.percentBeyond })
+					: m.fin_goal_reached({ name: category.name });
+				setTimeout(() => toastMessage(reachedMessage), 500);
 				burstAt(x, y, 18, { up: true, color: category.color });
 				playTone(784, 0.18, 'triangle', 0.06, sound);
 				setTimeout(() => playTone(1047, 0.24, 'triangle', 0.06, sound), 90);
@@ -1342,10 +1390,10 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			}
 		} else if (kind === 'expense' && limit > 0) {
 			if (beforeStatus.ratio <= 1 && afterStatus.ratio > 1) {
-				setTimeout(() => toastMessage(`${category.name} passou do limite`, { warning: true, undo: () => restoreFinance(undoJson) }), 500);
+				setTimeout(() => toastMessage(m.fin_limit_over({ name: category.name }), { warning: true, undo: () => restoreFinance(undoJson) }), 500);
 				playTone(330, 0.25, 'triangle', 0.05, sound);
 			} else if (beforeStatus.ratio < 0.8 && afterStatus.ratio >= 0.8) {
-				setTimeout(() => toastMessage(`${category.name} em ${Math.round(afterStatus.ratio * 100)}% do limite`, { warning: true }), 500);
+				setTimeout(() => toastMessage(m.fin_limit_near({ name: category.name, percent: Math.round(afterStatus.ratio * 100) }), { warning: true }), 500);
 			} else if (streakNow > previousStreak) {
 				setTimeout(() => toastMessage(streakMessage), 500);
 			}
@@ -1378,7 +1426,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			: null;
 		playTone(200, 0.12, 'sine', 0.05, snapshot.preferences.soundEnabled);
 		vibrate(8);
-		toastMessage('Lançamento removido', {
+		toastMessage(m.fin_entry_removed(), {
 			undo: () => {
 				forgetQuietly(trash);
 				restoreFinance(undoJson);
@@ -1398,11 +1446,11 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					module: 'finance',
 					kind: 'transaction',
 					entityId: `clear:${Date.now()}`,
-					label: `${transactions.length} lançamento${transactions.length === 1 ? '' : 's'}`,
+					label: transactions.length === 1 ? m.fin_trash_entry_one() : m.fin_trash_entries({ count: transactions.length }),
 					tables: transactionTables(transactions)
 				})
 			: null;
-		toastMessage('Lançamentos removidos', {
+		toastMessage(m.fin_entries_removed(), {
 			warning: true,
 			undo: () => {
 				forgetQuietly(trash);
@@ -1412,6 +1460,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function openFinanceCategory(back: boolean) {
+		const financeCount = snapshot?.categories.filter((category) => category.module === 'finance').length ?? 0;
+		if (!allowCreate('finance_categories', financeCount)) return;
 		financeEntry = { ...financeEntry, open: false };
 		resetFinanceDeleteArm();
 		financeCategoryForm = { open: true, id: null, type: back ? financeEntry.type : 'expense', name: '', color: FINANCE_COLORS[1], limitMinor: 50000, limitMode: 'limit', back };
@@ -1542,8 +1592,10 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		vibrate(10);
 		toastMessage(
 			transactions.length
-				? `Categoria e ${transactions.length} lançamento${transactions.length === 1 ? '' : 's'} excluídos.`
-				: 'Categoria excluída.',
+				? transactions.length === 1
+					? m.fin_category_deleted_one()
+					: m.fin_category_deleted_many({ count: transactions.length })
+				: m.fin_category_deleted(),
 			{
 				undo: () => {
 					forgetQuietly(trash);
@@ -1613,7 +1665,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		financeCategoryForm = { ...financeCategoryForm, open: false, id: null, name: '', back: false };
 		await commit(next);
 		if (editingId) {
-			toastMessage('Categoria atualizada.');
+			toastMessage(m.fin_category_updated());
 			playTone(660, 0.12, 'triangle', 0.06, sound);
 			return;
 		}
@@ -1651,7 +1703,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		next.dailyGoal = normalizeDailyGoal(dayGoalDraft);
 		dayGoalSheet = false;
 		await commit(next);
-		toastMessage(`Meta do dia: ${next.dailyGoal} hábito${next.dailyGoal === 1 ? '' : 's'}`);
+		toastMessage(next.dailyGoal === 1 ? m.habit_day_goal_set_one() : m.habit_day_goal_set({ count: next.dailyGoal }));
 	}
 
 	function openFinanceGoal() {
@@ -1688,7 +1740,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		};
 		financeGoalSheet = { open: false, amountMinor: 0 };
 		await commit(next);
-		toastMessage('Meta de economia atualizada.');
+		toastMessage(m.fin_goal_saved());
 	}
 
 	function openHabitHistory(habit: Habit) {
@@ -1715,9 +1767,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		if (!habitLogEdit || !snapshot || pauseBlocked()) return;
 		const { habit, log } = habitLogEdit;
 		const ok = await askConfirm({
-			title: 'Excluir registro',
-			message: `Excluir o registro de ${log.date}?`,
-			confirmLabel: 'Excluir',
+			title: m.habit_delete_log_title(),
+			message: m.habit_delete_log_message({ date: log.date }),
+			confirmLabel: m.common_delete(),
 			danger: true
 		});
 		if (!ok) return;
@@ -1734,7 +1786,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			label: `${habit.name} · ${log.date}`,
 			tables: habitLogTables([log])
 		});
-		toastMessage('Registro excluído.', {
+		toastMessage(m.habit_log_deleted(), {
 			undo: () => {
 				forgetQuietly(trash);
 				restoreSnapshotJson(undoJson);
@@ -1869,10 +1921,12 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		try {
 			await saveSnapshot(next);
 			snapshot = next;
-			if (orphaned) toastMessage('Fonte removida no módulo: a transição virou manual.');
+			if (orphaned) toastMessage(m.dialog_source_removed());
 		} catch (error) {
 			console.error(error);
-			toastMessage('Não foi possível salvar no dispositivo. Tente novamente.');
+			const limit = parsePlanLimitError(error instanceof Error ? error.message : String(error));
+			if (limit) requestUpgrade(limit.key);
+			else toastMessage(m.dialog_save_failed());
 			throw error;
 		}
 	}
@@ -1883,12 +1937,12 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	function pauseUntilLabel(date = snapshot?.lifeForce.pausedUntil): string {
 		if (!date) return '';
-		return new Date(`${date}T12:00:00`).toLocaleDateString('pt-BR');
+		return new Date(`${date}T12:00:00`).toLocaleDateString(i18n.locale);
 	}
 
 	function pauseBlocked(): boolean {
 		if (!snapshot || !isCurrentPause(snapshot)) return false;
-		toastMessage(`Atlas em pausa até ${pauseUntilLabel()}.`, { warning: true });
+		toastMessage(m.shell_pause_until({ date: pauseUntilLabel() }), { warning: true });
 		return true;
 	}
 
@@ -2013,7 +2067,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			trashOpen = true;
 		} catch (error) {
 			console.error(error);
-			toastMessage('Não foi possível abrir a lixeira.', { warning: true });
+			toastMessage(m.shell_trash_open_failed(), { warning: true });
 		}
 	}
 
@@ -2021,16 +2075,16 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		try {
 			const restored = await restoreTrashEvent(event.id);
 			if (!restored) {
-				toastMessage('Este item não está mais na lixeira.', { warning: true });
+				toastMessage(m.shell_trash_missing(), { warning: true });
 				trashEvents = await loadTrashEvents();
 				return;
 			}
 			snapshot = await loadSnapshot();
 			trashEvents = await loadTrashEvents();
-			toastMessage(`${event.label} restaurado.`);
+			toastMessage(m.shell_trash_restored({ label: event.label }));
 		} catch (error) {
 			console.error(error);
-			toastMessage('Não foi possível restaurar.', { warning: true });
+			toastMessage(m.shell_trash_restore_failed(), { warning: true });
 		}
 	}
 
@@ -2038,10 +2092,10 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		try {
 			await forgetTrashEvent(event.id);
 			trashEvents = trashEvents.filter((item) => item.id !== event.id);
-			toastMessage('Item removido da lixeira.');
+			toastMessage(m.shell_trash_forgotten());
 		} catch (error) {
 			console.error(error);
-			toastMessage('Não foi possível remover.', { warning: true });
+			toastMessage(m.shell_trash_forget_failed(), { warning: true });
 		}
 	}
 
@@ -2063,7 +2117,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		if (!snapshot || pauseBlocked()) return;
 		const amount = Number(transactionForm.amount.replace(',', '.'));
 		if (!Number.isFinite(amount) || amount <= 0 || !transactionForm.categoryId) {
-			formError = 'Informe um valor e uma categoria válidos.';
+			formError = m.fin_error_invalid();
 			return;
 		}
 		const next = cloneSnapshot();
@@ -2073,7 +2127,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			amountMinor: Math.round(amount * 100),
 			categoryId: transactionForm.categoryId,
 			date: transactionForm.date,
-			description: transactionForm.description.trim() || 'Sem descrição'
+			description: transactionForm.description.trim() || m.fin_no_description()
 		};
 		const existingIndex = next.transactions.findIndex((item) => item.id === editingTransactionId);
 		if (existingIndex >= 0) next.transactions[existingIndex] = transaction;
@@ -2081,10 +2135,11 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		await commit(next, true, existingIndex < 0);
 		modal = null;
 		editingTransactionId = '';
-		toastMessage(existingIndex >= 0 ? 'Lançamento atualizado.' : 'Lançamento salvo.');
+		toastMessage(existingIndex >= 0 ? m.fin_entry_updated() : m.fin_entry_saved());
 	}
 
 	function openHabit(habit?: Habit) {
+		if (!habit && !allowCreate('habits', snapshot?.habits.filter((item) => item.active).length ?? 0)) return;
 		formError = '';
 		editingHabitId = habit?.id ?? '';
 		habitForm = habit
@@ -2211,7 +2266,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			label: habit.name,
 			tables: habitTables([habit], beforeLogs)
 		});
-		toastMessage(`Hábito "${habit.name}" excluído.`, {
+		toastMessage(m.habit_deleted({ name: habit.name }), {
 			undo: () => {
 				forgetQuietly(trash);
 				const copy = cloneSnapshot();
@@ -2228,7 +2283,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const next = cloneSnapshot();
 		next.habits = next.habits.map((item) => (item.id === habit.id ? { ...item, active } : item));
 		await commit(next);
-		toastMessage(active ? 'Hábito reativado.' : 'Hábito arquivado. O histórico fica guardado.', {
+		toastMessage(active ? m.habit_reactivated() : m.habit_archived(), {
 			undo: () => {
 				const copy = cloneSnapshot();
 				copy.habits = before;
@@ -2247,7 +2302,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		event.preventDefault();
 		if (!snapshot || pauseBlocked()) return;
 		if (!habitForm.name.trim() || (habitForm.metric !== 'weekly' && !habitForm.scheduledDays.length) || (habitForm.metric !== 'boolean' && Number(habitForm.target) <= 0)) {
-			formError = 'Informe um nome, uma meta válida e pelo menos um dia.';
+			formError = m.habit_error_invalid();
 			return;
 		}
 		const labels =
@@ -2301,7 +2356,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		await syncIOSReminders(next);
 		modal = null;
 		editingHabitId = '';
-		toastMessage(isNew ? 'Hábito criado.' : 'Hábito atualizado.');
+		toastMessage(isNew ? m.habit_created() : m.habit_updated());
 	}
 
 	function logHabit(habit: Habit) {
@@ -2320,7 +2375,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			const input = document.querySelector<HTMLInputElement>(`[data-habit-input="${habit.id}"]`);
 			const value = Number(input?.value ?? habitValues[habit.id]);
 			if (!Number.isFinite(value) || value < 0) {
-				toastMessage('Informe uma quantidade válida.');
+				toastMessage(m.habit_error_invalid_amount());
 				return;
 			}
 			void saveHabitLog(habit, value, !existing, habitSelectedDate);
@@ -2342,7 +2397,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			label: `${habit.name} · ${existing.date}`,
 			tables: habitLogTables([existing])
 		});
-		toastMessage('Registro removido.', {
+		toastMessage(m.habit_log_removed(), {
 			undo: () => {
 				forgetQuietly(trash);
 				restoreSnapshotJson(undoJson);
@@ -2419,18 +2474,18 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			if (!reduced) floatValue(px, py - 24, '+10 XP');
 			const beforeLevel = experienceProgress(snapshot.experience.totalXp - 10).level;
 			const afterLevel = experienceProgress(snapshot.experience.totalXp).level;
-			toastMessage(afterLevel > beforeLevel ? `Nível ${afterLevel} alcançado · +10 XP` : '+10 XP · Meta do hábito alcançada');
+			toastMessage(afterLevel > beforeLevel ? m.habit_level_up({ level: afterLevel }) : m.habit_xp_target());
 		}
 		const allDone = loggingToday && prototypeTodayGoal > 0 && prototypeTodayDone >= prototypeTodayHabits.length;
 		if (afterDailyGoal && afterDailyGoal.goal > 0 && beforeDailyGoal.done < beforeDailyGoal.goal && afterDailyGoal.done >= afterDailyGoal.goal) {
 			celebrate(getHabitDayStreak(next));
 		} else if (allDone) {
-			toastMessage('Dia perfeito');
+			toastMessage(m.habit_perfect_day());
 			confetti(effectsCanvas, 70);
 			[784, 988, 1175, 1568].forEach((frequency, index) => setTimeout(() => playTone(frequency, 0.25, 'triangle', 0.06, sound), 400 + index * 90));
 		}
 		modal = null;
-		if (!awardExperience && !reduced) toastMessage(loggingToday ? (qualifies ? 'Registro feito.' : 'Registro atualizado.') : 'Registro do dia atualizado.');
+		if (!awardExperience && !reduced) toastMessage(loggingToday ? (qualifies ? m.habit_log_done() : m.habit_log_updated()) : m.habit_log_past_updated());
 	}
 
 	function openDashHabitPick() {
@@ -2447,7 +2502,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		if (index >= 0) next.trackers[index] = tracker;
 		else next.trackers.unshift(tracker);
 		await commit(next);
-		toastMessage(isNew ? 'Tracker criado.' : 'Tracker atualizado.');
+		toastMessage(isNew ? m.habit_tracker_created() : m.habit_tracker_updated());
 	}
 
 	async function archiveTracker(tracker: Tracker, active: boolean) {
@@ -2456,7 +2511,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const next = cloneSnapshot();
 		next.trackers = next.trackers.map((item) => (item.id === tracker.id ? { ...item, active } : item));
 		await commit(next);
-		toastMessage(active ? 'Tracker reativado.' : 'Tracker arquivado. O histórico fica guardado.', {
+		toastMessage(active ? m.habit_tracker_reactivated() : m.habit_tracker_archived(), {
 			undo: () => {
 				const copy = cloneSnapshot();
 				copy.trackers = before;
@@ -2480,7 +2535,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			label: tracker.name,
 			tables: trackerTables([tracker], beforeEntries)
 		});
-		toastMessage(`Tracker "${tracker.name}" excluído.`, {
+		toastMessage(m.habit_tracker_deleted({ name: tracker.name }), {
 			undo: () => {
 				forgetQuietly(trash);
 				const copy = cloneSnapshot();
@@ -2498,7 +2553,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		if (index >= 0) next.trackerEntries[index] = entry;
 		else next.trackerEntries.unshift(entry);
 		await commit(next);
-		toastMessage(isNew ? 'Registro salvo.' : 'Registro atualizado.');
+		toastMessage(isNew ? m.habit_reg_saved() : m.habit_log_updated());
 	}
 
 	async function deleteTrackerEntry(entry: TrackerEntry) {
@@ -2511,10 +2566,10 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			module: 'habits',
 			kind: 'trackerEntry',
 			entityId: entry.id,
-			label: `${snapshot.trackers.find((item) => item.id === entry.trackerId)?.name ?? 'Tracker'} · ${entry.date}`,
+			label: `${snapshot.trackers.find((item) => item.id === entry.trackerId)?.name ?? m.tracker_new()} · ${entry.date}`,
 			tables: trackerEntryTables([entry])
 		});
-		toastMessage('Registro removido.', {
+		toastMessage(m.habit_log_removed(), {
 			undo: () => {
 				forgetQuietly(trash);
 				restoreSnapshotJson(undoJson);
@@ -2595,7 +2650,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		};
 		void upsertNote(updated).catch((error) => {
 			console.error('Não foi possível salvar a nota', error);
-			toastMessage('Não foi possível salvar a nota.', { warning: true });
+			toastMessage(m.dialog_note_save_failed(), { warning: true });
 		});
 	}
 
@@ -2616,7 +2671,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		if (!noteOverlay) return;
 		const pinned = !noteOverlay.pinned;
 		patchOverlayNote({ pinned });
-		toastMessage(pinned ? 'Nota fixada.' : 'Nota desafixada.');
+		toastMessage(pinned ? m.dialog_note_pinned() : m.dialog_note_unpinned());
 	}
 
 	async function deleteOverlayNote(): Promise<void> {
@@ -2625,7 +2680,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const before = { ...target };
 		patchOverlayNote({ trashedAt: new Date().toISOString() });
 		await closeNoteOverlay();
-		toastMessage('Nota movida para a lixeira', {
+		toastMessage(m.notes_trashed(), {
 			undo: () => {
 				notesState = {
 					...notesState,
@@ -2690,10 +2745,10 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const rows = items
 			.map(
 				(item, index) =>
-					`<button class="tbb-r" data-i="${index}"><div class="tbb-1">${escapeText(item.note.title || 'Sem título')}</div><div class="tbb-2">${escapeText(notePreview(item.note.body, item.note.updatedAt))}</div></button>`
+					`<button class="tbb-r" data-i="${index}"><div class="tbb-1">${escapeText(item.note.title || m.planner_untitled())}</div><div class="tbb-2">${escapeText(notePreview(item.note.body, item.note.updatedAt))}</div></button>`
 			)
 			.join('');
-		return `<div class="tbb-lb">Notas neste horário</div>${rows}`;
+		return `<div class="tbb-lb">${m.time_notes_here()}</div>${rows}`;
 	}
 
 	function showPlannerBubble(anchor: HTMLElement, items: NoteRef[], blockId: string) {
@@ -3474,12 +3529,13 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 				confetti(effectsCanvas, 90, { colors: [crossing.color, '#ecefe6', '#ffd45a', crossing.color] });
 				[523, 659, 784, 1047].forEach((frequency, index) => setTimeout(() => playTone(frequency, 0.28, 'triangle', 0.07, sound), index * 100));
 				vibrate([20, 40, 20, 40, 70]);
-				toastMessage(`Meta de ${crossing.name} concluída`);
+				toastMessage(m.time_goal_reached({ name: crossing.name }));
 			}, 350);
 		}
 	}
 
 	function openTimeCategorySheet(categoryId: string | null) {
+		if (!categoryId && !allowCreate('time_categories', timeCategories.length)) return;
 		const category = categoryId ? currentCategory(categoryId) : undefined;
 		const palette = ['#d4f25a', '#9cc8ff', '#ffb347', '#c6a8ff', '#f1a5c5', '#7fe3c4', '#ff8a80', '#e6e06a'];
 		const index = (timeCategories.length || 0) % palette.length;
@@ -3542,7 +3598,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			: null;
 		playTone(200, 0.14, 'sine', 0.05, sound);
 		vibrate(10);
-		toastMessage('Categoria excluída', {
+		toastMessage(m.time_category_deleted(), {
 			undo: () => {
 				forgetQuietly(trash);
 				restoreTimeSnapshot(undoJson);
@@ -3562,7 +3618,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		if (block) block.status = 'cancelled';
 		await commit(next);
 		if (block) await syncIOSReminders(next);
-		toastMessage('Bloco cancelado.');
+		toastMessage(m.time_block_cancelled());
 	}
 
 	function openSettings() {
@@ -3595,10 +3651,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		);
 		if (enabled && hasData) {
 			const confirmed = await askConfirm({
-				title: 'Ativar modo de teste?',
-				message:
-					'O Atlas passa a usar um banco separado com dados de exemplo. Seus dados reais ficam intactos e voltam ao desativar.',
-				confirmLabel: 'Ativar'
+				title: m.dialog_test_mode_title(),
+				message: m.dialog_test_mode_message(),
+				confirmLabel: m.dialog_enable()
 			});
 			if (!confirmed) return;
 		}
@@ -3610,7 +3665,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		ready = false;
 		notesVersion += 1;
 		await initialize();
-		toastMessage(enabled ? 'Modo de teste ativado.' : 'Modo de teste desativado.');
+		toastMessage(enabled ? m.dialog_test_mode_on() : m.dialog_test_mode_off());
 	}
 
 	async function onTestModeToggle(event: Event) {
@@ -3640,7 +3695,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 				kind: 'confirm',
 				title: options.title,
 				message: options.message,
-				confirmLabel: options.confirmLabel ?? 'Confirmar',
+				confirmLabel: options.confirmLabel ?? m.dialog_confirm(),
 				danger: options.danger,
 				resolve: (value) => resolve(value !== null)
 			};
@@ -3655,7 +3710,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 				title: options.title,
 				label: options.label,
 				placeholder: options.placeholder,
-				confirmLabel: options.confirmLabel ?? 'Salvar',
+				confirmLabel: options.confirmLabel ?? m.common_save(),
 				resolve
 			};
 		});
@@ -3694,10 +3749,10 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		if (!snapshot) return;
 		try {
 			const result = await saveBytes(await currentBackupBytes(), backupFileName());
-			toastMessage(result === 'saved' ? 'Backup exportado.' : 'Exportação cancelada.');
+			toastMessage(result === 'saved' ? m.dialog_backup_exported() : m.dialog_export_cancelled());
 		} catch (error) {
 			console.error('Falha ao exportar o backup', error);
-			toastMessage('Não foi possível exportar o backup.', { warning: true });
+			toastMessage(m.dialog_export_failed(), { warning: true });
 		}
 	}
 
@@ -3709,15 +3764,18 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		try {
 			imported = await importBackupV2(new File([picked.bytes as BlobPart], picked.name));
 		} catch (error) {
-			toastMessage(error instanceof Error ? error.message : 'Não foi possível ler o backup.', {
+			toastMessage(error instanceof Error ? error.message : m.dialog_read_backup_failed(), {
 				warning: true
 			});
 			return;
 		}
 		const confirmed = await askConfirm({
-			title: 'Importar backup?',
-			message: `${picked.name} — ${describeBackup(summarizeBackup(imported.data, imported.attachments))}. Os dados atuais serão substituídos.`,
-			confirmLabel: 'Importar'
+			title: m.dialog_import_title(),
+			message: m.dialog_import_message({
+				file: picked.name,
+				summary: describeBackup(summarizeBackup(imported.data, imported.attachments))
+			}),
+			confirmLabel: m.dialog_import()
 		});
 		if (!confirmed) return;
 		await writeSafetyCopy(await currentBackupBytes(), safetyCopyName()).catch(() => null);
@@ -3730,40 +3788,40 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		ready = false;
 		notesVersion += 1;
 		await initialize();
-		toastMessage('Backup importado.');
+		toastMessage(m.dialog_backup_imported());
 	}
 
 	/** S8: updater (GitHub Releases) — só Windows. */
 	async function checkAppUpdate() {
 		if (updaterBusy) return;
 		updaterBusy = true;
-		updaterStatus = 'Procurando atualização…';
+		updaterStatus = m.dialog_update_checking();
 		try {
 			const update = await checkForUpdate();
 			if (!update) {
-				updaterStatus = 'Atlas está na versão mais recente';
+				updaterStatus = m.dialog_update_latest();
 				return;
 			}
-			updaterStatus = `Versão ${update.version} disponível`;
+			updaterStatus = m.dialog_update_available({ version: update.version });
 			const confirmed = await askConfirm({
-				title: 'Instalar atualização?',
-				message: `O Atlas baixa a versão ${update.version}, instala e reinicia.`,
-				confirmLabel: 'Instalar'
+				title: m.dialog_update_install_title(),
+				message: m.dialog_update_install_message({ version: update.version }),
+				confirmLabel: m.dialog_install()
 			});
 			if (!confirmed) {
 				updaterStatus = '';
 				return;
 			}
 			await update.install((percent) => {
-				updaterStatus = percent === null ? 'Baixando…' : `Baixando… ${percent}%`;
+				updaterStatus = percent === null ? m.dialog_update_downloading() : m.dialog_update_downloading_percent({ percent });
 			});
-			updaterStatus = 'Instalado — reabrindo';
-			toastMessage('Atualização instalada.');
+			updaterStatus = m.dialog_update_installed_relaunching();
+			toastMessage(m.dialog_update_installed());
 			await relaunchApp();
 		} catch (error) {
 			console.error(error);
-			updaterStatus = 'Não foi possível atualizar agora';
-			toastMessage('Não foi possível atualizar agora.', { warning: true });
+			updaterStatus = m.dialog_update_failed_status();
+			toastMessage(m.dialog_update_failed(), { warning: true });
 		} finally {
 			updaterBusy = false;
 		}
@@ -3772,9 +3830,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	async function changeCurrency(value: string): Promise<boolean> {
 		if (!snapshot || value === snapshot.preferences.currency) return true;
 		const confirmed = await askConfirm({
-			title: 'Trocar moeda base',
-			message: 'Alterar a moeda base muda apenas a forma de exibição. O Atlas não converte os valores já registrados.',
-			confirmLabel: 'Trocar'
+			title: m.dialog_currency_title(),
+			message: m.dialog_currency_message(),
+			confirmLabel: m.dialog_change()
 		});
 		if (!confirmed) return false;
 		await updatePreferences({ currency: value });
@@ -3794,20 +3852,20 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const weekly = new Set(next.habits.filter((habit) => habit.metric === 'weekly').map((habit) => habit.id));
 		next.habitLogs = remapWeeklyLogs(next.habitLogs, weekly, oldStart, newStart);
 		await commit(next);
-		toastMessage(value === 'sun' ? 'Semana começa no domingo.' : 'Semana começa na segunda.');
+		toastMessage(value === 'sun' ? m.dialog_week_start_sunday() : m.dialog_week_start_monday());
 	}
 
 	async function startPause(event: SubmitEvent) {
 		event.preventDefault();
 		if (!snapshot || pauseForm.until < today) {
-			formError = 'Escolha uma data de retorno futura.';
+			formError = m.shell_pause_error_future();
 			return;
 		}
 		const next = cloneSnapshot();
 		advanceLifeForce(next);
 		if (isCurrentPause(next)) {
 			if (!next.lifeForce.pausedUntil || pauseForm.until <= next.lifeForce.pausedUntil) {
-				formError = 'Escolha uma data posterior à data de retorno atual.';
+				formError = m.shell_pause_error_later();
 				return;
 			}
 		} else {
@@ -3818,7 +3876,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		try { const plugin = await import('@tauri-apps/plugin-notification'); await plugin.cancelAll(); } catch { /* Browser preview has no native queue. */ }
 		wasPaused = true;
 		modal = null;
-		toastMessage(`Pausa ativa até ${pauseUntilLabel(pauseForm.until)}.`);
+		toastMessage(m.shell_pause_started({ date: pauseUntilLabel(pauseForm.until) }));
 	}
 
 	async function endPause() {
@@ -3832,7 +3890,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		modal = null;
 		await commit(next);
 		void syncIOSReminders(next);
-		toastMessage('Pausa encerrada.');
+		toastMessage(m.shell_pause_ended());
 	}
 
 	function isIOSApp(): boolean {
@@ -3888,7 +3946,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 				return;
 			}
 			if (!permission) {
-				notificationDiag = { permission: false, scheduled: 0, next: null, error: 'Permissão não concedida', checkedAt };
+				notificationDiag = { permission: false, scheduled: 0, next: null, error: m.shell_notifications_denied(), checkedAt };
 				return;
 			}
 			const scheduled = buildReminderSchedule(data);
@@ -3948,22 +4006,22 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			if (isMacOSApp()) {
 				// O plugin no macOS usa a API antiga e o banner é descartado em builds
 				// ad-hoc; o osascript entrega em qualquer assinatura.
-				await invoke('native_notification', { title: 'Atlas · teste', body: 'As notificações estão funcionando.' });
+				await invoke('native_notification', { title: m.shell_test_notification_title(), body: m.shell_test_notification_body() });
 			} else if (isTauriApp()) {
 				const plugin = await import('@tauri-apps/plugin-notification');
 				if (!(await plugin.isPermissionGranted()) && (await plugin.requestPermission()) !== 'granted') {
-					toastMessage('Permissão de notificações não concedida.');
+					toastMessage(m.shell_notifications_denied_toast());
 					return;
 				}
-				await plugin.sendNotification({ title: 'Atlas · teste', body: 'As notificações estão funcionando.' });
+				await plugin.sendNotification({ title: m.shell_test_notification_title(), body: m.shell_test_notification_body() });
 			} else {
-				await showNotification('Atlas · teste', 'As notificações estão funcionando.');
+				await showNotification(m.shell_test_notification_title(), m.shell_test_notification_body());
 			}
-			toastMessage('Notificação de teste enviada.');
+			toastMessage(m.shell_test_notification_sent());
 			// Deixa o sistema entregar antes de reler a fila/entregues.
 			setTimeout(() => void refreshNotificationDiagnostics(), 1200);
 		} catch (error) {
-			toastMessage('Não foi possível enviar a notificação de teste.', { warning: true });
+			toastMessage(m.shell_test_notification_failed(), { warning: true });
 			notificationDiag = {
 				permission: null,
 				scheduled: 0,
@@ -3983,7 +4041,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			const due = new Date(`${localDate()}T${habit.reminder}:00`);
 			const key = `reminder-habit-${habit.id}-${localDate()}`;
 			if (now >= due && now.getTime() - due.getTime() < 60_000 && !sessionStorage.getItem(key)) {
-				await showNotification('Atlas · hábito', habit.name);
+				await showNotification(m.shell_notification_habit_title(), habit.name);
 				sessionStorage.setItem(key, 'sent');
 			}
 		}
@@ -3992,7 +4050,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			const due = new Date(`${block.startAt.slice(0, 10)}T${block.reminder}:00`);
 			const key = `reminder-time-${block.id}`;
 			if (now >= due && now.getTime() - due.getTime() < 60_000 && !sessionStorage.getItem(key)) {
-				await showNotification('Atlas · tempo', block.title);
+				await showNotification(m.shell_notification_time_title(), block.title);
 				sessionStorage.setItem(key, 'sent');
 			}
 		}
@@ -4032,7 +4090,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					throw new Error('permission');
 				}
 			} catch {
-				toastMessage('Permissão de notificações não concedida.');
+				toastMessage(m.shell_notifications_denied_toast());
 				return;
 			}
 		}
@@ -4049,11 +4107,11 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function humanDate(date: string, options: Intl.DateTimeFormatOptions = { day: '2-digit', month: 'short' }) {
-		return new Intl.DateTimeFormat('pt-BR', options).format(new Date(`${date}T12:00:00`));
+		return new Intl.DateTimeFormat(i18n.locale, options).format(new Date(`${date}T12:00:00`));
 	}
 
 	function categoryName(categoryId: string): string {
-		return snapshot?.categories.find((item) => item.id === categoryId)?.name ?? 'Sem categoria';
+		return snapshot?.categories.find((item) => item.id === categoryId)?.name ?? m.fin_no_category();
 	}
 
 	function currency() { return snapshot?.preferences.currency ?? 'BRL'; }
@@ -4141,13 +4199,13 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function recentLabel(date: string) {
-		return date === today ? 'Hoje' : humanDate(date);
+		return date === today ? m.fin_today() : humanDate(date);
 	}
 </script>
 
 <svelte:head>
-	<title>Atlas — seu espaço de vida</title>
-	<meta name="description" content="Registre e consulte seus dados de finanças, hábitos e tempo em um espaço local e pessoal." />
+	<title>{m.shell_head_title()}</title>
+	<meta name="description" content={m.shell_head_description()} />
 </svelte:head>
 
 <svelte:window
@@ -4160,17 +4218,18 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	onkeydown={onShellKeydown}
 />
 
+{#key i18n.locale}
 {#if !ready}
-	<div class="loading-screen"><div class="loading-mark">A</div><span>Preparando seu Atlas…</span></div>
+	<div class="loading-screen"><div class="loading-mark">A</div><span>{m.shell_loading()}</span></div>
 {:else if loadError}
-	<div class="loading-screen"><div class="loading-mark">A</div><strong>Atlas não conseguiu abrir</strong><span>{loadError}</span><Button variant="secondary" onclick={() => { ready = false; loadError = ''; void initialize(); }}>Tentar novamente</Button></div>
+	<div class="loading-screen"><div class="loading-mark">A</div><strong>{m.shell_load_failed_title()}</strong><span>{loadError}</span><Button variant="secondary" onclick={() => { ready = false; loadError = ''; void initialize(); }}>{m.shell_retry()}</Button></div>
 {:else if snapshot}
 	<div class:col={sidebarCollapsed} class="app-shell">
-		<aside id="sb" aria-label="Navegação principal">
+		<aside id="sb" aria-label={m.shell_nav_main()}>
 			<div class="sb-head">
 				<div class="sb-logo">A</div>
 				<b class="lab">Atlas</b>
-				<button class="sb-col" aria-label={sidebarCollapsed ? 'Expandir menu' : 'Recolher menu'} onclick={toggleSidebar}><ChevronLeft size={18} /></button>
+				<button class="sb-col" aria-label={sidebarCollapsed ? m.shell_expand_menu() : m.shell_collapse_menu()} onclick={toggleSidebar}><ChevronLeft size={18} /></button>
 			</div>
 			<div class="pf">
 				<div class="ring">
@@ -4178,20 +4237,20 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					<b>{levelProgress.level}</b>
 				</div>
 				<div class="lab">
-					<b>Nível {levelProgress.level}</b>
+					<b>{m.shell_level({ level: levelProgress.level })}</b>
 					<div class="xb"><i style={`width:${levelPercent * 100}%`}></i></div>
 					<div class="r2"><small>{levelProgress.currentXp}/{levelProgress.nextLevelXp} XP</small><span class:paused={pauseActive} class="fire"><Flame size={14} fill="currentColor" /><span>{habitDayStreak}</span></span></div>
 				</div>
 			</div>
-			<button class="sb-new" aria-expanded={quickMenuOpen} onclick={toggleQuickMenu}><Plus size={20} strokeWidth={2.6} /><span class="lab">Novo</span></button>
+			<button class="sb-new" aria-expanded={quickMenuOpen} onclick={toggleQuickMenu}><Plus size={20} strokeWidth={2.6} /><span class="lab">{m.shell_new()}</span></button>
 			{#if quickMenuOpen}
 				<div class="qm-desk">
-					<button onclick={() => quickAction('habit')}><Target size={18} />Hábito</button>
-					<button onclick={() => quickAction('entry')}><Wallet size={18} />Lançamento</button>
-					<button onclick={() => quickAction('note')}><NotebookPen size={18} />Nota</button>
+					<button onclick={() => quickAction('habit')}><Target size={18} />{m.shell_quick_habit()}</button>
+					<button onclick={() => quickAction('entry')}><Wallet size={18} />{m.shell_quick_entry()}</button>
+					<button onclick={() => quickAction('note')}><NotebookPen size={18} />{m.common_note()}</button>
 				</div>
 			{/if}
-			<nav class="nv" aria-label="Seções">
+			<nav class="nv" aria-label={m.shell_sections()}>
 				<i class="sind" style={`transform:translateY(${sidebarIndex * 46}px)`}></i>
 				{#each navItems as item}
 					<button class:on={activeTab === item.id} class="si" data-tip={item.label} onclick={() => goTab(item.id)}>
@@ -4200,64 +4259,64 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 				{/each}
 			</nav>
 			<div class="grow"></div>
-			<nav class="nv" aria-label="Atalhos">
-				<button class="si" data-tip="Lixeira" onclick={() => void openTrash()}><Trash2 size={22} strokeWidth={2} /><span class="lab">Lixeira</span></button>
-				<button class="si" data-tip="Pausar Atlas" onclick={openPauseModal}><Flame size={22} strokeWidth={2} /><span class="lab">Pausa</span></button>
-				<button class="si" data-tip="Configurações" onclick={() => { closeShellMenus(); openSettings(); }}><Settings2 size={22} strokeWidth={2} /><span class="lab">Configurações</span></button>
+			<nav class="nv" aria-label={m.shell_shortcuts()}>
+				<button class="si" data-tip={m.trash_title()} onclick={() => void openTrash()}><Trash2 size={22} strokeWidth={2} /><span class="lab">{m.trash_title()}</span></button>
+				<button class="si" data-tip={m.settings_pause()} onclick={openPauseModal}><Flame size={22} strokeWidth={2} /><span class="lab">{m.shell_pause()}</span></button>
+				<button class="si" data-tip={m.settings_title()} onclick={() => { closeShellMenus(); openSettings(); }}><Settings2 size={22} strokeWidth={2} /><span class="lab">{m.settings_title()}</span></button>
 			</nav>
 		</aside>
 
 		<header class="tb">
 			<h1>{#each navItems as item}{#if item.id === activeTab}<item.icon size={22} />{/if}{/each}{activeNavItem.label}</h1>
-			<span class:paused={pauseActive} class="fire" aria-label={pauseActive ? `Sequência congelada em ${habitDayStreak} dias durante a pausa` : `Sequência de ${habitDayStreak} dias`}><Flame size={20} fill="currentColor" /><span>{habitDayStreak}</span></span>
-			<div class="lv" aria-label={`Nível ${levelProgress.level}`}><b>{levelProgress.level}</b><div class="xb"><i style={`width:${levelPercent * 100}%`}></i></div></div>
+			<span class:paused={pauseActive} class="fire" aria-label={pauseActive ? m.shell_streak_frozen({ count: habitDayStreak }) : m.shell_streak_days({ count: habitDayStreak })}><Flame size={20} fill="currentColor" /><span>{habitDayStreak}</span></span>
+			<div class="lv" aria-label={m.shell_level({ level: levelProgress.level })}><b>{levelProgress.level}</b><div class="xb"><i style={`width:${levelPercent * 100}%`}></i></div></div>
 		</header>
 
 		<main class="workspace">
 			{#if snapshot && pauseActive}
 				<button type="button" class="pause-banner" onclick={openPauseModal}>
 					<Flame size={17} aria-hidden="true" />
-					<span>Atlas em pausa até {pauseUntilLabel()}</span>
-					<b>Encerrar</b>
+					<span>{m.shell_pause_until({ date: pauseUntilLabel() })}</span>
+					<b>{m.shell_pause_end()}</b>
 				</button>
 			{/if}
 			<div id="pg" class={navDirection >= 0 ? 'inr' : 'inl'}>
 				{#if activeTab === 'dashboard'}
-					<section class="dash-prototype" aria-label="Visão geral">
+					<section class="dash-prototype" aria-label={m.shell_nav_dashboard()}>
 						<div class="dash-top">
-							<div><h1>Hoje</h1><small>{humanDate(today, { weekday: 'long', day: 'numeric', month: 'long' })}</small></div>
+							<div><h1>{m.dash_today()}</h1><small>{humanDate(today, { weekday: 'long', day: 'numeric', month: 'long' })}</small></div>
 						</div>
 						<div class="dash-period">
-							<div class="dash-slide" role="tablist" aria-label="Período do dashboard" style={`--i:${period === 'week' ? 0 : period === 'month' ? 1 : 2}`}>
+							<div class="dash-slide" role="tablist" aria-label={m.dash_period_label()} style={`--i:${period === 'week' ? 0 : period === 'month' ? 1 : 2}`}>
 								<span class="dash-slide-knob"></span>
-								<button role="tab" aria-selected={period === 'week'} class:on={period === 'week'} onclick={() => changePeriod('week')}>Esta semana</button>
-								<button role="tab" aria-selected={period === 'month'} class:on={period === 'month'} onclick={() => changePeriod('month')}>Este mês</button>
-								<button role="tab" aria-selected={period === 'custom'} class:on={period === 'custom'} onclick={() => changePeriod('custom')}>Personalizado</button>
+								<button role="tab" aria-selected={period === 'week'} class:on={period === 'week'} onclick={() => changePeriod('week')}>{m.dash_range_week()}</button>
+								<button role="tab" aria-selected={period === 'month'} class:on={period === 'month'} onclick={() => changePeriod('month')}>{m.dash_range_month()}</button>
+								<button role="tab" aria-selected={period === 'custom'} class:on={period === 'custom'} onclick={() => changePeriod('custom')}>{m.dash_range_custom()}</button>
 							</div>
 							<div class="dash-dots">
-								<button aria-label="Esta semana" class:on={period === 'week'} onclick={() => changePeriod('week')}></button>
-								<button aria-label="Este mês" class:on={period === 'month'} onclick={() => changePeriod('month')}></button>
-								<button aria-label="Personalizado" class:on={period === 'custom'} onclick={() => changePeriod('custom')}></button>
+								<button aria-label={m.dash_range_week()} class:on={period === 'week'} onclick={() => changePeriod('week')}></button>
+								<button aria-label={m.dash_range_month()} class:on={period === 'month'} onclick={() => changePeriod('month')}></button>
+								<button aria-label={m.dash_range_custom()} class:on={period === 'custom'} onclick={() => changePeriod('custom')}></button>
 							</div>
-							{#if period === 'custom'}<div class="dash-range"><input aria-label="Início do período" type="date" bind:value={customStart} /><span>→</span><input aria-label="Fim do período" type="date" bind:value={customEnd} /></div>{/if}
+							{#if period === 'custom'}<div class="dash-range"><input aria-label={m.dash_range_start()} type="date" bind:value={customStart} /><span>→</span><input aria-label={m.dash_range_end()} type="date" bind:value={customEnd} /></div>{/if}
 							<span class="dash-range-label">{humanDate(currentRange.start)} — {humanDate(currentRange.end)}</span>
 						</div>
 						<div class="dash-grid">
 							<article class="dash-card dash-w2 dash-life">
-								<h3>Life Force</h3>
+								<h3>{m.dash_life_force()}</h3>
 								<div class="dash-life-row"><strong>{lifeForcePercent}%</strong><span>{lifeForceLabel}</span></div>
 								<div class="dash-bar"><i style={`width:${lifeForcePercent}%`}></i></div>
 							</article>
 							<div class="dash-card dash-cat" aria-hidden="true">
 								<svg class="dash-cat-svg" viewBox="0 0 120 100"><path class="bd" d="M16 42L20 6L54 26Z" /><path class="bd" d="M104 42L100 6L66 26Z" /><ellipse class="bd" cx="60" cy="60" rx="48" ry="38" /><path class="cl" d="M31 58q10 8 20 0M69 58q10 8 20 0" /><path d="M55 69h10l-5 6z" fill="#f1a5c5" /><path d="M60 75q-6 7-12 2M60 75q6 7 12 2" fill="none" stroke="#8d968a" stroke-width="2" stroke-linecap="round" /><text class="z" x="100" y="22">z</text></svg>
-								<b>Invocar</b><small>Em breve</small>
+								<b>{m.dash_invoke()}</b><small>{m.dash_soon()}</small>
 							</div>
-							<button type="button" class="dash-card dash-goal" aria-label="Definir meta do dia" onclick={openDayGoal}>
+							<button type="button" class="dash-card dash-goal" aria-label={m.dash_set_day_goal()} onclick={openDayGoal}>
 								<div class="dash-ring"><svg width="96" height="96" viewBox="0 0 96 96" aria-hidden="true"><circle cx="48" cy="48" r="39" fill="none" stroke="var(--panel-2)" stroke-width="10" /><circle cx="48" cy="48" r="39" fill="none" stroke="var(--lime)" stroke-width="10" stroke-linecap="round" stroke-dasharray="245" stroke-dashoffset={245 * (1 - dashGoalPercent)} /></svg><div class="dash-ring-center">{Math.min(prototypeTodayDone, prototypeTodayGoal)}/{prototypeTodayGoal}</div></div>
-								<small>Meta do dia</small>
+								<small>{m.dash_day_goal()}</small>
 							</button>
 							<article class="dash-card dash-w2">
-								<h3>Saldo · {dashPeriodLabel}</h3>
+								<h3>{m.dash_balance({ period: dashPeriodLabel })}</h3>
 								<div class="dash-big">{money(dashBalance, currency())}</div>
 								<div class="dash-line">
 									<svg viewBox="0 0 300 90" aria-hidden="true"><defs><linearGradient id="dashGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--lime)" stop-opacity=".3" /><stop offset="1" stop-color="var(--lime)" stop-opacity="0" /></linearGradient></defs><path d={dashSpark.area} fill="url(#dashGrad)" /><path class="dr" d={dashSpark.line} /></svg>
@@ -4265,9 +4324,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 								</div>
 							</article>
 							<article class="dash-card dash-w2">
-								<h3>Tempo · {dashPeriodLabel}</h3>
+								<h3>{m.dash_time({ period: dashPeriodLabel })}</h3>
 								{#if dashTime.empty}
-									<p class="dash-empty">Sem tempo alocado no período.</p>
+									<p class="dash-empty">{m.empty_time_period()}</p>
 								{:else}
 									<div class="dash-bars" style={`grid-template-columns: repeat(${dashTime.days.length}, minmax(0, 1fr))`}>
 										{#each dashTime.days as day}
@@ -4278,7 +4337,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 								{/if}
 							</article>
 							<article class="dash-card dash-w2">
-								<h3>Gastos · {dashPeriodLabel}</h3>
+								<h3>{m.dash_expenses({ period: dashPeriodLabel })}</h3>
 								{#if dashExpenses.total}
 									<div class="dash-donut-wrap">
 										<div class="dash-donut">
@@ -4288,44 +4347,44 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 										<div class="dash-legend">{#each dashExpenses.segments as segment}<span><i style={`background:${segment.color}`}></i>{categoryName(segment.categoryId)}</span>{/each}</div>
 									</div>
 								{:else}
-									<p class="dash-empty">Sem gastos no período.</p>
+									<p class="dash-empty">{m.empty_expenses()}</p>
 								{/if}
 							</article>
 							<article class="dash-card dash-w2">
-								<h3>Hábitos · {dashPeriodLabel}</h3>
+								<h3>{m.dash_habits({ period: dashPeriodLabel })}</h3>
 								<div class="dash-heat">{#each dashHabitDays as day}<i class:td={day.today} class:paused={day.paused} style={`--v:${day.value.toFixed(2)}`}></i>{/each}</div>
 							</article>
 							<article class="dash-card dash-w4">
-								<h3>Objetivos</h3>
+								<h3>{m.dash_objectives()}</h3>
 								{#if dashObjectives.rows.length}
 									{#each dashObjectives.rows as row}
 										<button class="dash-obj" onclick={() => setActiveTab('graph')}>
-											<div class="dash-obj-head"><span><i style={`background:${row.color}`}></i>{row.name}</span><small>{row.milestone ? 'Marco' : 'Objetivo'} · {Math.round(row.ratio * 100)}%</small></div>
+											<div class="dash-obj-head"><span><i style={`background:${row.color}`}></i>{row.name}</span><small>{row.milestone ? m.graph_role_milestone() : m.graph_role_goal()} · {Math.round(row.ratio * 100)}%</small></div>
 											<div class="dash-track"><i style={`width:${Math.max(0, Math.min(100, row.ratio * 100))}%`}></i></div>
 										</button>
 									{/each}
-									{#if dashObjectives.extra}<button class="dash-more" onclick={() => setActiveTab('graph')}>+{dashObjectives.extra} na aba Planejamento</button>{/if}
+									{#if dashObjectives.extra}<button class="dash-more" onclick={() => setActiveTab('graph')}>+{m.dash_more_objectives({ count: dashObjectives.extra })}</button>{/if}
 								{:else}
-									<p class="dash-empty">Sem objetivos no grafo ainda.</p>
+									<p class="dash-empty">{m.empty_objectives()}</p>
 								{/if}
 							</article>
 						</div>
 					</section>
 				{:else if activeTab === 'finance'}
-					<section class:paused={pauseActive} class="fin-prototype" aria-label="Finanças">
+					<section class:paused={pauseActive} class="fin-prototype" aria-label={m.settings_module_finance()}>
 						<div class:over={financeBudget.over} class="fin-budget">
 							<div class="fin-budget-head">
-								<span>Orçamento do mês</span>
+								<span>{m.fin_budget_month()}</span>
 								<small>{money(financeBudget.spentMinor, currency())} de {money(financeBudget.allocatedMinor, currency())}</small>
 							</div>
-							<div class="fin-budget-track" role="progressbar" aria-label="Orçamento do mês" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(financeBudget.ratio * 100)}><i style={`width:${financeBudget.ratio * 100}%`}></i></div>
+							<div class="fin-budget-track" role="progressbar" aria-label={m.fin_budget_month()} aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(financeBudget.ratio * 100)}><i style={`width:${financeBudget.ratio * 100}%`}></i></div>
 							<small class="fin-budget-note">
 								{#if financeBudget.allocatedMinor === 0}
-									Sem orçamento definido
+									{m.fin_budget_none()}
 								{:else if financeBudget.over}
-									{money(-financeBudget.remainingMinor, currency())} acima
+									{m.fin_budget_over({ amount: money(-financeBudget.remainingMinor, currency()) })}
 								{:else}
-									restam {money(financeBudget.remainingMinor, currency())}
+									{m.fin_remaining({ amount: money(financeBudget.remainingMinor, currency()) })}
 								{/if}
 							</small>
 						</div>
@@ -4335,20 +4394,20 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 						<div class="fin-grid">
 							<div class="fin-card fin-w2 fin-hero">
 								<div>
-									<h3>Saldo do mês</h3>
+									<h3>{m.fin_month_balance()}</h3>
 									<div class:neg={financeBalance < 0} class="fin-big">{money(financeBalance, currency())}</div>
 									<small>+ {money(financeIncome, currency())}<br />− {money(financeExpense, currency())}</small>
 								</div>
-								<button type="button" class="fin-ring-wrap" aria-label="Definir meta de economia" onclick={openFinanceGoal}>
+								<button type="button" class="fin-ring-wrap" aria-label={m.fin_set_goal()} onclick={openFinanceGoal}>
 									<div class="fin-ring">
 										<svg viewBox="0 0 92 92" aria-hidden="true"><circle cx="46" cy="46" r="37" class="fin-ring-track"/><circle cx="46" cy="46" r="37" class="fin-ring-value" style={`stroke-dashoffset:${233 * (1 - financeGoalPercent)}`}/></svg>
 										<div class="fin-ring-center">{Math.round(financeGoalPercent * 100)}%</div>
 									</div>
-									<small class="fin-ring-caption">meta {money(financeGoal, currency())}</small>
+									<small class="fin-ring-caption">{m.fin_goal_caption({ amount: money(financeGoal, currency()) })}</small>
 								</button>
 							</div>
 						</div>
-						<p class="fin-cats-label">Categorias · {financeGreenCount} de {financeExpenseCategories.length} no verde</p>
+						<p class="fin-cats-label">{m.fin_categories_green({ green: financeGreenCount, total: financeExpenseCategories.length })}</p>
 						<div class="fin-grid">
 							{#each financeCategories as category}
 								{@const isIncome = category.kind === 'in'}
@@ -4367,19 +4426,19 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 											{#if status.limitMinor > 0}
 												<br />
 												{#if status.mode === 'goal'}
-													<span class:goal-badge={status.reached} class="sm">{status.reached ? (status.percentBeyond > 0 ? `+${status.percentBeyond}% além da meta` : 'meta batida') : `faltam ${money(status.remainingMinor, currency())}`}</span>
+													<span class:goal-badge={status.reached} class="sm">{status.reached ? (status.percentBeyond > 0 ? m.fin_goal_beyond({ percent: status.percentBeyond }) : m.fin_goal_hit()) : m.fin_goal_missing({ amount: money(status.remainingMinor, currency()) })}</span>
 												{:else}
-													<span class="sm">{status.over ? `+${money(total - status.limitMinor, currency())} acima` : `restam ${money(status.remainingMinor, currency())}`}</span>
+													<span class="sm">{status.over ? m.fin_limit_over_short({ amount: money(total - status.limitMinor, currency()) }) : m.fin_remaining({ amount: money(status.remainingMinor, currency()) })}</span>
 												{/if}
 											{/if}
 										</span>
 									</button>
 								{/if}
 							{/each}
-							<button class="fin-card fin-cat-card fin-new" onclick={() => openFinanceCategory(false)}>+ Categoria</button>
+							<button class="fin-card fin-cat-card fin-new" onclick={() => openFinanceCategory(false)}>+ {m.fin_new_category()}</button>
 						</div>
 						<div class="fin-card fin-w2 fin-lanc-card" style="margin-top:6px">
-							<h3>Lançamentos</h3>
+							<h3>{m.fin_entries()}</h3>
 							{#if financeRecent.length}
 								{#each financeRecent as item}
 									{@const itemCategory = currentCategory(item.categoryId)}
@@ -4387,25 +4446,25 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 										<i class="dot" style={`background:${itemCategory?.color ?? '#888888'}`}></i>
 										<span>{itemCategory?.name ?? '—'}<small>{shortDay(item.date)}</small></span>
 										<b style={`color:${item.type === 'income' ? 'var(--fp-acc)' : 'var(--fp-tx)'}`}>{item.type === 'income' ? '+' : '−'} {money(item.amountMinor, currency())}</b>
-										<button class="x" aria-label="Remover lançamento" onclick={() => removeFinanceTransaction(item.id)}>×</button>
+										<button class="x" aria-label={m.fin_remove_entry()} onclick={() => removeFinanceTransaction(item.id)}>×</button>
 									</div>
 								{/each}
 							{:else}
-								<div class="fin-if-empty">Nenhum lançamento ainda.</div>
+								<div class="fin-if-empty">{m.empty_fin_entries()}</div>
 							{/if}
 						</div>
 						{#if testModeActive}
-							<div class="fin-dev"><button onclick={clearFinanceTransactions}>Limpar lançamentos</button></div>
+							<div class="fin-dev"><button onclick={clearFinanceTransactions}>{m.fin_clear_entries()}</button></div>
 						{/if}
 					</section>
 				{:else if activeTab === 'habits'}
 					{#if snapshot}
 						<div class="habit-switch">
 							<Segmented
-								label="Seção de hábitos"
+								label={m.habit_section_label()}
 								options={[
-									{ value: 'habits', label: 'Hábitos' },
-									{ value: 'trackers', label: 'Trackers' }
+									{ value: 'habits', label: m.shell_nav_habits() },
+									{ value: 'trackers', label: m.habit_trackers() }
 								]}
 								value={habitView}
 								onchange={(value) => changeHabitView(value === 'trackers' ? 'trackers' : 'habits')}
@@ -4414,26 +4473,26 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 						<div
 							class="habit-pager"
 							role="group"
-							aria-label="Hábitos e trackers"
+							aria-label={m.habit_pager_label()}
 							bind:this={habitPagerEl}
 							onscroll={onHabitScroll}
 							use:scrollEnd
 						>
 							<div class="habit-pane" aria-hidden={habitView !== 'habits'} inert={habitView !== 'habits'}>
-									<section class:paused={pauseActive} class="habit-prototype" aria-label="Hábitos">
+									<section class:paused={pauseActive} class="habit-prototype" aria-label={m.shell_nav_habits()}>
 										<div class="habit-prototype-top">
-											<div class="habit-prototype-level"><small>Nível {levelProgress.level}</small><div class="habit-prototype-xpbar"><i style={`width:${levelProgress.currentXp / levelProgress.nextLevelXp * 100}%`}></i></div></div>
+											<div class="habit-prototype-level"><small>{m.shell_level({ level: levelProgress.level })}</small><div class="habit-prototype-xpbar"><i style={`width:${levelProgress.currentXp / levelProgress.nextLevelXp * 100}%`}></i></div></div>
 										</div>
 
 										<div class="habit-prototype-grid">
-											<button type="button" class:readonly={habitSelectedDate !== today} class="habit-prototype-card habit-prototype-wide habit-prototype-hero" aria-label={habitSelectedDate === today ? 'Definir meta do dia' : `Meta de ${habitDateLabel(habitSelectedDate)}`} disabled={habitSelectedDate !== today} onclick={openDayGoal}>
+											<button type="button" class:readonly={habitSelectedDate !== today} class="habit-prototype-card habit-prototype-wide habit-prototype-hero" aria-label={habitSelectedDate === today ? m.dash_set_day_goal() : m.habit_goal_of_date({ date: habitDateLabel(habitSelectedDate) })} disabled={habitSelectedDate !== today} onclick={openDayGoal}>
 												<div class="habit-prototype-ring"><svg width="84" height="84" viewBox="0 0 84 84" aria-hidden="true"><circle cx="42" cy="42" r="34" class="habit-prototype-ring-track"/><circle cx="42" cy="42" r="34" class="habit-prototype-ring-value" style={`stroke-dashoffset:${214 * (1 - (habitSelectedGoal ? Math.min(habitSelectedDone, habitSelectedGoal) / habitSelectedGoal : 0))}`}/></svg><strong>{Math.min(habitSelectedDone, habitSelectedGoal)}<small>/{habitSelectedGoal}</small></strong></div>
-												<div><h2>{habitSelectedDate !== today ? `Meta de ${habitDateLabel(habitSelectedDate)}` : habitSelectedGoal > 0 && habitSelectedDone >= habitSelectedGoal ? 'Meta concluída' : 'Meta do dia'}</h2><p>{habitSelectedGoal > 0 && habitSelectedDone >= habitSelectedGoal ? 'Continue se quiser ir além' : `Faltam ${Math.max(0, habitSelectedGoal - habitSelectedDone)}`}</p></div>
+												<div><h2>{habitSelectedDate !== today ? m.habit_goal_of_date({ date: habitDateLabel(habitSelectedDate) }) : habitSelectedGoal > 0 && habitSelectedDone >= habitSelectedGoal ? m.habit_goal_done() : m.dash_day_goal()}</h2><p>{habitSelectedGoal > 0 && habitSelectedDone >= habitSelectedGoal ? m.habit_goal_continue() : m.habit_goal_remaining({ count: Math.max(0, habitSelectedGoal - habitSelectedDone) })}</p></div>
 											</button>
-											<section class:away={habitSelectedDate !== today} class="habit-prototype-card habit-prototype-wide habit-prototype-week" aria-label="Sequência da semana">
+											<section class:away={habitSelectedDate !== today} class="habit-prototype-card habit-prototype-wide habit-prototype-week" aria-label={m.habit_week_streak()}>
 												<div class="habit-week-head">
 													<span>{habitDateLongLabel(habitSelectedDate)}</span>
-													{#if habitSelectedDate !== today}<button type="button" class="habit-week-today" onclick={selectHabitToday}>Hoje</button>{/if}
+													{#if habitSelectedDate !== today}<button type="button" class="habit-week-today" onclick={selectHabitToday}>{m.habit_today()}</button>{/if}
 												</div>
 												<div class="habit-week-days">
 													{#each habitWeekDays as day}
@@ -4446,7 +4505,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 															class="habit-prototype-day"
 															disabled={day.date > today}
 															aria-pressed={day.date === habitSelectedDate}
-															aria-label={`${day.label} ${day.date}${reached ? ' · meta batida' : ''}`}
+															aria-label={reached ? m.habit_day_aria_hit({ label: day.label, date: day.date }) : m.habit_day_aria({ label: day.label, date: day.date })}
 															onclick={() => selectHabitDay(day.date)}
 															onpointerdown={(event) => startHabitDayPress(event, day.date)}
 															onpointermove={moveHabitDayPress}
@@ -4462,7 +4521,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 										<div class="habit-prototype-grid habit-prototype-habits">
 											<button class="habit-prototype-card habit-prototype-empty" onclick={() => openHabit()}>
-												<Plus size={20} /> Hábito
+												<Plus size={20} /> {m.habit_new()}
 											</button>
 											{#each snapshot.habits.filter((habit) => habit.active) as habit (habit.id)}
 												{@const scheduledDay = habit.metric === 'weekly' || habit.scheduledDays.includes(new Date(`${habitSelectedDate}T12:00:00`).getDay())}
@@ -4473,21 +4532,21 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 													{@const touched = Boolean(weekLog?.incrementDates?.includes(habitSelectedDate) || weekLog?.lastIncrementDate === habitSelectedDate)}
 													<div class="hcard habit-prototype-wide">
 														<section role="group" class:done={complete} class:touched class="habit-prototype-card habit-prototype-wide habit-prototype-pips" data-habit-id={habit.id} onpointerdown={(event) => startHabitPress(event, habit)}>
-															<div class="habit-prototype-row"><b>{habit.name}<span class="habit-week-chip">semana</span></b><small>{count} de {habit.target} na semana</small></div>
+															<div class="habit-prototype-row"><b>{habit.name}<span class="habit-week-chip">{m.habit_week_chip()}</span></b><small>{m.habit_weekly_progress({ value: count, target: habit.target })}</small></div>
 															<div class="habit-prototype-pip-track">
 																{#each Array.from({ length: WEEK_MAX }, (_, index) => index + 1) as step}
-																	<button class="habit-prototype-pip" class:on={step <= count} class:goal={step === habit.target} aria-label={`${step} de ${WEEK_MAX} na semana`} aria-pressed={step <= count} onclick={() => { if (habitPressSuppress) return; setWeeklyValue(habit, count === step ? step - 1 : step); }}></button>
+																	<button class="habit-prototype-pip" class:on={step <= count} class:goal={step === habit.target} aria-label={m.habit_weekly_progress({ value: step, target: WEEK_MAX })} aria-pressed={step <= count} onclick={() => { if (habitPressSuppress) return; setWeeklyValue(habit, count === step ? step - 1 : step); }}></button>
 																{/each}
 															</div>
 														</section>
-														<button class="hcard-more" aria-label={`Opções de ${habit.name}`} onclick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openHabitMenu(habit, rect.left, rect.bottom + 6); }}><MoreHorizontal size={16} /></button>
+														<button class="hcard-more" aria-label={m.habit_options({ name: habit.name })} onclick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); openHabitMenu(habit, rect.left, rect.bottom + 6); }}><MoreHorizontal size={16} /></button>
 													</div>
 												{:else}
 													{@const log = snapshot.habitLogs.find((item) => item.habitId === habit.id && item.date === habitSelectedDate)}
 													{@const value = log?.value ?? 0}
 													{@const complete = log ? didMeetTarget(habit, value) : false}
 													{@const progress = log ? habitProgress(habit, value) : 0}
-													{@const label = habit.metric === 'boolean' ? (!scheduledDay && !log ? '–' : log ? booleanLabelOf(habit, value, HABIT_BOOLEAN_LABELS) : habitSelectedDate === today ? 'Hoje' : '—') : prototypeValue(habit, value)}
+													{@const label = habit.metric === 'boolean' ? (!scheduledDay && !log ? '–' : log ? booleanLabelOf(habit, value, HABIT_BOOLEAN_LABELS) : habitSelectedDate === today ? m.habit_today() : '—') : prototypeValue(habit, value)}
 													<div class="hcard" class:off={!scheduledDay}>
 														<button
 															class:done={complete}
@@ -4502,15 +4561,15 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 															oncontextmenu={(event) => { event.preventDefault(); openHabitMenu(habit, event.clientX, event.clientY); }}
 															onpointerdown={(event) => startHabitPress(event, habit)}
 														>
-															<b>{habit.name}</b><span><span class="habit-prototype-value" class:idle={habit.metric === 'boolean' && !log}>{label}</span><br /><small>{!scheduledDay ? 'Fora do dia' : habit.metric === 'boolean' ? (log ? (complete ? 'Concluído' : 'Registrado') : 'Toque para registrar') : `meta ${prototypeValue(habit, habit.target)}`}</small></span>{#if complete}<i class="habit-prototype-check"><Check size={15} /></i>{/if}
+															<b>{habit.name}</b><span><span class="habit-prototype-value" class:idle={habit.metric === 'boolean' && !log}>{label}</span><br /><small>{!scheduledDay ? m.habit_off_day() : habit.metric === 'boolean' ? (log ? (complete ? m.habit_done() : m.habit_logged()) : m.habit_tap_to_log()) : m.habit_target({ value: prototypeValue(habit, habit.target) })}</small></span>{#if complete}<i class="habit-prototype-check"><Check size={15} /></i>{/if}
 														</button>
-														<button class="hcard-more" aria-label={`Opções de ${habit.name}`} onclick={(event) => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); openHabitMenu(habit, rect.left, rect.bottom + 6); }}><MoreHorizontal size={16} /></button>
+														<button class="hcard-more" aria-label={m.habit_options({ name: habit.name })} onclick={(event) => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); openHabitMenu(habit, rect.left, rect.bottom + 6); }}><MoreHorizontal size={16} /></button>
 													</div>
 												{/if}
 											{/each}
 										</div>
 										{#if testModeActive}
-											<div class="habit-prototype-dev"><button onclick={resetPrototypeDay}>Reiniciar dia</button></div>
+											<div class="habit-prototype-dev"><button onclick={resetPrototypeDay}>{m.habit_reset_day()}</button></div>
 										{/if}
 									</section>
 								</div>
@@ -4532,12 +4591,12 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 						</div>
 					{/if}
 				{:else if activeTab === 'time'}
-					<section class:paused={pauseActive} class="tp-prototype" aria-label="Tempo">
+					<section class:paused={pauseActive} class="tp-prototype" aria-label={m.settings_module_time()}>
 						<div class="tp-top">
-							<div><h1>Tempo</h1><small class="tp-info">{timeTotalsLabel}</small></div>
+							<div><h1>{m.settings_module_time()}</h1><small class="tp-info">{timeTotalsLabel}</small></div>
 							<div class="tp-top-actions">
-								<button class="tp-ic" aria-label="Período" title="Selecionar período" onclick={() => (timeCalendarOpen = true)}><CalendarDays size={18} /></button>
-								<button class="tp-ic" aria-label="Resumo" onclick={openTimeSummary}>Σ</button>
+								<button class="tp-ic" aria-label={m.planner_range_title()} title={m.planner_range_pick()} onclick={() => (timeCalendarOpen = true)}><CalendarDays size={18} /></button>
+								<button class="tp-ic" aria-label={m.time_summary()} onclick={openTimeSummary}>Σ</button>
 							</div>
 						</div>
 						<div class="tp-pal">
@@ -4546,22 +4605,22 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 								{@const rangeGoal = ((category.weeklyGoalHours ?? 0) * timeRangeDays) / 7}
 								<button class:on={timeSelected === category.id} class="tp-cat" style={`--cc:${category.color}`} onclick={() => selectTimeCategory(category.id)} onpointerdown={(event) => startTimeCategoryPress(event, category)} onpointermove={moveTimeCategoryPress} onpointerup={(event) => endTimeCategoryPress(event, category)} onpointercancel={cancelTimeCategoryPress} oncontextmenu={(event) => event.preventDefault()}><i></i>{category.name}{#if rangeGoal > 0}<small>{hmSlots(hours * 2)}/{hmSlots(rangeGoal * 2)}</small>{/if}</button>
 							{/each}
-							<button class:on={timeSelected === 'x'} class="tp-cat" style="--cc:#828d7d" onclick={() => selectTimeCategory('x')}><i></i>Borracha</button>
-							<button class="tp-cat add" onclick={() => openTimeCategorySheet(null)}>+ Categoria</button>
+							<button class:on={timeSelected === 'x'} class="tp-cat" style="--cc:#828d7d" onclick={() => selectTimeCategory('x')}><i></i>{m.time_eraser()}</button>
+							<button class="tp-cat add" onclick={() => openTimeCategorySheet(null)}>+ {m.time_new_category()}</button>
 						</div>
 						<div class="tp-scroll" bind:this={timeScroll} onscroll={handleTimeScroll} style={`--tp-cw:${timeColumnWidth}px`}>
 							<div class="tp-head" style={`grid-template-columns:38px repeat(${timeRangeDays}, var(--tp-cw))`}>
 								<span class="tp-corner"></span>
 								{#each timeHeaderDays as header, index}<span class:td={index === timeTodayIndex} class="tp-h">{header.label}<b>{header.dayNumber}</b></span>{/each}
 							</div>
-							<div class="tp-grid" role="grid" tabindex="0" aria-label="Grade de tempo" style={`grid-template-columns:38px repeat(${timeRangeDays}, var(--tp-cw))`} bind:this={timeGridEl} onpointerdown={beginTimePaint} oncontextmenu={(event) => event.preventDefault()} use:timeGestures>
+							<div class="tp-grid" role="grid" tabindex="0" aria-label={m.time_grid()} style={`grid-template-columns:38px repeat(${timeRangeDays}, var(--tp-cw))`} bind:this={timeGridEl} onpointerdown={beginTimePaint} oncontextmenu={(event) => event.preventDefault()} use:timeGestures>
 								{#each Array.from({ length: TIME_SLOT_COUNT }, (_, index) => index) as slot}
 									<span class="tp-rl">{slot % 2 === 0 ? `${String(TIME_SLOT_START_HOUR + slot / 2).padStart(2, '0')}:00` : ''}</span>
 									{#each Array.from({ length: timeRangeDays }, (_, index) => index) as day}
 										{@const cell = timeCellData(day, slot)}
 										{@const cellBlock = timeGridBlocks[day]?.[slot] ?? null}
 										{@const hasNotes = cellBlock ? timeBlockNotes.has(cellBlock) : false}
-										<div class:on={cell.categoryId} class:st={cell.isStart} class:en={cell.isEnd} class:hr={slot % 2 === 0} class:nt={hasNotes} class="tp-c" style={cell.categoryId ? `--cc:${cell.color}` : ''} data-tp-day={day} data-tp-slot={slot} data-tp-block={cellBlock ?? ''} aria-label={`${timeHeaderDays[day].label} ${slotToTime(slot)}${hasNotes ? ' · tem nota' : ''}`}>{cell.label}</div>
+										<div class:on={cell.categoryId} class:st={cell.isStart} class:en={cell.isEnd} class:hr={slot % 2 === 0} class:nt={hasNotes} class="tp-c" style={cell.categoryId ? `--cc:${cell.color}` : ''} data-tp-day={day} data-tp-slot={slot} data-tp-block={cellBlock ?? ''} aria-label={hasNotes ? m.time_cell_notes({ label: timeHeaderDays[day].label, time: slotToTime(slot) }) : m.time_cell({ label: timeHeaderDays[day].label, time: slotToTime(slot) })}>{cell.label}</div>
 									{/each}
 								{/each}
 								{#if timeNow}<div class="tp-now" style={`top:${timeNow.top}px;left:${timeNow.left}px;width:${timeNow.width}px`}></div>{/if}
@@ -4589,27 +4648,27 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 				{/if}
 			</div>
 			{#if activeTab === 'finance'}
-				<button class="fin-fab" aria-label="Novo lançamento" onclick={() => openFinanceEntry()}>+</button>
+				<button class="fin-fab" aria-label={m.fin_new_entry()} onclick={() => openFinanceEntry()}>+</button>
 			{/if}
 		</main>
 
-		<nav id="bn" aria-label="Navegação rápida">
+		<nav id="bn" aria-label={m.shell_nav_quick()}>
 			<div class="bg"></div>
 			<i class="ind" style={`left:calc((${bottomIndex} + 0.5) * 20% - 13px)`}></i>
-			<button class:on={activeTab === 'dashboard'} aria-label="Visão geral" onclick={() => goTab('dashboard')}><LayoutDashboard size={23} /><span>Visão</span></button>
-			<button class:on={activeTab === 'habits'} aria-label="Hábitos" onclick={() => goTab('habits')}><Target size={23} /><span>Hábitos</span></button>
+			<button class:on={activeTab === 'dashboard'} aria-label={m.shell_nav_dashboard()} onclick={() => goTab('dashboard')}><LayoutDashboard size={23} /><span>{m.shell_tab_overview()}</span></button>
+			<button class:on={activeTab === 'habits'} aria-label={m.shell_nav_habits()} onclick={() => goTab('habits')}><Target size={23} /><span>{m.shell_nav_habits()}</span></button>
 			<span class="sp"></span>
-			<button class:on={activeTab === 'time'} aria-label="Tempo" onclick={() => goTab('time')}><CalendarDays size={23} /><span>Tempo</span></button>
-			<button class:on={MORE_TABS.includes(activeTab)} aria-label="Mais" aria-expanded={moreMenuOpen} onclick={toggleMoreMenu}><Menu size={23} /><span>Mais</span></button>
-			<button id="plus" class:on={quickMenuOpen} aria-label="Adicionar" aria-expanded={quickMenuOpen} onclick={toggleQuickMenu}>
+			<button class:on={activeTab === 'time'} aria-label={m.settings_module_time()} onclick={() => goTab('time')}><CalendarDays size={23} /><span>{m.settings_module_time()}</span></button>
+			<button class:on={MORE_TABS.includes(activeTab)} aria-label={m.shell_more()} aria-expanded={moreMenuOpen} onclick={toggleMoreMenu}><Menu size={23} /><span>{m.shell_more()}</span></button>
+			<button id="plus" class:on={quickMenuOpen} aria-label={m.shell_add()} aria-expanded={quickMenuOpen} onclick={toggleQuickMenu}>
 				<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="pl" d="M12 5v14M5 12h14" /><circle class="rg" cx="12" cy="12" r="7" /></svg>
 			</button>
 		</nav>
 
 		<div id="qm" class:on={quickMenuOpen}>
-			<button class="qi" onclick={() => quickAction('habit')}><span class="qc"><Target size={24} /></span><span>Hábito</span></button>
-			<button class="qi" onclick={() => quickAction('entry')}><span class="qc"><Wallet size={24} /></span><span>Lançamento</span></button>
-			<button class="qi" onclick={() => quickAction('note')}><span class="qc"><NotebookPen size={24} /></span><span>Nota</span></button>
+			<button class="qi" onclick={() => quickAction('habit')}><span class="qc"><Target size={24} /></span><span>{m.shell_quick_habit()}</span></button>
+			<button class="qi" onclick={() => quickAction('entry')}><span class="qc"><Wallet size={24} /></span><span>{m.shell_quick_entry()}</span></button>
+			<button class="qi" onclick={() => quickAction('note')}><span class="qc"><NotebookPen size={24} /></span><span>{m.common_note()}</span></button>
 		</div>
 
 		<div id="mm" class:on={moreMenuOpen}>
@@ -4620,12 +4679,12 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					<button class="mi" style={`--i:${index}`} onclick={() => goTab(tab.id)}><TabIcon size={22} />{tab.label}</button>
 				{/if}
 			{/each}
-			<button class="mi" style="--i:3" onclick={() => void openTrash()}><Trash2 size={22} />Lixeira</button>
-			<button class="mi hr" style="--i:4" onclick={openPauseModal}><Flame size={22} />Pausa</button>
+			<button class="mi" style="--i:3" onclick={() => void openTrash()}><Trash2 size={22} />{m.trash_title()}</button>
+			<button class="mi hr" style="--i:4" onclick={openPauseModal}><Flame size={22} />{m.shell_pause()}</button>
 			{#if testModeActive}
-				<button class="mi warn" style="--i:5" onclick={() => { closeShellMenus(); void toggleTestMode(false); }}><FlaskConical size={22} />Sair do modo de teste</button>
+				<button class="mi warn" style="--i:5" onclick={() => { closeShellMenus(); void toggleTestMode(false); }}><FlaskConical size={22} />{m.shell_exit_test_mode()}</button>
 			{/if}
-			<button class="mi" style={`--i:${testModeActive ? 6 : 5}`} onclick={() => { closeShellMenus(); openSettings(); }}><Settings2 size={22} />Configurações</button>
+			<button class="mi" style={`--i:${testModeActive ? 6 : 5}`} onclick={() => { closeShellMenus(); openSettings(); }}><Settings2 size={22} />{m.settings_title()}</button>
 		</div>
 
 		<div id="ov" class:on={quickMenuOpen || moreMenuOpen} role="presentation" onclick={closeShellMenus}></div>
@@ -4696,9 +4755,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			step={prototypeSheetStep(sheetHabit)}
 			unit={sheetHabit.metric === 'duration' ? '' : sheetHabit.unit}
 			duration={sheetHabit.metric === 'duration'}
-			hint={`Meta ${prototypeValue(sheetHabit, sheetHabit.target)}`}
+			hint={m.common_goal_value({ value: prototypeValue(sheetHabit, sheetHabit.target) })}
 			accentAt={sheetHabit.target}
-			saveLabel="Registrar"
+			saveLabel={m.habit_log_action()}
 			presets={prototypePresets(sheetHabit).map((preset) => ({
 				value: preset,
 				label: sheetHabit.unit.toLowerCase() === 'ml' ? `+${prototypeValue(sheetHabit, preset)}` : prototypeValue(sheetHabit, preset),
@@ -4735,7 +4794,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	{#if habitLogEdit}
 		{@const editHabit = habitLogEdit.habit}
 		{#if editHabit.metric === 'boolean'}
-			<Sheet title="Editar registro" closeLabel="Fechar" onclose={() => (habitLogEdit = null)}>
+			<Sheet title={m.habit_edit_log()} closeLabel={m.common_close()} onclose={() => (habitLogEdit = null)}>
 				<form
 					class="sheet-form"
 					onsubmit={(event) => {
@@ -4744,7 +4803,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					}}
 				>
 					<Segmented
-						label="Registro"
+						label={m.habit_log_label()}
 						options={[
 							{ value: '1', label: booleanLabelOf(editHabit, 1, HABIT_BOOLEAN_LABELS) },
 							{ value: '0', label: booleanLabelOf(editHabit, 0, HABIT_BOOLEAN_LABELS) }
@@ -4753,26 +4812,26 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 						onchange={(value) => (habitLogEditValue = value === '0' ? 0 : 1)}
 					/>
 					<div class="sheet-actions">
-						<Button variant="danger" onclick={() => void deleteHabitLogEdit()}>Excluir</Button>
-						<Button variant="secondary" onclick={() => (habitLogEdit = null)}>Cancelar</Button>
-						<Button type="submit">Salvar</Button>
+						<Button variant="danger" onclick={() => void deleteHabitLogEdit()}>{m.common_delete()}</Button>
+						<Button variant="secondary" onclick={() => (habitLogEdit = null)}>{m.common_cancel()}</Button>
+						<Button type="submit">{m.common_save()}</Button>
 					</div>
 				</form>
 			</Sheet>
 		{:else}
 			<ValueSheet
-				title={`Editar ${editHabit.name}`}
+				title={m.habit_edit_named({ name: editHabit.name })}
 				value={habitLogEditValue}
 				max={prototypeSheetMax(editHabit)}
 				step={prototypeSheetStep(editHabit)}
 				unit={editHabit.metric === 'duration' ? '' : editHabit.unit}
 				duration={editHabit.metric === 'duration'}
-				hint={`Meta ${prototypeValue(editHabit, editHabit.target)}`}
+				hint={m.common_goal_value({ value: prototypeValue(editHabit, editHabit.target) })}
 				presets={editHabit.metric === 'weekly' ? [] : prototypePresets(editHabit).map((preset) => ({
 					value: preset,
 					label: prototypeValue(editHabit, preset)
 				}))}
-				saveLabel="Salvar"
+				saveLabel={m.common_save()}
 				onchange={(value) => (habitLogEditValue = value)}
 				onsave={() => void saveHabitLogEdit()}
 				ondelete={() => void deleteHabitLogEdit()}
@@ -4782,17 +4841,17 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	{/if}
 
 	{#if dayGoalSheet}
-		<Sheet title="Meta do dia" closeLabel="Fechar" onclose={() => (dayGoalSheet = false)}>
+		<Sheet title={m.habit_day_goal()} closeLabel={m.common_close()} onclose={() => (dayGoalSheet = false)}>
 			<div class="sheet-form">
-				<p class="goal-hint">Quantos hábitos concluir por dia? Conta também os semanais.</p>
+				<p class="goal-hint">{m.habit_day_goal_hint()}</p>
 				<div class="goal-stepper">
-					<button type="button" aria-label="Diminuir meta" onclick={() => setDayGoalDraft(dayGoalDraft - 1)}>−</button>
+					<button type="button" aria-label={m.habit_decrease_goal()} onclick={() => setDayGoalDraft(dayGoalDraft - 1)}>−</button>
 					<input
 						type="number"
 						min="1"
 						max="12"
 						inputmode="numeric"
-						aria-label="Meta de hábitos por dia"
+						aria-label={m.habit_goal_per_day()}
 						value={dayGoalDraft}
 						oninput={(event) => {
 							const value = Number(event.currentTarget.value);
@@ -4803,16 +4862,16 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 							if (event.key === 'Enter') event.currentTarget.blur();
 						}}
 					/>
-					<button type="button" aria-label="Aumentar meta" onclick={() => setDayGoalDraft(dayGoalDraft + 1)}>+</button>
+					<button type="button" aria-label={m.habit_increase_goal()} onclick={() => setDayGoalDraft(dayGoalDraft + 1)}>+</button>
 				</div>
 				<div class="goal-chips">
 					{#each [1, 2, 3, 4, 5, 6, 7] as value}
-						<button type="button" class:on={dayGoalDraft === value} aria-label={`Meta ${value}`} onclick={() => setDayGoalDraft(value)}>{value}</button>
+						<button type="button" class:on={dayGoalDraft === value} aria-label={m.common_goal_value({ value })} onclick={() => setDayGoalDraft(value)}>{value}</button>
 					{/each}
 				</div>
 				<div class="sheet-actions">
-					<Button variant="secondary" onclick={() => (dayGoalSheet = false)}>Cancelar</Button>
-					<Button onclick={saveDayGoal}>Salvar</Button>
+					<Button variant="secondary" onclick={() => (dayGoalSheet = false)}>{m.common_cancel()}</Button>
+					<Button onclick={saveDayGoal}>{m.common_save()}</Button>
 				</div>
 			</div>
 		</Sheet>
@@ -4824,72 +4883,72 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			y={habitMenu.y}
 			onclose={() => (habitMenu = null)}
 			items={[
-				{ label: 'Histórico', icon: History, action: () => openHabitHistory(habitMenu!.habit) },
-				{ label: 'Editar', icon: Pencil, action: () => openHabit(habitMenu!.habit) },
+				{ label: m.habit_history(), icon: History, action: () => openHabitHistory(habitMenu!.habit) },
+				{ label: m.common_edit(), icon: Pencil, action: () => openHabit(habitMenu!.habit) },
 				{
-					label: habitMenu.habit.active ? 'Arquivar' : 'Reativar',
+					label: habitMenu.habit.active ? m.habit_archive() : m.habit_unarchive(),
 					icon: habitMenu.habit.active ? Archive : ArchiveRestore,
 					action: () => archiveHabit(habitMenu!.habit, !habitMenu!.habit.active)
 				},
-				{ label: 'Excluir', danger: true, action: () => deleteHabit(habitMenu!.habit) }
+				{ label: m.common_delete(), danger: true, action: () => deleteHabit(habitMenu!.habit) }
 			]}
 		/>
 	{/if}
 
 	{#if habitCelebration !== null}
-		<div class="habit-prototype-celebration" role="dialog" aria-modal="true" aria-label="Meta do dia concluída">
+		<div class="habit-prototype-celebration" role="dialog" aria-modal="true" aria-label={m.habit_goal_complete()}>
 			<svg viewBox="0 0 24 24" width="120" height="120" aria-hidden="true"><path fill="currentColor" d="M12 2c.8 3.6 5.5 5.6 5.5 11a5.5 5.5 0 0 1-11 0c0-2.6 1.6-3.8 2.6-5.6.9 1.7 2.1 1.9 2.1.3 0-1.8.1-3.6.8-5.7z"/></svg>
-			<strong>{habitCelebration}</strong><h2>Meta do dia concluída</h2><p>dias seguidos</p><button class="habit-prototype-save" onclick={() => (habitCelebration = null)}>Continuar</button>
+			<strong>{habitCelebration}</strong><h2>{m.habit_goal_complete()}</h2><p>{m.habit_days_streak()}</p><button class="habit-prototype-save" onclick={() => (habitCelebration = null)}>{m.dialog_continue()}</button>
 		</div>
 	{/if}
 
 	{#if financeEntry.open}
 		<div class="fin-overlay" role="presentation" in:fade={{ duration: prefersReducedMotion() ? 0 : 150 }} out:fade={{ duration: prefersReducedMotion() ? 0 : 150 }} onpointerdown={onFinOverlayPointerDown} onclick={(event) => onFinOverlayClick(event, () => (financeEntry = { ...financeEntry, open: false }))}>
-			<div class="fin-sheet" out:fly={{ y: 140, duration: prefersReducedMotion() ? 0 : 180 }} role="dialog" aria-modal="true" aria-label="Novo lançamento">
+			<div class="fin-sheet" out:fly={{ y: 140, duration: prefersReducedMotion() ? 0 : 180 }} role="dialog" aria-modal="true" aria-label={m.fin_new_entry()}>
 				<div class="fin-grip"></div>
-				<div class="fin-seg"><button class:on={financeEntry.type === 'expense'} onclick={() => setFinanceEntryType('expense')}>Despesa</button><button class:on={financeEntry.type === 'income'} onclick={() => setFinanceEntryType('income')}>Receita</button></div>
+				<div class="fin-seg"><button class:on={financeEntry.type === 'expense'} onclick={() => setFinanceEntryType('expense')}>{m.fin_expense()}</button><button class:on={financeEntry.type === 'income'} onclick={() => setFinanceEntryType('income')}>{m.fin_income()}</button></div>
 				<div class:in={financeEntry.type === 'income'} class="fin-amt">{money(financeEntry.amountMinor, currency())}</div>
-				<input class="fin-inp" placeholder="Descrição (opcional)" maxlength="40" bind:value={financeEntry.description} />
-				<div class="fin-chips">{#each financeEntryCategories as category}<button class:on={financeEntry.categoryId === category.id} class="fin-chip" style={`--cc:${category.color}`} onclick={() => setFinanceEntryCategory(category.id)}><i></i>{category.name}</button>{/each}<button class="fin-chip fin-new" onclick={() => openFinanceCategory(true)}>+ Nova</button></div>
+				<input class="fin-inp" placeholder={m.fin_description_optional()} maxlength="40" bind:value={financeEntry.description} />
+				<div class="fin-chips">{#each financeEntryCategories as category}<button class:on={financeEntry.categoryId === category.id} class="fin-chip" style={`--cc:${category.color}`} onclick={() => setFinanceEntryCategory(category.id)}><i></i>{category.name}</button>{/each}<button class="fin-chip fin-new" onclick={() => openFinanceCategory(true)}>+ {m.fin_new_short()}</button></div>
 				<div class="fin-kp">{#each ['1', '2', '3', '4', '5', '6', '7', '8', '9', '00', '0', '⌫'] as key}<button onclick={() => financeKey(key)}>{key}</button>{/each}</div>
-				<button class="fin-btn" disabled={!financeEntry.amountMinor || !financeEntry.categoryId} onclick={addFinanceTransaction}>Lançar</button>
+				<button class="fin-btn" disabled={!financeEntry.amountMinor || !financeEntry.categoryId} onclick={addFinanceTransaction}>{m.fin_submit_entry()}</button>
 			</div>
 		</div>
 	{/if}
 
 	{#if financeCategoryForm.open}
 		<div class="fin-overlay" role="presentation" in:fade={{ duration: prefersReducedMotion() ? 0 : 150 }} out:fade={{ duration: prefersReducedMotion() ? 0 : 150 }} onpointerdown={onFinOverlayPointerDown} onclick={(event) => onFinOverlayClick(event, closeFinanceCategoryForm)}>
-			<div class="fin-sheet" out:fly={{ y: 140, duration: prefersReducedMotion() ? 0 : 180 }} role="dialog" aria-modal="true" aria-label={financeCategoryForm.id ? 'Editar categoria' : 'Nova categoria'}>
+			<div class="fin-sheet" out:fly={{ y: 140, duration: prefersReducedMotion() ? 0 : 180 }} role="dialog" aria-modal="true" aria-label={financeCategoryForm.id ? m.fin_edit_category() : m.settings_categories_new()}>
 				<div class="fin-grip"></div>
 				{#if !financeCategoryForm.id}
-					<div class="fin-seg"><button class:on={financeCategoryForm.type === 'expense'} onclick={() => setFinanceCategoryType('expense')}>Despesa</button><button class:on={financeCategoryForm.type === 'income'} onclick={() => setFinanceCategoryType('income')}>Receita</button></div>
+					<div class="fin-seg"><button class:on={financeCategoryForm.type === 'expense'} onclick={() => setFinanceCategoryType('expense')}>{m.fin_expense()}</button><button class:on={financeCategoryForm.type === 'income'} onclick={() => setFinanceCategoryType('income')}>{m.fin_income()}</button></div>
 				{/if}
-				<input class="fin-inp" placeholder="Nome da categoria" maxlength="40" title={financeCategoryForm.name} bind:value={financeCategoryForm.name} />
-				<div class="fin-sw">{#each FINANCE_COLORS as color}<button class:on={financeCategoryForm.color === color} style={`--cc:${color}`} aria-label="Cor" onclick={() => (financeCategoryForm = { ...financeCategoryForm, color })}></button>{/each}</div>
+				<input class="fin-inp" placeholder={m.fin_category_name()} maxlength="40" title={financeCategoryForm.name} bind:value={financeCategoryForm.name} />
+				<div class="fin-sw">{#each FINANCE_COLORS as color}<button class:on={financeCategoryForm.color === color} style={`--cc:${color}`} aria-label={m.fin_color()} onclick={() => (financeCategoryForm = { ...financeCategoryForm, color })}></button>{/each}</div>
 				{#if financeCategoryForm.type === 'expense'}
-					<div class="fin-seg fin-mode" role="group" aria-label="Tipo de limite">
-						<button class:on={financeCategoryForm.limitMode === 'limit'} onclick={() => setFinanceLimitMode('limit')}>Limite</button>
-						<button class="goal" class:on={financeCategoryForm.limitMode === 'goal'} onclick={() => setFinanceLimitMode('goal')}>Meta</button>
+					<div class="fin-seg fin-mode" role="group" aria-label={m.fin_limit_type()}>
+						<button class:on={financeCategoryForm.limitMode === 'limit'} onclick={() => setFinanceLimitMode('limit')}>{m.fin_limit()}</button>
+						<button class="goal" class:on={financeCategoryForm.limitMode === 'goal'} onclick={() => setFinanceLimitMode('goal')}>{m.common_goal()}</button>
 					</div>
-					<small class="fin-mode-hint">{financeCategoryForm.limitMode === 'goal' ? 'Atingir ou passar é positivo.' : 'Passar do limite vira aviso.'}</small>
+					<small class="fin-mode-hint">{financeCategoryForm.limitMode === 'goal' ? m.fin_goal_hint() : m.fin_limit_hint()}</small>
 					<div class:goal-mode={financeCategoryForm.limitMode === 'goal'} class="fin-lim">
 						<span>R$</span>
 						<input
 							class="fin-lim-input"
 							inputmode="decimal"
-							aria-label={financeCategoryForm.limitMode === 'goal' ? 'Meta mensal' : 'Limite mensal'}
+							aria-label={financeCategoryForm.limitMode === 'goal' ? m.fin_monthly_goal() : m.fin_monthly_limit()}
 							value={moneyInput(financeCategoryForm.limitMinor)}
 							onchange={handleFinanceLimitInput}
 							onkeydown={(event) => {
 								if (event.key === 'Enter') event.currentTarget.blur();
 							}}
 						/>
-						<span>/ mês</span>
+						<span>{m.fin_per_month()}</span>
 					</div>
-					<input type="range" min="0" max={Math.max(3000, financeCategoryForm.limitMinor / 100)} step="50" aria-label={financeCategoryForm.limitMode === 'goal' ? 'Meta mensal (slider)' : 'Limite mensal (slider)'} value={financeCategoryForm.limitMinor / 100} style={`--f:${financeCategoryForm.limitMinor / 100 / Math.max(3000, financeCategoryForm.limitMinor / 100) * 100}%`} oninput={(event) => setFinanceLimit(Number(event.currentTarget.value) * 100)} />
+					<input type="range" min="0" max={Math.max(3000, financeCategoryForm.limitMinor / 100)} step="50" aria-label={financeCategoryForm.limitMode === 'goal' ? m.fin_monthly_goal_slider() : m.fin_monthly_limit_slider()} value={financeCategoryForm.limitMinor / 100} style={`--f:${financeCategoryForm.limitMinor / 100 / Math.max(3000, financeCategoryForm.limitMinor / 100) * 100}%`} oninput={(event) => setFinanceLimit(Number(event.currentTarget.value) * 100)} />
 					<div class="fin-chips" style="justify-content:center;margin-top:12px">{#each [200, 500, 1000, 2000] as value}<button class="fin-chip" onclick={() => setFinanceLimit(value * 100)}>{money(value * 100, currency())}</button>{/each}</div>
 				{/if}
-				<button class="fin-btn" onclick={createFinanceCategory}>{financeCategoryForm.id ? 'Salvar' : 'Criar categoria'}</button>
+				<button class="fin-btn" onclick={createFinanceCategory}>{financeCategoryForm.id ? m.common_save() : m.fin_create_category()}</button>
 				{#if financeCategoryForm.id}
 					<button
 						type="button"
@@ -4899,13 +4958,13 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 						onclick={armFinanceCategoryDelete}
 					>
 						{#if financeCategoryLinkedCount === 0}
-							Excluir categoria
+							{m.fin_delete_category()}
 						{:else if financeDeleteArm === 'arming'}
-							Excluir em 5 s…
+							{m.fin_delete_arming()}
 						{:else if financeDeleteArm === 'armed'}
-							Excluir categoria e {financeCategoryLinkedCount} lançamento{financeCategoryLinkedCount === 1 ? '' : 's'}
+							{financeCategoryLinkedCount === 1 ? m.fin_delete_category_one() : m.fin_delete_category_many({ count: financeCategoryLinkedCount })}
 						{:else}
-							Excluir categoria ({financeCategoryLinkedCount} lançamento{financeCategoryLinkedCount === 1 ? '' : 's'})
+							{financeCategoryLinkedCount === 1 ? m.fin_delete_category_count_one() : m.fin_delete_category_count_many({ count: financeCategoryLinkedCount })}
 						{/if}
 					</button>
 				{/if}
@@ -4915,23 +4974,23 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	{#if financeGoalSheet.open}
 		<div class="fin-overlay" role="presentation" in:fade={{ duration: prefersReducedMotion() ? 0 : 150 }} out:fade={{ duration: prefersReducedMotion() ? 0 : 150 }} onpointerdown={onFinOverlayPointerDown} onclick={(event) => onFinOverlayClick(event, () => (financeGoalSheet = { ...financeGoalSheet, open: false }))}>
-			<div class="fin-sheet" out:fly={{ y: 140, duration: prefersReducedMotion() ? 0 : 180 }} role="dialog" aria-modal="true" aria-label="Meta de economia">
+			<div class="fin-sheet" out:fly={{ y: 140, duration: prefersReducedMotion() ? 0 : 180 }} role="dialog" aria-modal="true" aria-label={m.fin_savings_goal()}>
 				<div class="fin-grip"></div>
 				<div class="fin-amt">{money(financeGoalSheet.amountMinor, currency())}</div>
-				<small class="fin-goal-hint">Saldo do mês ÷ meta</small>
+				<small class="fin-goal-hint">{m.fin_goal_formula()}</small>
 				<div class="fin-chips">{#each [500, 1000, 2000, 5000] as value}<button class:on={financeGoalSheet.amountMinor === value * 100} class="fin-chip" onclick={() => setFinanceGoalPreset(value * 100)}>{money(value * 100, currency())}</button>{/each}</div>
 				<div class="fin-kp">{#each ['1', '2', '3', '4', '5', '6', '7', '8', '9', '00', '0', '⌫'] as key}<button onclick={() => financeGoalKey(key)}>{key}</button>{/each}</div>
-				<button class="fin-btn" onclick={saveFinanceGoal}>Salvar meta</button>
+				<button class="fin-btn" onclick={saveFinanceGoal}>{m.fin_save_goal()}</button>
 			</div>
 		</div>
 	{/if}
 
 	{#if financeCelebration !== null}
-		<div class="fin-celebration" role="dialog" aria-modal="true" aria-label="Meta de economia batida">
+		<div class="fin-celebration" role="dialog" aria-modal="true" aria-label={m.fin_goal_hit_title()}>
 			<div class="fin-coin">R$</div>
-			<h2>Meta de economia batida</h2>
+			<h2>{m.fin_goal_hit_title()}</h2>
 			<div class="fin-celebration-amount">{money(financeCelebration, currency())}</div>
-			<button class="fin-btn" onclick={() => (financeCelebration = null)}>Continuar</button>
+			<button class="fin-btn" onclick={() => (financeCelebration = null)}>{m.dialog_continue()}</button>
 		</div>
 	{/if}
 
@@ -4946,48 +5005,48 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	{#if timeCategorySheet.open}
 		<div class="tp-overlay" role="presentation" in:fade={{ duration: prefersReducedMotion() ? 0 : 150 }} out:fade={{ duration: prefersReducedMotion() ? 0 : 150 }} onclick={(event) => { if (Date.now() < timeCategoryGuardUntil) { timeCategoryGuardUntil = 0; return; } if (event.target === event.currentTarget) timeCategorySheet = { ...timeCategorySheet, open: false }; }}>
-			<div class="tp-sheet" out:fly={{ y: 140, duration: prefersReducedMotion() ? 0 : 180 }} role="dialog" aria-modal="true" aria-label={timeCategorySheet.id ? 'Editar categoria' : 'Nova categoria'}>
+			<div class="tp-sheet" out:fly={{ y: 140, duration: prefersReducedMotion() ? 0 : 180 }} role="dialog" aria-modal="true" aria-label={timeCategorySheet.id ? m.fin_edit_category() : m.settings_categories_new()}>
 				<div class="tp-grip"></div>
-				<input class="tp-inp" placeholder="Nome da categoria" maxlength="22" bind:value={timeCategorySheet.name} />
-				<div class="tp-sw">{#each ['#d4f25a', '#9cc8ff', '#ffb347', '#c6a8ff', '#f1a5c5', '#7fe3c4', '#ff8a80', '#e6e06a'] as color}<button class:on={timeCategorySheet.color === color} style={`--cc:${color}`} aria-label="Cor" onclick={() => (timeCategorySheet = { ...timeCategorySheet, color })}></button>{/each}</div>
-				<div class="tp-gv">{timeCategorySheet.goalHours ? `${timeCategorySheet.goalHours}h por semana` : 'Sem meta'}</div>
-				<input type="range" min="0" max="40" step="1" aria-label="Meta semanal" value={timeCategorySheet.goalHours} style={`--f:${(timeCategorySheet.goalHours / 40) * 100}%`} oninput={(event) => (timeCategorySheet = { ...timeCategorySheet, goalHours: Number(event.currentTarget.value) })} />
-				<button class="tp-btn" onclick={saveTimeCategory}>{timeCategorySheet.id ? 'Salvar' : 'Criar categoria'}</button>
-				{#if timeCategorySheet.id}<button class="tp-btn d" onclick={deleteTimeCategory}>Excluir categoria</button>{/if}
+				<input class="tp-inp" placeholder={m.fin_category_name()} maxlength="22" bind:value={timeCategorySheet.name} />
+				<div class="tp-sw">{#each ['#d4f25a', '#9cc8ff', '#ffb347', '#c6a8ff', '#f1a5c5', '#7fe3c4', '#ff8a80', '#e6e06a'] as color}<button class:on={timeCategorySheet.color === color} style={`--cc:${color}`} aria-label={m.fin_color()} onclick={() => (timeCategorySheet = { ...timeCategorySheet, color })}></button>{/each}</div>
+				<div class="tp-gv">{timeCategorySheet.goalHours ? m.time_goal_week({ hours: timeCategorySheet.goalHours }) : m.time_no_goal()}</div>
+				<input type="range" min="0" max="40" step="1" aria-label={m.time_weekly_goal()} value={timeCategorySheet.goalHours} style={`--f:${(timeCategorySheet.goalHours / 40) * 100}%`} oninput={(event) => (timeCategorySheet = { ...timeCategorySheet, goalHours: Number(event.currentTarget.value) })} />
+				<button class="tp-btn" onclick={saveTimeCategory}>{timeCategorySheet.id ? m.common_save() : m.fin_create_category()}</button>
+				{#if timeCategorySheet.id}<button class="tp-btn d" onclick={deleteTimeCategory}>{m.time_delete_category()}</button>{/if}
 			</div>
 		</div>
 	{/if}
 
 	{#if timeSummaryOpen}
 		<div class="tp-overlay" role="presentation" in:fade={{ duration: prefersReducedMotion() ? 0 : 150 }} out:fade={{ duration: prefersReducedMotion() ? 0 : 150 }} onclick={(event) => { if (event.target === event.currentTarget) timeSummaryOpen = false; }}>
-			<div class="tp-sheet" out:fly={{ y: 140, duration: prefersReducedMotion() ? 0 : 180 }} role="dialog" aria-modal="true" aria-label="Resumo do período">
+			<div class="tp-sheet" out:fly={{ y: 140, duration: prefersReducedMotion() ? 0 : 180 }} role="dialog" aria-modal="true" aria-label={m.time_range_summary()}>
 				<div class="tp-grip"></div>
-				<div class="tp-sr" style="border:0"><div><b>Período</b><small>{timeTotalsLabel}</small></div></div>
+				<div class="tp-sr" style="border:0"><div><b>{m.planner_range_title()}</b><small>{timeTotalsLabel}</small></div></div>
 				{#each timeCategories as category}
 					{@const categoryHours = timeCategoryHours(category.id)}
 					{@const categoryGoal = ((category.weeklyGoalHours ?? 0) * timeRangeDays) / 7}
 					<div class="tp-sr" style={`--cc:${category.color}`}>
-						<div><span>{category.name}</span><small>{hmSlots(categoryHours * 2)}{categoryGoal ? ` de ${hmSlots(categoryGoal * 2)}` : ''}</small></div>
+						<div><span>{category.name}</span><small>{categoryGoal ? m.time_hours_goal({ hours: hmSlots(categoryHours * 2), goal: hmSlots(categoryGoal * 2) }) : m.time_hours({ hours: hmSlots(categoryHours * 2) })}</small></div>
 						<div class="tp-sbar"><i style={`width:${Math.min(100, categoryGoal ? (categoryHours / categoryGoal) * 100 : (categoryHours / (timeRangeDays * TIME_SLOT_COUNT * 0.5)) * 400)}%`}></i></div>
 					</div>
 				{/each}
-				<button class="tp-btn" onclick={() => (timeSummaryOpen = false)}>Fechar</button>
+				<button class="tp-btn" onclick={() => (timeSummaryOpen = false)}>{m.common_close()}</button>
 			</div>
 		</div>
 	{/if}
 
 	{#if dashHabitPicker}
 		<div class="habit-prototype-overlay" role="presentation" in:fade={{ duration: prefersReducedMotion() ? 0 : 150 }} out:fade={{ duration: prefersReducedMotion() ? 0 : 150 }} onclick={(event) => { if (event.target === event.currentTarget) dashHabitPicker = false; }}>
-			<div class="habit-prototype-sheet" out:fly={{ y: 140, duration: prefersReducedMotion() ? 0 : 180 }} role="dialog" aria-modal="true" aria-label="Registrar hábito">
+			<div class="habit-prototype-sheet" out:fly={{ y: 140, duration: prefersReducedMotion() ? 0 : 180 }} role="dialog" aria-modal="true" aria-label={m.habit_log_picker_title()}>
 				<div class="habit-prototype-grip"></div>
-				<p>Registrar hábito</p>
+				<p>{m.habit_log_picker_title()}</p>
 				<div class="habit-prototype-chips">
 					{#each snapshot.habits.filter((habit) => habit.active && habit.metric !== 'weekly') as habit}
 						<button onclick={() => pickDashHabit(habit)}>{habit.name}{#if snapshot.habitLogs.some((log) => log.habitId === habit.id && log.date === today && log.completed)} ✓{/if}</button>
 					{/each}
 				</div>
-				{#if !snapshot.habits.some((habit) => habit.active && habit.metric !== 'weekly')}<p>Nenhum hábito para registrar. Crie um na aba Hábitos.</p>{/if}
-				<button class="habit-prototype-save" onclick={() => (dashHabitPicker = false)}>Fechar</button>
+				{#if !snapshot.habits.some((habit) => habit.active && habit.metric !== 'weekly')}<p>{m.empty_habits_dash()}</p>{/if}
+				<button class="habit-prototype-save" onclick={() => (dashHabitPicker = false)}>{m.common_close()}</button>
 			</div>
 		</div>
 	{/if}
@@ -4996,39 +5055,39 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		<Sheet
 			title={modal === 'transaction'
 				? editingTransactionId
-					? 'Editar lançamento'
-					: 'Novo lançamento'
+					? m.fin_edit_entry()
+					: m.fin_new_entry()
 				: modal === 'habit'
 					? editingHabitId
-						? 'Editar hábito'
-						: 'Novo hábito'
-					: 'Pausa e descanso'}
-			closeLabel="Fechar"
+						? m.habit_edit_habit()
+						: m.habit_new_habit()
+					: m.shell_pause_title()}
+			closeLabel={m.common_close()}
 			onclose={() => (modal = null)}
 		>
 			{#if formError}<p class="form-error">{formError}</p>{/if}
 			{#if modal === 'transaction'}
 				<form class="sheet-form" onsubmit={saveTransaction}>
 					<Segmented
-						label="Tipo de lançamento"
+						label={m.fin_entry_type()}
 						options={[
-							{ value: 'expense', label: 'Despesa' },
-							{ value: 'income', label: 'Receita' }
+							{ value: 'expense', label: m.fin_expense() },
+							{ value: 'income', label: m.fin_income() }
 						]}
 						bind:value={transactionForm.type}
 					/>
-					<Field label="Descrição">
-						<input bind:value={transactionForm.description} placeholder="Ex.: mercado da semana" />
+					<Field label={m.fin_description()}>
+						<input bind:value={transactionForm.description} placeholder={m.fin_description_placeholder()} />
 					</Field>
 					<div class="sheet-row">
-						<Field label={`Valor (${currency()})`}>
+						<Field label={m.fin_amount_currency({ currency: currency() })}>
 							<input bind:this={amountInput} data-autofocus bind:value={transactionForm.amount} inputmode="decimal" placeholder="0,00" required />
 						</Field>
-						<Field label="Data">
+						<Field label={m.common_date()}>
 							<input bind:value={transactionForm.date} type="date" required />
 						</Field>
 					</div>
-					<Field label="Categoria">
+					<Field label={m.fin_category()}>
 						<select bind:value={transactionForm.categoryId} required>
 							{#each snapshot.categories.filter((item) => item.module === 'finance') as category (category.id)}
 								<option value={category.id}>{category.name}</option>
@@ -5036,60 +5095,60 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 						</select>
 					</Field>
 					<div class="sheet-actions">
-						<Button variant="secondary" onclick={() => (modal = null)}>Cancelar</Button>
-						<Button type="submit"><Check size={16} /> {editingTransactionId ? 'Salvar alterações' : 'Salvar lançamento'}</Button>
+						<Button variant="secondary" onclick={() => (modal = null)}>{m.common_cancel()}</Button>
+						<Button type="submit"><Check size={16} /> {editingTransactionId ? m.fin_save_changes() : m.fin_save_entry()}</Button>
 					</div>
 				</form>
 			{:else if modal === 'habit'}
 				<form class="sheet-form" onsubmit={saveHabit}>
-					<Field label="Nome do hábito">
-						<input bind:value={habitForm.name} placeholder="Ex.: leitura, caminhada…" required />
+					<Field label={m.habit_name()}>
+						<input bind:value={habitForm.name} placeholder={m.habit_name_placeholder()} required />
 					</Field>
-					<Field label="Como medir?">
+					<Field label={m.habit_metric()}>
 						<select bind:value={habitForm.metric}>
-							<option value="boolean">Feito ou não feito</option>
-							<option value="duration">Duração</option>
-							<option value="count">Contagem</option>
-							<option value="weekly">Meta na semana</option>
+							<option value="boolean">{m.habit_metric_boolean()}</option>
+							<option value="duration">{m.habit_metric_duration()}</option>
+							<option value="count">{m.habit_metric_count()}</option>
+							<option value="weekly">{m.habit_metric_weekly()}</option>
 						</select>
 					</Field>
 					{#if habitForm.metric === 'duration'}
-						<Field label="Duração" hint="HH:MM">
+						<Field label={m.habit_metric_duration()} hint="HH:MM">
 							<DurationField
 								value={Number(habitForm.target) > 0 ? Number(habitForm.target) : null}
-								ariaLabel="Duração do hábito"
+								ariaLabel={m.habit_duration_aria()}
 								onchange={(minutes) => (habitForm.target = String(minutes ?? 0))}
 							/>
 						</Field>
 					{:else if habitForm.metric === 'weekly'}
 						<div class="sheet-row">
-							<Field label="Dias por semana">
+							<Field label={m.habit_days_per_week()}>
 								<input bind:value={habitForm.target} type="number" min="1" max="7" required />
 							</Field>
-							<Field label="Unidade"><span class="static">dias</span></Field>
+							<Field label={m.habit_unit()}><span class="static">{m.habit_unit_days()}</span></Field>
 						</div>
 					{:else if habitForm.metric === 'count'}
 						<div class="sheet-row">
-							<Field label="Meta por dia">
+							<Field label={m.habit_daily_target()}>
 								<input bind:value={habitForm.target} type="number" min="1" required />
 							</Field>
-							<Field label="Unidade">
-								<input bind:value={habitForm.unit} placeholder="páginas, copos…" required />
+							<Field label={m.habit_unit()}>
+								<input bind:value={habitForm.unit} placeholder={m.habit_unit_placeholder()} required />
 							</Field>
 						</div>
 					{:else}
 						<div class="sheet-row">
-							<Field label="Rótulo do positivo">
-								<input bind:value={habitForm.positiveLabel} placeholder="Feito" maxlength="14" required />
+							<Field label={m.habit_positive_label()}>
+								<input bind:value={habitForm.positiveLabel} placeholder={m.habit_label_positive_placeholder()} maxlength="14" required />
 							</Field>
-							<Field label="Rótulo do negativo">
-								<input bind:value={habitForm.negativeLabel} placeholder="Não feito" maxlength="14" required />
+							<Field label={m.habit_negative_label()}>
+								<input bind:value={habitForm.negativeLabel} placeholder={m.habit_label_negative_placeholder()} maxlength="14" required />
 							</Field>
 						</div>
 						<div class="sheet-days">
-							<span class="sheet-days-label">Qual conta como positivo?</span>
+							<span class="sheet-days-label">{m.habit_positive_question()}</span>
 							<Segmented
-								label="Qual conta como positivo"
+								label={m.habit_positive_question()}
 								options={[
 									{ value: '1', label: habitForm.positiveLabel.trim() || HABIT_BOOLEAN_LABELS.positive },
 									{ value: '0', label: habitForm.negativeLabel.trim() || HABIT_BOOLEAN_LABELS.negative }
@@ -5101,12 +5160,12 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					{/if}
 					{#if habitForm.metric === 'count' || habitForm.metric === 'duration'}
 						<div class="sheet-days">
-							<span class="sheet-days-label">Como atingir a meta</span>
+							<span class="sheet-days-label">{m.habit_target_how()}</span>
 							<Segmented
-								label="Direção da meta"
+								label={m.habit_target_direction()}
 								options={[
-									{ value: 'up', label: 'Mais é melhor' },
-									{ value: 'down', label: 'Menos é melhor' }
+									{ value: 'up', label: m.habit_more_is_better() },
+									{ value: 'down', label: m.habit_less_is_better() }
 								]}
 								value={habitForm.targetDirection}
 								onchange={(value) => (habitForm.targetDirection = value === 'down' ? 'down' : 'up')}
@@ -5115,55 +5174,55 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					{/if}
 					{#if habitForm.metric !== 'weekly'}
 						<div class="sheet-days">
-							<span class="sheet-days-label">Dias programados</span>
+							<span class="sheet-days-label">{m.habit_scheduled_days()}</span>
 							<div class="sheet-days-row">
 								{#each ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'] as day, index}
 									<Chip
 										selected={habitForm.scheduledDays.includes(index)}
-										ariaLabel={`Selecionar dia ${index}`}
+										ariaLabel={m.habit_select_day({ day: index })}
 										onselect={() => toggleScheduledDay(index)}
 									>{day}</Chip>
 								{/each}
 							</div>
 						</div>
 					{/if}
-					<Field label="Lembrete" hint="opcional">
+					<Field label={m.habit_reminder()} hint={m.common_optional()}>
 						<input type="time" bind:value={habitForm.reminder} />
 					</Field>
 					<div class="sheet-actions">
-						<Button variant="secondary" onclick={() => (modal = null)}>Cancelar</Button>
-						<Button type="submit"><Check size={16} /> {editingHabitId ? 'Salvar' : 'Criar hábito'}</Button>
+						<Button variant="secondary" onclick={() => (modal = null)}>{m.common_cancel()}</Button>
+						<Button type="submit"><Check size={16} /> {editingHabitId ? m.common_save() : m.habit_create()}</Button>
 					</div>
 				</form>
 			{:else if pauseActive}
 				<form class="sheet-form" onsubmit={startPause}>
 					<div class="sheet-explain">
 						<Flame size={20} />
-						<p>Pausa ativa até {pauseUntilLabel()}. Hábitos, tempo, finanças e trackers estão em somente leitura.</p>
+						<p>{m.shell_pause_active_explain({ date: pauseUntilLabel() })}</p>
 					</div>
-					<Field label="Estender até">
+					<Field label={m.shell_extend_until()}>
 						<input type="date" bind:value={pauseForm.until} min={dateOffset(today, 1)} required />
 					</Field>
 					<div class="sheet-actions">
-						<Button variant="secondary" onclick={() => (modal = null)}>Fechar</Button>
-						<Button type="submit" variant="secondary">Estender</Button>
+						<Button variant="secondary" onclick={() => (modal = null)}>{m.common_close()}</Button>
+						<Button type="submit" variant="secondary">{m.shell_extend()}</Button>
 					</div>
 					<div class="sheet-actions">
-						<Button onclick={() => void endPause()}>Encerrar pausa</Button>
+						<Button onclick={() => void endPause()}>{m.shell_end_pause()}</Button>
 					</div>
 				</form>
 			{:else}
 				<form class="sheet-form" onsubmit={startPause}>
 					<div class="sheet-explain">
 						<Flame size={20} />
-						<p>Na pausa, Life Force, streaks e lembretes ficam suspensos. Seus dados continuam guardados.</p>
+						<p>{m.shell_pause_explain()}</p>
 					</div>
-					<Field label="Data de retorno">
+					<Field label={m.shell_return_date()}>
 						<input type="date" bind:value={pauseForm.until} min={dateOffset(today, 1)} required />
 					</Field>
 					<div class="sheet-actions">
-						<Button variant="secondary" onclick={() => (modal = null)}>Agora não</Button>
-						<Button type="submit">Ativar pausa</Button>
+						<Button variant="secondary" onclick={() => (modal = null)}>{m.dialog_not_now()}</Button>
+						<Button type="submit">{m.shell_start_pause()}</Button>
 					</div>
 				</form>
 			{/if}
@@ -5199,6 +5258,21 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			onsyncinterval={(secs) => void updateSyncAuto({ intervalSecs: secs })}
 			onpair={openPairing}
 			onunpair={unpair}
+			gated={planGated()}
+			pro={planPro()}
+			onopenpaywall={() => requestUpgrade(null)}
+		/>
+	{/if}
+	{#if paywall.open && planGated()}
+		<PaywallSheet
+			reason={paywall.reason}
+			pro={planPro()}
+			monthlyPrice={billingPrices.monthly}
+			annualPrice={billingPrices.annual}
+			busy={billingBusy}
+			onsubscribe={buyPlan}
+			onrestore={restorePlan}
+			onclose={closePaywall}
 		/>
 	{/if}
 	{#if modal === 'settings' && snapshot && pairOpen}
@@ -5229,7 +5303,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		/>
 	{/if}
 	{#if dialog}
-		<Sheet title={dialog.title} closeLabel="Fechar" onclose={() => closeDialog(null)}>
+		<Sheet title={dialog.title} closeLabel={m.common_close()} onclose={() => closeDialog(null)}>
 			<form class="sheet-form" onsubmit={submitDialog}>
 				{#if dialog.kind === 'prompt'}
 					<Field label={dialog.label}>
@@ -5239,14 +5313,15 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					<p class="sheet-message">{dialog.message}</p>
 				{/if}
 				<div class="sheet-actions">
-					<Button variant="secondary" onclick={() => closeDialog(null)}>Cancelar</Button>
+					<Button variant="secondary" onclick={() => closeDialog(null)}>{m.common_cancel()}</Button>
 					<Button type="submit" variant={dialog.danger ? 'danger' : 'primary'}>{dialog.confirmLabel}</Button>
 				</div>
 			</form>
 		</Sheet>
 	{/if}
 	<canvas bind:this={effectsCanvas} class="atlas-confetti" aria-hidden="true"></canvas>
-	{#if toast}<div class:warn={toastWarning} class="toast">{#if !toastWarning}<Check size={16} />{/if}{toast}{#if toastUndo}<button class="toast-undo" onclick={() => { const action = toastUndo; toastUndo = null; toast = ''; action?.(); }}>Desfazer</button>{/if}</div>{/if}
+	{#if toast}<div class:warn={toastWarning} class="toast">{#if !toastWarning}<Check size={16} />{/if}{toast}{#if toastUndo}<button class="toast-undo" onclick={() => { const action = toastUndo; toastUndo = null; toast = ''; action?.(); }}>{m.shell_undo()}</button>{/if}</div>{/if}
 {:else}
-	<div class="loading-screen"><div class="empty-orbit"><X size={20} /></div><strong>Não foi possível abrir Atlas</strong><Button variant="secondary" onclick={initialize}>Tentar novamente</Button></div>
+	<div class="loading-screen"><div class="empty-orbit"><X size={20} /></div><strong>{m.shell_open_failed()}</strong><Button variant="secondary" onclick={initialize}>{m.shell_retry()}</Button></div>
 {/if}
+{/key}

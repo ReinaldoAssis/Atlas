@@ -162,6 +162,12 @@ no device depois (mesmo fluxo de S7/S9).
   reinicia só ela (`sync_discovery_restart`, sem derrubar o endpoint) e abre
   Ajustes quando a permissão foi negada. Falha de descoberta não impede mais o
   `sync_start`: o pareamento manual por `ip:porta` continua disponível.
+- **Android (beta 0.4)** — o módulo `sync` deixou de ser compilado fora: o
+  Android usa o mesmo `mdns-sd` do desktop. O Wi-Fi do Android descarta
+  multicast sem `MulticastLock`, então `MulticastLockPlugin.kt` (plugin Tauri
+  no `gen/android`) segura o lock entre `sync_start` e `sync_stop`, e o
+  manifesto declara `CHANGE_WIFI_MULTICAST_STATE`. Sync continua só com o app
+  aberto e só na LAN.
 - **Correção do pareamento (erro 120)**: `engine::bind` anunciava só
   `atlas/sync/1`; o iroh recusa no handshake TLS qualquer ALPN fora da lista,
   então o acceptor abortava `atlas/pair/1` (`error 120`). O endpoint agora

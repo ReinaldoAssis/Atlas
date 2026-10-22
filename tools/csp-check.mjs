@@ -265,6 +265,14 @@ function richNoteBody() {
 	].join('\n');
 }
 
+function seedLocale() {
+	// O Chromium do harness anuncia en-US; sem isso o app sobe em inglês e os
+	// seletores por texto em pt-BR deixam de casar.
+	return `try {
+	if (!localStorage.getItem('atlas.locale.mode')) localStorage.setItem('atlas.locale.mode', 'pt-BR');
+} catch {}`;
+}
+
 function seedNotes() {
 	const now = new Date().toISOString();
 	const state = {
@@ -333,6 +341,7 @@ async function main() {
 		await send('Network.enable');
 		await send('Page.addScriptToEvaluateOnNewDocument', { source: COLLECTOR });
 		await send('Page.addScriptToEvaluateOnNewDocument', { source: seedNotes() });
+		await send('Page.addScriptToEvaluateOnNewDocument', { source: seedLocale() });
 		await send('Emulation.setDeviceMetricsOverride', {
 			width: 390,
 			height: 844,
@@ -371,6 +380,19 @@ async function main() {
 			'app: folha de estilo externa aplicada',
 			(await evaluate('getComputedStyle(document.body).fontFamily')) !== ''
 		);
+
+		/* ---- 1b. troca de idioma: en sem reload de URL, e volta pro pt-BR ---- */
+		await evaluate(`localStorage.setItem('atlas.locale.mode', 'en')`);
+		await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/` });
+		await sleep(2500);
+		const english = await evaluate(`({
+			overview: document.body.innerText.includes('Overview'),
+			portuguese: document.body.innerText.includes('Visão geral')
+		})`);
+		record('app: idioma en aplicado', Boolean(english?.overview && !english?.portuguese));
+		await evaluate(`localStorage.setItem('atlas.locale.mode', 'pt-BR')`);
+		await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/` });
+		await sleep(2500);
 
 		/* ---- 2. app real: notas -> preview -> artefato ---- */
 		const opened = await evaluate(`(async () => {

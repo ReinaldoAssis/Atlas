@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { edgeRatio, horizonLabel, isMilestone, nodeReached, nodeRoleLabel, type GraphNode, type GraphState } from '#lib/graph';
 	import { playTone, pulseHaptic } from '#lib/feedback';
+	import { m } from '#lib/paraglide/messages.js';
 
 	type View = { k: number; x: number; y: number };
 
@@ -56,7 +57,7 @@
 	const findNode = (id: string) => graph.nodes.find((node) => node.id === id);
 	const domainOf = (id: string) => graph.domains.find((domain) => domain.id === id);
 	const nodeColor = (node: GraphNode) => domainOf(node.domainId)?.color ?? '#8d968a';
-	const domainName = (id: string) => domainOf(id)?.name ?? 'Sem domínio';
+	const domainName = (id: string) => domainOf(id)?.name ?? m.graph_no_domain();
 	const reached = (node: GraphNode) => nodeReached(node, graph.edges);
 
 	/* ---------- câmera ---------- */
@@ -338,7 +339,7 @@
 	class="gv-svg"
 	use:wheelAction
 	role="application"
-	aria-label="Grafo da vida"
+	aria-label={m.graph_canvas_aria()}
 	onpointerdown={onPointerDown}
 	onpointermove={onPointerMove}
 	onpointerup={onPointerUp}
@@ -361,7 +362,7 @@
 			{#if a && b}
 				{@const geo = edgeGeometry(livePos(a), livePos(b), edgeSlots.get(edge.id))}
 				{@const ratio = edgeRatio(edge)}
-				<g class="gv-e" data-gv-edge={edge.id} role="button" tabindex="0" aria-label={`${a.name} para ${b.name}: ${edge.label}, ${Math.round(ratio * 100)}%`} onkeydown={(event) => onEdgeKey(event, edge.id)}>
+				<g class="gv-e" data-gv-edge={edge.id} role="button" tabindex="0" aria-label={m.graph_edge_aria({ from: a.name, to: b.name, label: edge.label, percent: Math.round(ratio * 100) })} onkeydown={(event) => onEdgeKey(event, edge.id)}>
 					<path class="gv-eh" d={geo.d} />
 					<path class={edge.source === 'manual' ? 'gv-eb gv-hy' : 'gv-eb'} d={geo.d} marker-end="url(#gv-arrow)" />
 					{#if ratio > 0}
@@ -386,6 +387,7 @@
 			{@const selected = selectedId === node.id}
 			{@const milestone = isMilestone(node)}
 			{@const ring = milestone ? 38 : 35}
+			{@const roleLabel = node.origin ? m.graph_origin_word() : nodeRoleLabel(node)}
 			{@const scale = dragNode && dragNode.id === node.id ? 1.14 : link && link.over === node.id ? 1.12 : 1}
 			<g
 				class="gv-node"
@@ -393,7 +395,9 @@
 				data-gv-node={node.id}
 				role="button"
 				tabindex="0"
-				aria-label={`${node.name}, ${node.origin ? 'origem' : nodeRoleLabel(node)}, ${horizonLabel(node.horizon)}, ${domainName(node.domainId)}${isReached ? ', alcançado' : ''}`}
+				aria-label={isReached
+					? m.graph_node_aria_reached({ name: node.name, role: roleLabel, horizon: horizonLabel(node.horizon), domain: domainName(node.domainId) })
+					: m.graph_node_aria({ name: node.name, role: roleLabel, horizon: horizonLabel(node.horizon), domain: domainName(node.domainId) })}
 				transform={`translate(${position.x},${position.y}) scale(${scale})`}
 				onkeydown={(event) => onNodeKey(event, node)}
 			>
