@@ -145,6 +145,29 @@ export class TimeBubble {
 		this.html = html;
 	}
 
+	/**
+	 * Fixa a bolha já aberta sem repetir a entrada: reposiciona na hora, troca o
+	 * conteúdo e confirma com um pulso curto + haptic (long press no planejador).
+	 */
+	pin(anchor: HTMLElement, html: string, tint: string) {
+		clearTimeout(this.hideTimer);
+		this.el.style.setProperty('--tint', tint);
+		this.anchor = anchor;
+		this.html = html;
+		this.content.innerHTML = html;
+		this.el.style.display = 'block';
+		this.open = true;
+		this.el.getAnimations().forEach((animation) => animation.cancel());
+		this.body.getAnimations({ subtree: true }).forEach((animation) => animation.cancel());
+		this.apply(this.place(anchor));
+		this.vibrate(10);
+		if (this.reduced) return;
+		this.body.animate(
+			[{ transform: 'scale(1)' }, { transform: 'scale(1.03)' }, { transform: 'scale(1)' }],
+			{ duration: 160, easing: 'ease-out' }
+		);
+	}
+
 	private enter() {
 		const anchor = this.anchor;
 		if (!anchor) return;

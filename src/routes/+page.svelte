@@ -8,10 +8,10 @@
 		Wallet, X, type LucideIcon
 	} from '@lucide/svelte';
 	import {
-		HABIT_BOOLEAN_LABELS, booleanLabelOf, currentStreak, dateOffset, didMeetTarget, formatMinutes, habitLogId, habitProgress, id, localDate, money, nextBooleanLog, normalizeDailyGoal, normalizeFirstDayOfWeek, positiveValueOf, remapWeeklyLogs, weekStartDate, weeklyLogFor, WEEK_MAX,
-		TIME_SLOT_START_HOUR, TIME_SLOT_COUNT, TIME_SLOT_MINUTES,
+		HABIT_BOOLEAN_LABELS, booleanLabelOf, currentStreak, dateOffset, didMeetTarget, formatMinutes, habitLogId, habitProgress, id, localDate, money, nextBooleanLog, normalizeDailyGoal, normalizeFirstDayOfWeek, normalizeTimeWindow, positiveValueOf, remapWeeklyLogs, weekStartDate, weeklyLogFor, WEEK_MAX,
+		TIME_SLOT_MINUTES,
 		experienceProgress, type AppPreferences, type AtlasSnapshot, type Category, type CategoryLimitMode, type Habit, type HabitLog,
-		type NavigationKey, type TimeBlock, type Tracker, type TrackerEntry, type Transaction
+		type MascotChoice, type NavigationKey, type TimeBlock, type Tracker, type TrackerEntry, type Transaction
 	} from '#lib/atlas';
 	import {
 		amountForCategory,
@@ -159,6 +159,11 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let timeRangeStart = $state(initialRange.start);
 	let timeRangeDays = $state(7);
 	let timeCalendarOpen = $state(false);
+	/** Janela de horas da grade, configurável no sheet de range. */
+	let timeWindow = $derived(
+		normalizeTimeWindow(snapshot?.preferences.timeWindowStartHour, snapshot?.preferences.timeWindowEndHour)
+	);
+	let timeSlotCount = $derived((timeWindow.endHour - timeWindow.startHour + 1) * 2);
 	let currentTime = $state(new Date());
 	let modal = $state<ModalKind>(null);
 	let testModeActive = $state(false);
@@ -241,36 +246,36 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let rangeBlocks = $derived(snapshot?.timeBlocks.filter((item) => item.startAt.slice(0, 10) >= currentRange.start && item.startAt.slice(0, 10) <= currentRange.end) ?? []);
 	let timeRangeEnd = $derived(addDays(timeRangeStart, timeRangeDays - 1));
 	let timeGrid = $derived.by(() => {
-		const grid: (string | null)[][] = Array.from({ length: timeRangeDays }, () => Array<string | null>(TIME_SLOT_COUNT).fill(null));
+		const grid: (string | null)[][] = Array.from({ length: timeRangeDays }, () => Array<string | null>(timeSlotCount).fill(null));
 		if (!snapshot) return grid;
 		for (const block of snapshot.timeBlocks) {
 			if (block.status === 'cancelled') continue;
 			const index = timeDayIndex(block.startAt.slice(0, 10));
 			if (index < 0 || index >= timeRangeDays) continue;
 			const startMinutes = Number(block.startAt.slice(11, 13)) * 60 + Number(block.startAt.slice(14, 16));
-			const startSlot = Math.round((startMinutes - TIME_SLOT_START_HOUR * 60) / TIME_SLOT_MINUTES);
+			const startSlot = Math.round((startMinutes - timeWindow.startHour * 60) / TIME_SLOT_MINUTES);
 			const slots = Math.max(1, Math.round(block.plannedMinutes / TIME_SLOT_MINUTES));
 			for (let offset = 0; offset < slots; offset += 1) {
 				const slot = startSlot + offset;
-				if (slot >= 0 && slot < TIME_SLOT_COUNT) grid[index][slot] = block.categoryId;
+				if (slot >= 0 && slot < timeSlotCount) grid[index][slot] = block.categoryId;
 			}
 		}
 		return grid;
 	});
 	/** Id do bloco por célula (paralelo ao `timeGrid`) — para marcar quem tem nota. */
 	let timeGridBlocks = $derived.by(() => {
-		const grid: (string | null)[][] = Array.from({ length: timeRangeDays }, () => Array<string | null>(TIME_SLOT_COUNT).fill(null));
+		const grid: (string | null)[][] = Array.from({ length: timeRangeDays }, () => Array<string | null>(timeSlotCount).fill(null));
 		if (!snapshot) return grid;
 		for (const block of snapshot.timeBlocks) {
 			if (block.status === 'cancelled') continue;
 			const index = timeDayIndex(block.startAt.slice(0, 10));
 			if (index < 0 || index >= timeRangeDays) continue;
 			const startMinutes = Number(block.startAt.slice(11, 13)) * 60 + Number(block.startAt.slice(14, 16));
-			const startSlot = Math.round((startMinutes - TIME_SLOT_START_HOUR * 60) / TIME_SLOT_MINUTES);
+			const startSlot = Math.round((startMinutes - timeWindow.startHour * 60) / TIME_SLOT_MINUTES);
 			const slots = Math.max(1, Math.round(block.plannedMinutes / TIME_SLOT_MINUTES));
 			for (let offset = 0; offset < slots; offset += 1) {
 				const slot = startSlot + offset;
-				if (slot >= 0 && slot < TIME_SLOT_COUNT) grid[index][slot] = block.id;
+				if (slot >= 0 && slot < timeSlotCount) grid[index][slot] = block.id;
 			}
 		}
 		return grid;
@@ -302,14 +307,20 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}));
 	let timeTotalsLabel = $derived.by(() => {
 		const total = timeGrid.reduce((sum, day) => sum + day.filter(Boolean).length, 0);
-		const free = Math.max(0, timeRangeDays * TIME_SLOT_COUNT - total);
+		const free = Math.max(0, timeRangeDays * timeSlotCount - total);
 		return m.time_totals({ range: rangeLabel(timeRangeStart, timeRangeEnd), allocated: hmSlots(total), free: hmSlots(free) });
+	});
+	/** Versão curta para o chip da linha de categorias no mobile. */
+	let timeTotalsShort = $derived.by(() => {
+		const total = timeGrid.reduce((sum, day) => sum + day.filter(Boolean).length, 0);
+		const free = Math.max(0, timeRangeDays * timeSlotCount - total);
+		return `${hmSlots(total)} · ${hmSlots(free)}`;
 	});
 	let timeNow = $derived.by(() => {
 		if (timeTodayIndex < 0) return null;
 		const minutes = currentTime.getHours() * 60 + currentTime.getMinutes();
-		const slot = (minutes - TIME_SLOT_START_HOUR * 60) / TIME_SLOT_MINUTES;
-		if (slot < 0 || slot > TIME_SLOT_COUNT) return null;
+		const slot = (minutes - timeWindow.startHour * 60) / TIME_SLOT_MINUTES;
+		if (slot < 0 || slot > timeSlotCount) return null;
 		return { top: slot * 28, left: 38 + timeTodayIndex * timeColumnWidth + 2, width: Math.max(20, timeColumnWidth - 4) };
 	});
 	let timeCategories = $derived(snapshot?.categories.filter((item) => item.module === 'time') ?? []);
@@ -711,7 +722,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			});
 			observer.observe(scroll);
 			const minutes = currentTime.getHours() * 60 + currentTime.getMinutes();
-			const nowSlot = (minutes - TIME_SLOT_START_HOUR * 60) / TIME_SLOT_MINUTES;
+			const nowSlot = (minutes - timeWindow.startHour * 60) / TIME_SLOT_MINUTES;
 			scroll.scrollTop = Math.max(0, (nowSlot - 3) * 28);
 			handleTimeScroll();
 			return () => {
@@ -1174,11 +1185,14 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		habitDayPressSuppress = true;
 		setTimeout(() => {
 			habitDayPressSuppress = false;
-			if (date <= today) {
-				habitDateSheet = true;
-				playTone(380, 0.1, 'sine', 0.05, snapshot?.preferences.soundEnabled ?? true);
-			}
+			if (date <= today) openHabitDateSheet();
 		}, 0);
+	}
+
+	/** Abre o seletor de data do hábito (tap no card ou hold no dia). */
+	function openHabitDateSheet() {
+		habitDateSheet = true;
+		playTone(380, 0.1, 'sine', 0.05, snapshot?.preferences.soundEnabled ?? true);
 	}
 
 	function moveHabitDayPress(event: PointerEvent) {
@@ -2592,7 +2606,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function slotToTime(slot: number): string {
-		const hours = TIME_SLOT_START_HOUR + Math.floor(slot / 2);
+		const hours = timeWindow.startHour + Math.floor(slot / 2);
 		const minutes = slot % 2 ? 30 : 0;
 		return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 	}
@@ -3103,14 +3117,14 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const categoryId = timeGrid[day]?.[slot] ?? null;
 		if (!categoryId) return { categoryId: null, color: '', label: '', isStart: false, isEnd: false };
 		const prev = slot > 0 ? timeGrid[day][slot - 1] : null;
-		const next = slot < TIME_SLOT_COUNT - 1 ? timeGrid[day][slot + 1] : null;
+		const next = slot < timeSlotCount - 1 ? timeGrid[day][slot + 1] : null;
 		const isStart = prev !== categoryId;
 		const isEnd = next !== categoryId;
 		let label = '';
 		if (isStart) label = currentCategory(categoryId)?.name ?? '';
 		else if (timeGrid[day][slot - 1] === categoryId && (slot - 2 < 0 || timeGrid[day][slot - 2] !== categoryId)) {
 			let end = slot;
-			while (end + 1 < TIME_SLOT_COUNT && timeGrid[day][end + 1] === categoryId) end += 1;
+			while (end + 1 < timeSlotCount && timeGrid[day][end + 1] === categoryId) end += 1;
 			label = hmSlots(end - (slot - 1) + 1);
 		}
 		return { categoryId, color: currentCategory(categoryId)?.color ?? '#888888', label, isStart, isEnd };
@@ -3164,6 +3178,20 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		await tick();
 		timeLayout();
 		scrollToDay(0);
+	}
+
+	/** Janela de horas do planejador (preferência local, sem sync). */
+	async function applyTimeWindow(startHour: number, endHour: number) {
+		if (!snapshot) return;
+		if (
+			snapshot.preferences.timeWindowStartHour === startHour &&
+			snapshot.preferences.timeWindowEndHour === endHour
+		) {
+			return;
+		}
+		await updatePreferences({ timeWindowStartHour: startHour, timeWindowEndHour: endHour });
+		await tick();
+		if (timeScroll) timeScroll.scrollTop = 0;
 	}
 
 	function selectTimeCategory(categoryId: string) {
@@ -3314,9 +3342,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			if (!anchor) return;
 			plannerPinCurrent = items;
 			plannerBubble?.hide(true);
-			plannerPinBubble?.show(anchor, plannerBubbleHtml(items), plannerBlockTint(blockId));
-			pulseHaptic(snapshot?.preferences.hapticsEnabled ?? true, 10);
-			playTone(660, 0.08, 'sine', 0.04, snapshot?.preferences.soundEnabled ?? true);
+			// Fixar não repete a entrada da bolha: reposiciona e confirma com
+			// micro-pulso + haptic (o som/haptic de entrada já tocou ao abrir).
+			plannerPinBubble?.pin(anchor, plannerBubbleHtml(items), plannerBlockTint(blockId));
 		}
 	}
 
@@ -3853,6 +3881,18 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		next.habitLogs = remapWeeklyLogs(next.habitLogs, weekly, oldStart, newStart);
 		await commit(next);
 		toastMessage(value === 'sun' ? m.dialog_week_start_sunday() : m.dialog_week_start_monday());
+	}
+
+	/** Mascote: Atlas é o padrão; trocar exige Atlas Pro no mobile. */
+	async function changeMascot(value: MascotChoice) {
+		if (!snapshot || value === snapshot.preferences.mascot) return;
+		if (value !== 'atlas' && !planPro()) {
+			requestUpgrade(null);
+			return;
+		}
+		await updatePreferences({ mascot: value });
+		playTone(520, 0.07, 'sine', 0.04, snapshot.preferences.soundEnabled);
+		pulseHaptic(snapshot.preferences.hapticsEnabled, 6);
 	}
 
 	async function startPause(event: SubmitEvent) {
@@ -4489,9 +4529,16 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 												<div class="habit-prototype-ring"><svg width="84" height="84" viewBox="0 0 84 84" aria-hidden="true"><circle cx="42" cy="42" r="34" class="habit-prototype-ring-track"/><circle cx="42" cy="42" r="34" class="habit-prototype-ring-value" style={`stroke-dashoffset:${214 * (1 - (habitSelectedGoal ? Math.min(habitSelectedDone, habitSelectedGoal) / habitSelectedGoal : 0))}`}/></svg><strong>{Math.min(habitSelectedDone, habitSelectedGoal)}<small>/{habitSelectedGoal}</small></strong></div>
 												<div><h2>{habitSelectedDate !== today ? m.habit_goal_of_date({ date: habitDateLabel(habitSelectedDate) }) : habitSelectedGoal > 0 && habitSelectedDone >= habitSelectedGoal ? m.habit_goal_done() : m.dash_day_goal()}</h2><p>{habitSelectedGoal > 0 && habitSelectedDone >= habitSelectedGoal ? m.habit_goal_continue() : m.habit_goal_remaining({ count: Math.max(0, habitSelectedGoal - habitSelectedDone) })}</p></div>
 											</button>
-											<section class:away={habitSelectedDate !== today} class="habit-prototype-card habit-prototype-wide habit-prototype-week" aria-label={m.habit_week_streak()}>
+											<section
+												class:away={habitSelectedDate !== today}
+												class="habit-prototype-card habit-prototype-wide habit-prototype-week"
+												aria-label={m.habit_week_streak()}
+											>
+												<button type="button" class="habit-week-open-area" aria-label={m.habit_pick_date()} onclick={openHabitDateSheet}></button>
 												<div class="habit-week-head">
-													<span>{habitDateLongLabel(habitSelectedDate)}</span>
+													<button type="button" class="habit-week-open" aria-label={m.habit_pick_date()} onclick={openHabitDateSheet}>
+														<span>{habitDateLongLabel(habitSelectedDate)}</span>
+													</button>
 													{#if habitSelectedDate !== today}<button type="button" class="habit-week-today" onclick={selectHabitToday}>{m.habit_today()}</button>{/if}
 												</div>
 												<div class="habit-week-days">
@@ -4600,6 +4647,11 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 							</div>
 						</div>
 						<div class="tp-pal">
+							<div class="tp-pal-actions">
+								<small class="tp-info tp-chip" aria-label={timeTotalsLabel} title={timeTotalsLabel}>{timeTotalsShort}</small>
+								<button class="tp-ic" aria-label={m.planner_range_title()} title={m.planner_range_pick()} onclick={() => (timeCalendarOpen = true)}><CalendarDays size={18} /></button>
+								<button class="tp-ic" aria-label={m.time_summary()} onclick={openTimeSummary}>Σ</button>
+							</div>
 							{#each timeCategories as category}
 								{@const hours = timeCategoryHours(category.id)}
 								{@const rangeGoal = ((category.weeklyGoalHours ?? 0) * timeRangeDays) / 7}
@@ -4614,8 +4666,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 								{#each timeHeaderDays as header, index}<span class:td={index === timeTodayIndex} class="tp-h">{header.label}<b>{header.dayNumber}</b></span>{/each}
 							</div>
 							<div class="tp-grid" role="grid" tabindex="0" aria-label={m.time_grid()} style={`grid-template-columns:38px repeat(${timeRangeDays}, var(--tp-cw))`} bind:this={timeGridEl} onpointerdown={beginTimePaint} oncontextmenu={(event) => event.preventDefault()} use:timeGestures>
-								{#each Array.from({ length: TIME_SLOT_COUNT }, (_, index) => index) as slot}
-									<span class="tp-rl">{slot % 2 === 0 ? `${String(TIME_SLOT_START_HOUR + slot / 2).padStart(2, '0')}:00` : ''}</span>
+								{#each Array.from({ length: timeSlotCount }, (_, index) => index) as slot}
+									<span class="tp-rl">{slot % 2 === 0 ? `${String(timeWindow.startHour + slot / 2).padStart(2, '0')}:00` : ''}</span>
 									{#each Array.from({ length: timeRangeDays }, (_, index) => index) as day}
 										{@const cell = timeCellData(day, slot)}
 										{@const cellBlock = timeGridBlocks[day]?.[slot] ?? null}
@@ -4998,7 +5050,10 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		<TimeRangeSheet
 			start={timeRangeStart}
 			end={timeRangeEnd}
+			windowStart={timeWindow.startHour}
+			windowEnd={timeWindow.endHour}
 			onapply={applyTimeRange}
+			onwindow={(start, end) => void applyTimeWindow(start, end)}
 			onclose={() => (timeCalendarOpen = false)}
 		/>
 	{/if}
@@ -5027,7 +5082,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					{@const categoryGoal = ((category.weeklyGoalHours ?? 0) * timeRangeDays) / 7}
 					<div class="tp-sr" style={`--cc:${category.color}`}>
 						<div><span>{category.name}</span><small>{categoryGoal ? m.time_hours_goal({ hours: hmSlots(categoryHours * 2), goal: hmSlots(categoryGoal * 2) }) : m.time_hours({ hours: hmSlots(categoryHours * 2) })}</small></div>
-						<div class="tp-sbar"><i style={`width:${Math.min(100, categoryGoal ? (categoryHours / categoryGoal) * 100 : (categoryHours / (timeRangeDays * TIME_SLOT_COUNT * 0.5)) * 400)}%`}></i></div>
+						<div class="tp-sbar"><i style={`width:${Math.min(100, categoryGoal ? (categoryHours / categoryGoal) * 100 : (categoryHours / (timeRangeDays * timeSlotCount * 0.5)) * 400)}%`}></i></div>
 					</div>
 				{/each}
 				<button class="tp-btn" onclick={() => (timeSummaryOpen = false)}>{m.common_close()}</button>
@@ -5246,6 +5301,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			onpreference={setFeedbackPreference}
 			oncurrency={changeCurrency}
 			onfirstday={(value) => void changeFirstDayOfWeek(value)}
+			onmascot={(value) => void changeMascot(value)}
 			ontestmode={toggleTestMode}
 			onpause={openPauseModal}
 			onexport={exportData}

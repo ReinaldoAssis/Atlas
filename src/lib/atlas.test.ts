@@ -13,6 +13,8 @@ import {
 	money,
 	normalizeDailyGoal,
 	normalizeFirstDayOfWeek,
+	normalizeMascot,
+	normalizeTimeWindow,
 	nextBooleanLog,
 	positiveValueOf,
 	remapWeeklyLogs,
@@ -368,6 +370,24 @@ describe('createEmptySnapshot', () => {
 
 	it('a semana começa na segunda por padrão', () => {
 		expect(createEmptySnapshot().preferences.firstDayOfWeek).toBe('mon');
+	});
+
+	it('janela de horas nasce em 07–22 e respeita o mínimo de 4h', () => {
+		const preferences = createEmptySnapshot().preferences;
+		expect(preferences.timeWindowStartHour).toBe(7);
+		expect(preferences.timeWindowEndHour).toBe(22);
+		expect(normalizeTimeWindow('9', '10')).toEqual({ startHour: 9, endHour: 12 });
+		expect(normalizeTimeWindow(-5, 30)).toEqual({ startHour: 0, endHour: 23 });
+		expect(normalizeTimeWindow(23, 23)).toEqual({ startHour: 20, endHour: 23 });
+		expect(normalizeTimeWindow(undefined, undefined)).toEqual({ startHour: 7, endHour: 22 });
+	});
+
+	it('mascote nasce em Atlas e só aceita as opções conhecidas', () => {
+		expect(createEmptySnapshot().preferences.mascot).toBe('atlas');
+		expect(normalizeMascot('cat')).toBe('cat');
+		expect(normalizeMascot('ghost')).toBe('ghost');
+		expect(normalizeMascot('dog')).toBe('atlas');
+		expect(normalizeMascot(undefined)).toBe('atlas');
 	});
 });
 

@@ -22,7 +22,7 @@
 	} from '#lib/notes';
 	import { saveNoteMarkdown } from '#lib/note-export';
 	import { playTone, playTypingThock, prefersReducedMotion, pulseHaptic } from '#lib/feedback';
-	import { decorateTempoRefs, insideCodeAt, tempoReference } from '#lib/tempo-ref';
+	import { decorateTempoRefs, insideCodeAt, mergeAdjacentBlocks, tempoReference } from '#lib/tempo-ref';
 	import { TimeBubble } from '#lib/bubble';
 	import { formatMinutes, type TimeBlock } from '#lib/atlas';
 	import { Clock, Download, MoreHorizontal } from '@lucide/svelte';
@@ -92,6 +92,11 @@
 	let morphing = $state(false);
 	let slashOpen = $state(false);
 	let slashStart = 0;
+	/**
+	 * O textarea já recebeu um caret? Sem isso, `selectionStart` é 0 e o insert
+	 * de tempo cairia no começo da nota quando o editor nunca foi focado.
+	 */
+	let caretTouched = false;
 	let editorEl = $state<HTMLTextAreaElement | null>(null);
 	let previewEl = $state<HTMLElement | null>(null);
 	let moreEl = $state<HTMLElement | null>(null);
@@ -183,24 +188,25 @@
 
 	function openSlash() {
 		if (!editorEl) return;
-		slashStart = editorEl.selectionStart;
+		slashStart = caretTouched ? editorEl.selectionStart : editorEl.value.length;
 		slashOpen = true;
-		editorEl.focus();
+		// Sem `focus()`: no mobile o teclado virtual abriria por cima das
+		// opções e o usuário não pediu para editar texto.
 	}
 
 	function insertTempo(block: TimeBlock) {
 		const element = editorEl;
 		if (!element) return;
-		const caret = element.selectionStart;
+		const caret = caretTouched ? element.selectionEnd : element.value.length;
 		const start = Math.max(0, Math.min(slashStart, caret));
 		const prefix = start > 0 && !/\s/.test(element.value[start - 1]) ? ' ' : '';
 		const reference = tempoReference(block);
 		const text = `${prefix}${insideCodeAt(element.value, start) ? reference : `\`${reference}\``}`;
 		element.setRangeText(text, start, caret, 'end');
 		body = element.value;
+		caretTouched = true;
 		slashOpen = false;
 		markChange();
-		element.focus();
 		tone(660, 0.07, 'triangle', 0.05);
 		pulseHaptic(haptics, 5);
 	}
@@ -363,7 +369,58 @@
 		await openPath(await attachmentAbsolutePath(note.id, name));
 	}
 
+	const TP_HOLD_MS = 350;
+	let tpHoldTimer: ReturnType<typeof setTimeout> | undefined;
+	let tpHoldOrigin = { x: 0, y: 0 };
+	let tpHoldReady = false;
+	let tpHoldSuppress = false;
+
+	/** Hold no chip `tempo` mostra o bloco (sem selecionar o texto). */
+	function onPreviewPointerDown(event: PointerEvent) {
+		const ref = (event.target as HTMLElement | null)?.closest<HTMLElement>('.tp-ref');
+		if (!ref || event.button !== 0) return;
+		tpHoldReady = false;
+		tpHoldOrigin = { x: event.clientX, y: event.clientY };
+		clearTimeout(tpHoldTimer);
+		tpHoldTimer = setTimeout(() => {
+			tpHoldTimer = undefined;
+			tpHoldReady = true;
+			pulseHaptic(haptics, 10);
+		}, TP_HOLD_MS);
+	}
+
+	function onPreviewPointerMove(event: PointerEvent) {
+		const distance = Math.hypot(event.clientX - tpHoldOrigin.x, event.clientY - tpHoldOrigin.y);
+		if (tpHoldReady) {
+			if (distance > 8) tpHoldReady = false;
+			return;
+		}
+		if (!tpHoldTimer) return;
+		if (distance > 8) {
+			clearTimeout(tpHoldTimer);
+			tpHoldTimer = undefined;
+		}
+	}
+
+	function onPreviewPointerUp(event: PointerEvent) {
+		clearTimeout(tpHoldTimer);
+		tpHoldTimer = undefined;
+		if (!tpHoldReady) return;
+		tpHoldReady = false;
+		const ref = (event.target as HTMLElement | null)?.closest<HTMLElement>('.tp-ref');
+		if (!ref) return;
+		// O click sintetizado depois do hold não deve fechar a bolha que acabou de abrir.
+		tpHoldSuppress = true;
+		setTimeout(() => (tpHoldSuppress = false), 0);
+		showRefBubble(ref);
+	}
+
+	function onPreviewContextMenu(event: MouseEvent) {
+		if ((event.target as HTMLElement | null)?.closest('.tp-ref')) event.preventDefault();
+	}
+
 	function onPreviewClick(event: MouseEvent) {
+		if (tpHoldSuppress) return;
 		const target = event.target as HTMLElement | null;
 		const ref = target?.closest<HTMLElement>('.tp-ref');
 		if (ref) {
@@ -381,14 +438,16 @@
 
 	function matchingBlocks(from: string, to: string): TimeBlock[] {
 		if (!from || !to) return [];
-		return timeBlocks
-			.filter(
-				(block) =>
-					block.status !== 'cancelled' &&
-					from < block.endAt.slice(0, 16) &&
-					to > block.startAt.slice(0, 16)
-			)
-			.sort((a, b) => a.startAt.localeCompare(b.startAt));
+		return mergeAdjacentBlocks(
+			timeBlocks
+				.filter(
+					(block) =>
+						block.status !== 'cancelled' &&
+						from < block.endAt.slice(0, 16) &&
+						to > block.startAt.slice(0, 16)
+				)
+				.sort((a, b) => a.startAt.localeCompare(b.startAt))
+		);
 	}
 
 	function escapeHtml(value: string): string {
@@ -459,7 +518,16 @@
 		});
 		paneEl?.addEventListener('click', onPreviewClick);
 		paneEl?.addEventListener('pointerover', onPreviewPointerOver);
-		paneEl?.addEventListener('pointerleave', () => bubble?.later());
+		paneEl?.addEventListener('pointerdown', onPreviewPointerDown);
+		paneEl?.addEventListener('pointermove', onPreviewPointerMove);
+		paneEl?.addEventListener('pointerup', onPreviewPointerUp);
+		paneEl?.addEventListener('pointercancel', onPreviewPointerUp);
+		paneEl?.addEventListener('contextmenu', onPreviewContextMenu);
+		paneEl?.addEventListener('pointerleave', () => {
+			clearTimeout(tpHoldTimer);
+			tpHoldTimer = undefined;
+			bubble?.later();
+		});
 		paneEl?.addEventListener('scroll', () => bubble?.hide(true), true);
 		void renderPreview();
 		// iOS suspende timers ao ir para segundo plano: grava o rascunho
@@ -574,6 +642,10 @@
 			spellcheck="false"
 			aria-label={m.editor_body_label()}
 			placeholder={m.editor_body_placeholder()}
+			onfocus={() => (caretTouched = true)}
+			onkeyup={() => (caretTouched = true)}
+			onpointerup={() => (caretTouched = true)}
+			onselect={() => (caretTouched = true)}
 			oninput={(event) => {
 				typingClick();
 				const element = event.currentTarget;

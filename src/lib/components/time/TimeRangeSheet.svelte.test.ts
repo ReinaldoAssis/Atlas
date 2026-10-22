@@ -49,4 +49,26 @@ describe('TimeRangeSheet', () => {
 		const [start, end] = onapply.mock.calls[0];
 		expect(start < end).toBe(true);
 	});
+
+	it('configura a janela de horas e mantém o mínimo de 4 horas', async () => {
+		const onwindow = vi.fn();
+		render(TimeRangeSheet, {
+			props: {
+				start: '2026-10-14',
+				end: '2026-10-20',
+				windowStart: 7,
+				windowEnd: 22,
+				onwindow,
+				onapply: vi.fn(),
+				onclose: vi.fn()
+			}
+		});
+
+		const [startSelect, endSelect] = screen.getAllByRole('combobox') as HTMLSelectElement[];
+		await fireEvent.change(startSelect, { target: { value: '20' } });
+		expect(onwindow).toHaveBeenLastCalledWith(20, 23);
+
+		await fireEvent.change(endSelect, { target: { value: '8' } });
+		expect(onwindow).toHaveBeenLastCalledWith(5, 8);
+	});
 });

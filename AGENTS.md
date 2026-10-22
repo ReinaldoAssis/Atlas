@@ -11,6 +11,12 @@ Regras e atalhos para quem (agente ou humano) mexe neste repositório.
   opções e a recomendada primeiro), não como texto solto.
 - **Commits, títulos/corpos de PR e nomes de branch em inglês.** Identificadores
   no código em inglês. Copy de UI em **pt-BR**.
+- **Copy de UI nasce em i18n**: todo texto de interface (label, `aria-label`,
+  `title`, toast, placeholder) entra em `messages/pt-BR.json` **e**
+  `messages/en.json` no mesmo commit. Nada de string solta em `.svelte` — o
+  guard `src/lib/i18n/hardcoded.test.ts` roda no CI. Escreva pensando em
+  tradução: sem concatenar frases, use placeholders da própria mensagem. Ver
+  `docs/I18N.md`.
 - Mensagem de commit: convencional (`feat:`, `fix:`, `docs:`), corpo em bullets
   explicando o porquê — não descreva só o diff.
 

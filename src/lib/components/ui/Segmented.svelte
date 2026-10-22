@@ -10,18 +10,27 @@
 		options,
 		value = $bindable(),
 		label,
-		onchange
+		onchange,
+		locked = false,
+		onlocked
 	}: {
 		options: Option[];
 		value?: string;
 		label: string;
 		onchange?: (value: string) => void;
+		/** Bloqueia a troca (ex.: recurso Pro) sem desabilitar o foco. */
+		locked?: boolean;
+		onlocked?: (value: string) => void;
 	} = $props();
 
 	const index = $derived(Math.max(0, options.findIndex((option) => option.value === value)));
 
 	function select(next: string) {
 		if (next === value) return;
+		if (locked) {
+			onlocked?.(next);
+			return;
+		}
 		value = next;
 		onchange?.(next);
 	}
@@ -31,6 +40,8 @@
 	class="segmented"
 	role="radiogroup"
 	aria-label={label}
+	aria-disabled={locked}
+	class:locked
 	style={`--i:${index};--n:${options.length || 1}`}
 >
 	<i class="pill" aria-hidden="true"></i>

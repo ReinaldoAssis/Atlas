@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blockIdsForNote, blocksForRef, insideCodeAt, notesForBlock, parseTempoRefs, refOverlapsBlock, tempoReference } from './tempo-ref';
+import { blockIdsForNote, blocksForRef, insideCodeAt, mergeAdjacentBlocks, notesForBlock, parseTempoRefs, refOverlapsBlock, tempoReference } from './tempo-ref';
 
 const NOTE_DATE = '2026-11-03T10:00:00.000Z';
 
@@ -125,5 +125,43 @@ describe('cruzamento com os blocos', () => {
 	it('indexa os blocos de uma nota', () => {
 		const ids = blockIdsForNote({ id: 'n1', title: 'T', body: 'tempo 16/10 17h-20h', updatedAt: NOTE_DATE }, blocks);
 		expect([...ids].sort()).toEqual(['a', 'b']);
+	});
+});
+
+describe('mergeAdjacentBlocks', () => {
+	const block = (
+		id: string,
+		categoryId: string,
+		start: string,
+		end: string,
+		plannedMinutes: number
+	) => ({ id, categoryId, title: categoryId, startAt: `2026-10-16T${start}:00`, endAt: `2026-10-16T${end}:00`, plannedMinutes });
+
+	it('junta blocos colados da mesma categoria', () => {
+		const merged = mergeAdjacentBlocks([
+			block('a', 'deep-work', '13:00', '13:30', 30),
+			block('b', 'deep-work', '13:30', '14:00', 30)
+		]);
+		expect(merged).toHaveLength(1);
+		expect(merged[0]).toMatchObject({ startAt: '2026-10-16T13:00:00', endAt: '2026-10-16T14:00:00', plannedMinutes: 60 });
+	});
+
+	it('não junta categorias diferentes nem intervalos com buraco', () => {
+		const merged = mergeAdjacentBlocks([
+			block('a', 'deep-work', '13:00', '13:30', 30),
+			block('b', 'reading', '13:30', '14:00', 30),
+			block('c', 'reading', '14:30', '15:00', 30)
+		]);
+		expect(merged).toHaveLength(3);
+	});
+
+	it('não muta os blocos recebidos', () => {
+		const blocks = [
+			block('a', 'deep-work', '13:00', '13:30', 30),
+			block('b', 'deep-work', '13:30', '14:00', 30)
+		];
+		mergeAdjacentBlocks(blocks);
+		expect(blocks[0].endAt).toBe('2026-10-16T13:30:00');
+		expect(blocks[1].plannedMinutes).toBe(30);
 	});
 });

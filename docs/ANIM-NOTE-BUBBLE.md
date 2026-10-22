@@ -151,3 +151,25 @@ Framer Motion / Rive / After Effects e nos mandar o arquivo — a gente adapta o
   desliza para baixo; o morph é só na entrada. Respeitar `prefers-reduced-motion`.
 - A bolha da nota (preview do bloco a partir do chip `tempo`) continua passiva;
   o contrato de âncoras e `z-index` da §3 segue valendo.
+
+---
+
+## 8. Ajustes de outubro/2026 (pós-S15)
+
+- **Fixar não reanima.** Quando a bolha do planejador já está aberta, segurar
+  para fixar **não** repete a entrada (spring/cauda/stagger nem som): ela
+  reposiciona na hora e confirma com micro-pulso de escala (`1 → 1.03 → 1`,
+  ~160 ms) + háptica. A entrada cheia só acontece na primeira abertura.
+- **Material mais opaco.** Fundo ~92% de opacidade (antes 72%) mantendo blur e
+  tint da categoria; borda e realce interno levemente mais fortes.
+- **Chip `tempo` é um chip só.** O `code` que embrulha a referência perde
+  fundo/padding quando contém `.tp-ref`; o texto do chip é
+  `user-select: none` (sem callout no iOS) para o **hold de 350 ms** abrir a
+  bolha do bloco sem selecionar texto. Tap continua alternando a bolha.
+- **Blocos colados da mesma categoria** aparecem como uma entrada só no bubble
+  (`13:00–13:30` + `13:30–14:00` → `13:00–14:00`).
+- **Insert de referência não abre teclado**: o texto entra no último caret
+  conhecido (ou no fim do corpo) sem `focus()` no textarea.
+- **Janela de horas** do planejador é configurável no sheet de range
+  (preferência local, não sincroniza); o componente de calendário continua só
+  com datas.

@@ -2,7 +2,7 @@
 	import { untrack } from 'svelte';
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import Sheet from '#lib/components/ui/Sheet.svelte';
-	import { localDate } from '#lib/atlas';
+	import { localDate, normalizeTimeWindow, TIME_WINDOW_DEFAULT_END_HOUR, TIME_WINDOW_DEFAULT_START_HOUR, TIME_WINDOW_MIN_HOURS } from '#lib/atlas';
 	import { m } from '#lib/paraglide/messages.js';
 	import { intlLocale } from '#lib/i18n/intl';
 	import {
@@ -23,14 +23,42 @@
 	let {
 		start,
 		end,
+		windowStart = TIME_WINDOW_DEFAULT_START_HOUR,
+		windowEnd = TIME_WINDOW_DEFAULT_END_HOUR,
 		onapply,
+		onwindow = () => {},
 		onclose
 	}: {
 		start: string;
 		end: string;
+		/** Janela de horas visível na grade (inclusiva nas duas pontas). */
+		windowStart?: number;
+		windowEnd?: number;
 		onapply: (start: string, end: string) => void;
+		onwindow?: (startHour: number, endHour: number) => void;
 		onclose: () => void;
 	} = $props();
+
+	/** Horários oferecidos: o início precisa deixar espaço para o mínimo de horas. */
+	const startHours = Array.from({ length: 24 - TIME_WINDOW_MIN_HOURS + 1 }, (_, index) => index);
+	const endHours = Array.from({ length: 24 }, (_, index) => index);
+
+	function hourLabel(hour: number): string {
+		return `${String(hour).padStart(2, '0')}:00`;
+	}
+
+	function setWindow(startHour: number, endHour: number) {
+		const window = normalizeTimeWindow(startHour, endHour);
+		onwindow(window.startHour, window.endHour);
+	}
+
+	function setWindowStart(value: number) {
+		setWindow(value, Math.max(windowEnd, value + TIME_WINDOW_MIN_HOURS - 1));
+	}
+
+	function setWindowEnd(value: number) {
+		setWindow(Math.min(windowStart, value - TIME_WINDOW_MIN_HOURS + 1), value);
+	}
 
 	const today = localDate();
 	let month = $state(untrack(() => monthStart(start)));
@@ -116,6 +144,27 @@
 		<small>{m.planner_range_max({ days: TIME_RANGE_MAX_DAYS })}</small>
 	</div>
 
+	<div class="cal-window">
+		<div class="cal-window-head">
+			<b>{m.time_window_title()}</b>
+			<small>{m.time_window_hint()}</small>
+		</div>
+		<div class="cal-window-fields">
+			<label>
+				<small>{m.time_window_from()}</small>
+				<select value={windowStart} onchange={(event) => setWindowStart(Number(event.currentTarget.value))}>
+					{#each startHours as hour (hour)}<option value={hour}>{hourLabel(hour)}</option>{/each}
+				</select>
+			</label>
+			<label>
+				<small>{m.time_window_to()}</small>
+				<select value={windowEnd} onchange={(event) => setWindowEnd(Number(event.currentTarget.value))}>
+					{#each endHours as hour (hour)}<option value={hour}>{hourLabel(hour)}</option>{/each}
+				</select>
+			</label>
+		</div>
+	</div>
+
 	<div class="cal-head">
 		<button type="button" class="cal-nav" aria-label={m.planner_range_prev_month()} onclick={() => changeMonth(-1)}>
 			<ChevronLeft size={18} />
@@ -185,6 +234,60 @@
 		margin-left: auto;
 		color: var(--mu);
 		font-size: 11px;
+	}
+	.cal-window {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		margin-bottom: 12px;
+		padding: 10px 12px;
+		border: 1px solid var(--line);
+		border-radius: 12px;
+		background: var(--s);
+	}
+	.cal-window-head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 8px;
+	}
+	.cal-window-head b {
+		color: var(--tx);
+		font-size: 13px;
+		font-weight: 700;
+	}
+	.cal-window-head small {
+		color: var(--mu);
+		font-size: 11px;
+		text-align: right;
+	}
+	.cal-window-fields {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 8px;
+	}
+	.cal-window-fields label {
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+	}
+	.cal-window-fields label small {
+		color: var(--mu);
+		font-size: 10px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+	.cal-window-fields select {
+		width: 100%;
+		padding: 8px 10px;
+		border: 0;
+		border-radius: 8px;
+		background: var(--s2);
+		color: var(--tx);
+		font: inherit;
+		font-size: 14px;
+		font-weight: 600;
 	}
 	.cal-head {
 		display: grid;
