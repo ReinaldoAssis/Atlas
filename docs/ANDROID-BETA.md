@@ -77,6 +77,11 @@ Alimentação e Lazer; tempo = Foco profundo, Leitura, Saúde, Pessoal e
 Descanso. `Transporte` e `Administração` saíram do seed (recriáveis como
 categoria custom) para valer também no PC.
 
+O backstop em Rust só reverte um lote quando ele **aumenta** a contagem acima
+do limite. Dados legados ou vindos de um aparelho Pro que já estejam acima do
+limite continuam editáveis (grandfathering) — não podem é crescer mais. O banco
+do modo de teste (`atlas.test.db`) fica fora do gating.
+
 ## Fatias
 
 1. **Fundação** ✅ — versão 0.4.0, `tauri android init`, JDK 17 + NDK 27,
