@@ -114,6 +114,42 @@ gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --body '<senha>'
 # cole o conteúdo de ~/.tauri/atlas.key.pub em plugins.updater.pubkey
 ```
 
+## Android (beta)
+
+O workflow `.github/workflows/android.yml` roda em tag `v*` (ou manual):
+
+1. confere `VERSION`/`versionCode` contra a tag;
+2. restaura a **upload key** de `ANDROID_KEYSTORE_BASE64` (Play App Signing
+   guarda a chave de distribuição; a de upload só assina o que sobe);
+3. builda o **AAB** com `targetSdk 36` e envia para o track `internal` via
+   Play Developer API (`PLAY_SERVICE_ACCOUNT_JSON`);
+4. **não** publica o AAB como artifact nem no GitHub Releases — só a Play o
+   recebe. A promoção para `closed`/produção é manual no Console.
+
+`versionCode` = `major*10000 + minor*100 + patch` (0.4.0 → 400), gravado pelo
+`tools/version.mjs` e conferido pelo `version:check`. A Play recusa repetir ou
+voltar o código.
+
+Segredos do repositório:
+
+```bash
+gh secret set ANDROID_KEYSTORE_BASE64 < upload.jks.base64
+gh secret set ANDROID_KEYSTORE_PASSWORD --body '<senha do keystore>'
+gh secret set ANDROID_KEY_ALIAS --body 'upload'
+gh secret set ANDROID_KEY_PASSWORD --body '<senha da chave>'
+gh secret set PLAY_SERVICE_ACCOUNT_JSON < play-service-account.json
+```
+
+Gerar a upload key (uma vez, guarde o `.jks` e as senhas fora do repo):
+
+```bash
+keytool -genkeypair -v -keystore upload.jks -alias upload \
+  -keyalg RSA -keysize 4096 -validity 10000
+base64 -i upload.jks | pbcopy   # macOS; no Linux: base64 -w0 upload.jks
+```
+
+Checklist completo da Play Console: `docs/PLAY-STORE.md`.
+
 ## Limites conhecidos
 
 - **Windows apenas**: o `latest.json` só tem `windows-x86_64`; em outra

@@ -61,10 +61,11 @@ categoria custom) para valer também no PC.
    transação do `db_batch` (rollback + `plan-limit:<chave>:<limite>`), cache de
    Pro com grace de 7 dias, guard otimista na UI e paywall (sheet no limite +
    linha em Configurações). Histórico do free corta em 7 dias na lista.
-5. **Billing** — `tauri-plugin-iap`, produtos na Play, license testers,
-   restore/acknowledge.
-6. **Pipeline de release** — job Android no CI, keystore/secrets, upload no
-   track `internal`, `versionCode` no build.
+5. **Billing** ✅ — `tauri-plugin-iap` (Billing 9) só no mobile, preços da
+   loja com fallback, compra/restore/acknowledge e renovação via listener.
+   Falta criar os produtos na Play e testar com license tester.
+6. **Pipeline de release** ✅ — workflow `Android` em tag, upload key pelos
+   secrets, AAB direto pro track `internal`, `versionCode` conferido.
 7. **Loja e site** — landing + política em `atlas.reinaldoassis.com`, ficha
    em pt-BR/en, assets, formulários (segurança de dados, classificação).
 
