@@ -48,6 +48,7 @@
 	} from '#lib/notes-store';
 	import { burstAt, centerOf, playTone, playTypingThock, prefersReducedMotion, pulseHaptic } from '#lib/feedback';
 	import { m } from '#lib/paraglide/messages.js';
+	import { allowCreate } from '#lib/plan.svelte';
 	import { saveNoteMarkdown } from '#lib/note-export';
 	import FolderIcon from './FolderIcon.svelte';
 	import NoteEditor from './NoteEditor.svelte';
@@ -362,6 +363,7 @@
 	}
 
 	async function newNote() {
+		if (!allowCreate('notes', notes.filter((item) => !item.trashedAt).length)) return;
 		const folderId = searching || trashedView ? null : currentFolder;
 		const note = createNote(folderId, m.notes_new_note_title());
 		notes = [note, ...notes];

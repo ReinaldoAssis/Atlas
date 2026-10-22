@@ -5,6 +5,7 @@ use tauri_plugin_sql::{DbInstances, DbPool};
 // Sync P2P (S10). No iOS a descoberta é um plugin Swift (P4); no Android é o
 // mesmo `mdns-sd` do desktop, com `MulticastLock` (plugin Kotlin).
 pub mod multicast;
+pub mod plan;
 pub mod sync;
 
 #[derive(Deserialize)]
@@ -80,6 +81,12 @@ async fn db_batch(
       .await
       .map_err(|error| error.to_string())?;
   }
+
+  // Backstop do freemium: sem Pro, um lote que estoura qualquer limite
+  // inteiro é revertido (a UI já bloqueia antes, mas o IPC não é confiável).
+  #[cfg(any(target_os = "android", target_os = "ios"))]
+  plan::check_limits(&app, &mut tx).await?;
+
   tx.commit().await.map_err(|error| error.to_string())?;
   Ok(())
 }
@@ -127,6 +134,8 @@ pub fn run() {
     .manage(sync::commands::SyncState::default())
     .invoke_handler(tauri::generate_handler![
       db_batch,
+      plan::plan_status,
+      plan::plan_set_pro,
       native_notification,
       sync::commands::sync_start,
       sync::commands::sync_stop,

@@ -12,13 +12,20 @@
 	 */
 	let {
 		groups,
-		onopen
+		onopen,
+		floorDate = null,
+		onupgrade
 	}: {
 		groups: HistoryGroup[];
 		onopen: (id: string) => void;
+		/** Free no mobile: só mostra de `floorDate` para frente. */
+		floorDate?: string | null;
+		onupgrade?: () => void;
 	} = $props();
 
 	const today = localDate();
+	const visible = $derived(floorDate ? groups.filter((group) => group.date >= floorDate) : groups);
+	const hidden = $derived(groups.length - visible.length);
 
 	function dayLabel(date: string): string {
 		if (date === today) return m.habit_today();
@@ -31,9 +38,9 @@
 	}
 </script>
 
-{#if groups.length}
+{#if visible.length}
 	<ul class="hl">
-		{#each groups as group (group.date)}
+		{#each visible as group (group.date)}
 			<li class="hl-group">
 				<header>
 					<span>{dayLabel(group.date)}</span>
@@ -55,6 +62,9 @@
 	</ul>
 {:else}
 	<p class="hl-empty">{m.common_empty_period()}</p>
+{/if}
+{#if hidden > 0 && onupgrade}
+	<button type="button" class="hl-locked" onclick={onupgrade}>{m.history_locked()}</button>
 {/if}
 
 <style>
@@ -130,6 +140,17 @@
 		flex: none;
 		color: var(--mu);
 		font-size: 12px;
+		font-weight: 600;
+	}
+	.hl-locked {
+		width: 100%;
+		margin: 14px 0 2px;
+		padding: 11px;
+		border: 1px dashed var(--ln);
+		border-radius: 12px;
+		background: none;
+		color: var(--acc);
+		font-size: 13px;
 		font-weight: 600;
 	}
 	.hl-empty {

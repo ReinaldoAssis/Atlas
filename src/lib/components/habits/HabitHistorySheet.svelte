@@ -2,7 +2,9 @@
 	import Segmented from '#lib/components/ui/Segmented.svelte';
 	import Sheet from '#lib/components/ui/Sheet.svelte';
 	import { m } from '#lib/paraglide/messages.js';
-	import { formatClock } from '#lib/duration';
+	import { plan, requestUpgrade } from '#lib/plan.svelte';
+	import { historyFloor } from '#lib/plan';
+		import { formatClock } from '#lib/duration';
 	import { buildHistoryChart } from '#lib/history-chart';
 	import HistoryList from './HistoryList.svelte';
 	import type { HistoryGroup } from '#lib/history-list';
@@ -117,6 +119,8 @@
 	{#if filtered.length}
 		<HistoryList
 			{groups}
+			floorDate={historyFloor(localDate(), plan.status)}
+			onupgrade={() => requestUpgrade(null)}
 			onopen={(id) => {
 				const log = logs.find((item) => item.id === id);
 				if (log) onopen(log);

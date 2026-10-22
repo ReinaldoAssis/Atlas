@@ -10,6 +10,8 @@
 	import ValueSheet from '../ui/ValueSheet.svelte';
 	import { playTone, pulseHaptic } from '#lib/feedback';
 	import { m } from '#lib/paraglide/messages.js';
+	import { allowCreate, plan, requestUpgrade } from '#lib/plan.svelte';
+	import { historyFloor } from '#lib/plan';
 	import { formatClock } from '#lib/duration';
 	import { buildHistoryChart } from '#lib/history-chart';
 	import HistoryList from './HistoryList.svelte';
@@ -271,6 +273,7 @@
 
 	/* ---------- ações ---------- */
 	function openNewTracker() {
+		if (!allowCreate('trackers', trackers.filter((item) => item.active).length)) return;
 		editingTracker = null;
 		trackerForm = {
 			name: '',
@@ -662,6 +665,8 @@
 		{#if detailEntries.length}
 			<HistoryList
 				groups={detailGroups}
+				floorDate={historyFloor(localDate(), plan.status)}
+				onupgrade={() => requestUpgrade(null)}
 				onopen={(id) => {
 					const entry = detailEntries.find((item) => item.id === id);
 					if (entry) openEntry(entry);

@@ -57,9 +57,10 @@ categoria custom) para valer também no PC.
 3. **i18n completo** ✅ — pt-BR + en, seletor nas Configurações, migração de
    toda a copy (markup, atributos, toasts, erros), `Intl` por locale, guard
    sem allowlist. Ver `docs/I18N.md`.
-4. **Gating + entitlement** — limites checados no Rust, `Entitlement` com
-   cache local e grace, paywall (sheet no limite + linha em Configurações +
-   sheet ocasional de benefícios).
+4. **Gating + entitlement** ✅ — `plan.rs` valida os limites dentro da
+   transação do `db_batch` (rollback + `plan-limit:<chave>:<limite>`), cache de
+   Pro com grace de 7 dias, guard otimista na UI e paywall (sheet no limite +
+   linha em Configurações). Histórico do free corta em 7 dias na lista.
 5. **Billing** — `tauri-plugin-iap`, produtos na Play, license testers,
    restore/acknowledge.
 6. **Pipeline de release** — job Android no CI, keystore/secrets, upload no

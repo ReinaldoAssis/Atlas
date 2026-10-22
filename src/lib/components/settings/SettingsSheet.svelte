@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Bell, CalendarDays, CircleDollarSign, FlaskConical, Keyboard, Languages, Volume2, Vibrate, ArrowDownRight, ArrowUpRight, Flame, RefreshCw, Wifi, Link2, Smartphone, Timer } from '@lucide/svelte';
+	import { Bell, CalendarDays, CircleDollarSign, FlaskConical, Keyboard, Languages, Sparkles, Volume2, Vibrate, ArrowDownRight, ArrowUpRight, Flame, RefreshCw, Wifi, Link2, Smartphone, Timer } from '@lucide/svelte';
 	import type { AtlasSnapshot, FirstDayOfWeek } from '#lib/atlas';
 	import type { LocaleChoice } from '#lib/i18n/locale';
 	import { m } from '#lib/paraglide/messages.js';
@@ -43,7 +43,10 @@
 		onpair,
 		onunpair,
 		onnotificationsdiagnostics,
-		onnotificationstest
+		onnotificationstest,
+		gated = false,
+		pro = false,
+		onopenpaywall
 	}: {
 		snapshot: AtlasSnapshot;
 		testMode: boolean;
@@ -76,6 +79,10 @@
 		onunpair: (peer: SyncPeerStatus) => void;
 		onnotificationsdiagnostics?: () => void;
 		onnotificationstest?: () => void;
+		/** Mobile: mostra a linha do plano. No desktop fica escondida. */
+		gated?: boolean;
+		pro?: boolean;
+		onopenpaywall?: () => void;
 	} = $props();
 
 	type NotificationDiagnostics = {
@@ -145,6 +152,18 @@
 		<section>
 			<h3>{m.settings_section_local()}</h3>
 			<div class="tile">
+				{#if gated}
+					<div class="row">
+						<span class="lead"><Sparkles size={17} /></span>
+						<span class="text">
+							<strong>{m.paywall_settings_title()}</strong>
+							<small>{pro ? m.paywall_settings_pro() : m.paywall_settings_free()}</small>
+						</span>
+						<button type="button" class="btn compact" onclick={onopenpaywall}>
+							{m.paywall_settings_hint()}
+						</button>
+					</div>
+				{/if}
 				<div class="row">
 					<span class="lead"><Languages size={17} /></span>
 					<span class="text">

@@ -767,5 +767,22 @@
 	"time_range_summary": "Period summary",
 	"time_summary": "Summary",
 	"time_totals": "{range} · {allocated} allocated · {free} free",
-	"time_weekly_goal": "Weekly goal"
+	"time_weekly_goal": "Weekly goal",
+	"paywall_title": "Atlas Pro",
+	"paywall_subtitle": "More room, sync and full history.",
+	"paywall_benefit_sync": "Sync between devices on the same network",
+	"paywall_benefit_limits": "No limits on notes, attachments, habits, trackers, categories or nodes",
+	"paywall_benefit_history": "Full history (free: 7 days)",
+	"paywall_price_monthly": "R$ 12.50/month",
+	"paywall_price_annual": "R$ 97/year",
+	"paywall_trial": "7 days free",
+	"paywall_subscribe": "Subscribe",
+	"paywall_restore": "Restore purchase",
+	"paywall_soon": "Purchases arrive in the next update.",
+	"paywall_limit_body": "You reached the free plan limit. Pro removes the limits.",
+	"paywall_settings_title": "Atlas Pro",
+	"paywall_settings_free": "Free plan",
+	"paywall_settings_pro": "Pro active",
+	"paywall_settings_hint": "See plans and benefits",
+	"history_locked": "See full history with Pro"
 }

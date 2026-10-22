@@ -19,6 +19,7 @@
 	import GraphEdgeSheet from './GraphEdgeSheet.svelte';
 	import GraphList from './GraphList.svelte';
 	import { m } from '#lib/paraglide/messages.js';
+	import { allowCreate } from '#lib/plan.svelte';
 
 	let {
 		snapshot,
@@ -149,6 +150,7 @@
 	}
 
 	function openNewNode(x: number, y: number, from?: string) {
+		if (!allowCreate('graph_nodes', graph.nodes.filter((node) => !node.origin).length)) return;
 		const origin = graph.nodes.find((node) => node.origin);
 		const node: GraphNode = {
 			id: graphId(),

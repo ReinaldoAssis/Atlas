@@ -89,6 +89,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	import PlannerNoteSheet from '#lib/components/time/PlannerNoteSheet.svelte';
 	import TimeRangeSheet from '#lib/components/time/TimeRangeSheet.svelte';
 	import SettingsSheet from '#lib/components/settings/SettingsSheet.svelte';
+	import PaywallSheet from '#lib/components/settings/PaywallSheet.svelte';
+	import { paywall, loadPlan, closePaywall, planGated, planPro, requestUpgrade, allowCreate } from '#lib/plan.svelte';
+	import { parsePlanLimitError } from '#lib/plan';
 	import SyncIntroSheet from '#lib/components/settings/SyncIntroSheet.svelte';
 	import SyncPairSheet from '#lib/components/settings/SyncPairSheet.svelte';
 	import SyncSasSheet from '#lib/components/settings/SyncSasSheet.svelte';
@@ -762,6 +765,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	async function initialize() {
 		testModeActive = readTestMode();
 		updaterAvailable = updaterSupportedHere();
+		await loadPlan();
 		try {
 			const loaded = await loadSnapshot();
 			advanceLifeForce(loaded);
@@ -1415,6 +1419,8 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function openFinanceCategory(back: boolean) {
+		const financeCount = snapshot?.categories.filter((category) => category.module === 'finance').length ?? 0;
+		if (!allowCreate('finance_categories', financeCount)) return;
 		financeEntry = { ...financeEntry, open: false };
 		resetFinanceDeleteArm();
 		financeCategoryForm = { open: true, id: null, type: back ? financeEntry.type : 'expense', name: '', color: FINANCE_COLORS[1], limitMinor: 50000, limitMode: 'limit', back };
@@ -1877,7 +1883,9 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			if (orphaned) toastMessage(m.dialog_source_removed());
 		} catch (error) {
 			console.error(error);
-			toastMessage(m.dialog_save_failed());
+			const limit = parsePlanLimitError(error instanceof Error ? error.message : String(error));
+			if (limit) requestUpgrade(limit.key);
+			else toastMessage(m.dialog_save_failed());
 			throw error;
 		}
 	}
@@ -2090,6 +2098,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function openHabit(habit?: Habit) {
+		if (!habit && !allowCreate('habits', snapshot?.habits.filter((item) => item.active).length ?? 0)) return;
 		formError = '';
 		editingHabitId = habit?.id ?? '';
 		habitForm = habit
@@ -3485,6 +3494,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	}
 
 	function openTimeCategorySheet(categoryId: string | null) {
+		if (!categoryId && !allowCreate('time_categories', timeCategories.length)) return;
 		const category = categoryId ? currentCategory(categoryId) : undefined;
 		const palette = ['#d4f25a', '#9cc8ff', '#ffb347', '#c6a8ff', '#f1a5c5', '#7fe3c4', '#ff8a80', '#e6e06a'];
 		const index = (timeCategories.length || 0) % palette.length;
@@ -5207,6 +5217,16 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			onsyncinterval={(secs) => void updateSyncAuto({ intervalSecs: secs })}
 			onpair={openPairing}
 			onunpair={unpair}
+			gated={planGated()}
+			pro={planPro()}
+			onopenpaywall={() => requestUpgrade(null)}
+		/>
+	{/if}
+	{#if paywall.open && planGated()}
+		<PaywallSheet
+			reason={paywall.reason}
+			pro={planPro()}
+			onclose={closePaywall}
 		/>
 	{/if}
 	{#if modal === 'settings' && snapshot && pairOpen}
