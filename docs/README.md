@@ -23,6 +23,8 @@
 | [I18N.md](I18N.md) | pt-BR/en, seletor em runtime, `Intl` por locale e guard de copy. |
 | [ANDROID-BETA.md](ANDROID-BETA.md) | Decisões e fatias da beta Android na Google Play. |
 | [PLAY-STORE.md](PLAY-STORE.md) | Checklist manual da Play Console (conta, testers, produtos, ficha). |
+| [STORE-LISTING.md](STORE-LISTING.md) | Copy pt-BR/en da ficha e respostas dos formulários. |
+| [PRIVACY.md](PRIVACY.md) | Texto da política de privacidade (publicar no site). |
 
 ## Plataformas
 

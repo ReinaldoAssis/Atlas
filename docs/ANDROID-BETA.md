@@ -66,8 +66,9 @@ categoria custom) para valer também no PC.
    Falta criar os produtos na Play e testar com license tester.
 6. **Pipeline de release** ✅ — workflow `Android` em tag, upload key pelos
    secrets, AAB direto pro track `internal`, `versionCode` conferido.
-7. **Loja e site** — landing + política em `atlas.reinaldoassis.com`, ficha
-   em pt-BR/en, assets, formulários (segurança de dados, classificação).
+7. **Loja e site** — textos da ficha e política prontos (`docs/STORE-LISTING.md`,
+   `docs/PRIVACY.md`); falta publicar no site, produzir assets e preencher os
+   formulários da Play.
 
 ## Checklist manual (fora do código)
 
