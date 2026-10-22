@@ -142,4 +142,12 @@ Ordem prática; detalhes em `docs/PLAY-STORE.md` e `docs/RELEASES.md`.
 - **Sync no Android**: multicast com `MulticastLock` cai em economia de energia;
   sync continua só com o app aberto, como no desktop.
 - **Play Billing**: reembolso/cancelamento só chegam via reconsulta; a grace de
-  7 dias é o que evita bloquear usuário legítimo sem rede.
+  7 dias é o que evita bloquear usuário legítimo sem rede. O plugin
+  `tauri-plugin-iap` está em RC e pinado por versão exata; subir de versão exige
+  testar compra/restore de novo.
+- **Troca de identificador**: `com.reinaldoassis.atlas` substitui o antigo
+  `com.randroi75.atlas`, então instalações de teste de desktop/iOS começam com
+  appdata/bundle novos. Dados antigos só voltam por import de backup `.zip`.
+- **Keystore**: perder a upload key não derruba a distribuição (o Play App
+  Signing permite rotacionar), mas o AAB precisa ser reenviado com a chave nova;
+  guarde o `.jks` e as senhas fora do repositório.
