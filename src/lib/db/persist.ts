@@ -47,7 +47,7 @@ export const LOCAL_SETTING_KEYS = ['preferences'] as const;
  * Singletons que sincronizam como linha comum (LWW por `updated_at`).
  * Saíram de `app_settings` (sem carimbo) para `shared_settings` (com carimbo).
  */
-export const SHARED_SETTING_KEYS = ['lifeForce', 'finance', 'dailyGoal'] as const;
+export const SHARED_SETTING_KEYS = ['lifeForce', 'finance', 'dailyGoal', 'routine'] as const;
 
 /** Chave do contador de XP em `counters` (uma linha por `device_id`). */
 export const XP_COUNTER_KEY = 'experience.totalXp';
