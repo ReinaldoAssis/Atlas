@@ -4,14 +4,14 @@
 	import { isTauri, invoke } from '@tauri-apps/api/core';
 	import {
 		Archive, ArchiveRestore, CalendarDays, Check, ChevronLeft,
-		Flame, FlaskConical, History, LayoutDashboard, Menu, MoreHorizontal, NotebookPen, Pencil, Plus, Route, Settings2, Target, Trash2,
+		Flame, FlaskConical, History, LayoutDashboard, Menu, MoreHorizontal, NotebookPen, Pencil, Plus, Repeat, Route, Settings2, Target, Trash2,
 		Wallet, X, type LucideIcon
 	} from '@lucide/svelte';
 	import {
 		HABIT_BOOLEAN_LABELS, booleanLabelOf, currentStreak, dateOffset, didMeetTarget, formatMinutes, habitLogId, habitProgress, id, localDate, money, nextBooleanLog, normalizeDailyGoal, normalizeFirstDayOfWeek, normalizeTimeWindow, positiveValueOf, remapWeeklyLogs, weekStartDate, weeklyLogFor, WEEK_MAX,
 		TIME_SLOT_MINUTES,
 		experienceProgress, type AppPreferences, type AtlasSnapshot, type Category, type CategoryLimitMode, type Habit, type HabitLog,
-		type MascotChoice, type NavigationKey, type TimeBlock, type Tracker, type TrackerEntry, type Transaction
+		type MascotChoice, type NavigationKey, type RoutineBlock, type TimeBlock, type Tracker, type TrackerEntry, type Transaction
 	} from '#lib/atlas';
 	import {
 		amountForCategory,
@@ -58,6 +58,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	import { notesForBlock, type NoteRef } from '#lib/tempo-ref';
 	import { notePreview } from '#lib/note-preview';
 	import { addDays, clampRange, defaultRange, rangeLabel } from '#lib/time-range';
+	import { applyRoutine, syncRoutine } from '#lib/routine';
 	import { TimeBubble } from '#lib/bubble';
 	import { edgeRatio, isMilestone, nodeReached, type GraphState } from '#lib/graph';
 	import { reconcileGraph } from '#lib/graph-sources';
@@ -88,6 +89,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	import PlannerNotesSheet from '#lib/components/time/PlannerNotesSheet.svelte';
 	import PlannerNoteSheet from '#lib/components/time/PlannerNoteSheet.svelte';
 	import TimeRangeSheet from '#lib/components/time/TimeRangeSheet.svelte';
+	import RoutineSheet from '#lib/components/time/RoutineSheet.svelte';
 	import SettingsSheet from '#lib/components/settings/SettingsSheet.svelte';
 	import PaywallSheet from '#lib/components/settings/PaywallSheet.svelte';
 	import { paywall, loadPlan, closePaywall, planGated, planPro, requestUpgrade, allowCreate } from '#lib/plan.svelte';
@@ -159,6 +161,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 	let timeRangeStart = $state(initialRange.start);
 	let timeRangeDays = $state(7);
 	let timeCalendarOpen = $state(false);
+	let routineOpen = $state(false);
 	/** Janela de horas da grade, configurável no sheet de range. */
 	let timeWindow = $derived(
 		normalizeTimeWindow(snapshot?.preferences.timeWindowStartHour, snapshot?.preferences.timeWindowEndHour)
@@ -619,7 +622,10 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 					unlisteners.push(
 						await onSyncApplied(async () => {
 							notesReloadToken += 1;
-							snapshot = await loadSnapshot();
+							const loaded = await loadSnapshot();
+							const synced = syncRoutine(loaded);
+							snapshot = synced.snapshot;
+							if (synced.changed) void saveSnapshot(synced.snapshot).catch(() => null);
 							toastMessage(m.sync_updated());
 						})
 					);
@@ -819,21 +825,22 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		await initializeBilling();
 		try {
 			const loaded = await loadSnapshot();
-			advanceLifeForce(loaded);
-			snapshot = loaded;
+			const synced = syncRoutine(loaded);
+			advanceLifeForce(synced.snapshot);
+			snapshot = synced.snapshot;
 			ready = true;
-			wasPaused = isCurrentPause(loaded);
+			wasPaused = isCurrentPause(synced.snapshot);
 			// Gravar no boot não é essencial: se o backstop do free ou o disco
 			// falharem, o app abre com o snapshot carregado em vez de travar na
 			// tela de erro. As gravações seguintes avisam o usuário.
 			try {
-				await saveSnapshot(loaded);
+				await saveSnapshot(synced.snapshot);
 			} catch (error) {
 				console.error('Falha ao salvar o snapshot inicial', error);
 			}
 			// As notas são necessárias no planejador (referências `tempo`).
 			notesState = await loadNotes();
-			await syncIOSReminders(loaded);
+			await syncIOSReminders(synced.snapshot);
 			await initializeSync();
 		} catch (error) {
 			console.error(error);
@@ -3186,9 +3193,19 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		scrollToDay(0);
 	}
 
-	/** Janela de horas do planejador (preferência local, sem sync). */
-	async function applyTimeWindow(startHour: number, endHour: number) {
+	/** Salva a rotina semanal e regenera os blocos futuros (manuais ficam). */
+	async function saveRoutine(blocks: RoutineBlock[]) {
 		if (!snapshot) return;
+		const next = applyRoutine(snapshot, { revision: id(), blocks }, new Date());
+		await commit(next);
+		routineOpen = false;
+		toastMessage(m.time_routine_saved());
+		playTone(520, 0.07, 'sine', 0.04, snapshot.preferences.soundEnabled);
+		pulseHaptic(snapshot.preferences.hapticsEnabled, 6);
+	}
+
+	/** Janela de horas do planejador (preferência local, sem sync). */
+	async function applyTimeWindow(startHour: number, endHour: number) {		if (!snapshot) return;
 		if (
 			snapshot.preferences.timeWindowStartHour === startHour &&
 			snapshot.preferences.timeWindowEndHour === endHour
@@ -4643,6 +4660,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 						<div class="tp-top">
 							<div><h1>{m.settings_module_time()}</h1><small class="tp-info">{timeTotalsLabel}</small></div>
 							<div class="tp-top-actions">
+								<button class="tp-ic" aria-label={m.time_routine_title()} title={m.time_routine_title()} onclick={() => (routineOpen = true)}><Repeat size={18} /></button>
 								<button class="tp-ic" aria-label={m.planner_range_title()} title={m.planner_range_pick()} onclick={() => (timeCalendarOpen = true)}><CalendarDays size={18} /></button>
 								<button class="tp-ic" aria-label={m.time_summary()} onclick={openTimeSummary}>Σ</button>
 							</div>
@@ -4650,6 +4668,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 						<div class="tp-pal">
 							<div class="tp-pal-actions">
 								<small class="tp-info tp-chip" aria-label={timeTotalsLabel} title={timeTotalsLabel}>{timeTotalsShort}</small>
+								<button class="tp-ic" aria-label={m.time_routine_title()} title={m.time_routine_title()} onclick={() => (routineOpen = true)}><Repeat size={18} /></button>
 								<button class="tp-ic" aria-label={m.planner_range_title()} title={m.planner_range_pick()} onclick={() => (timeCalendarOpen = true)}><CalendarDays size={18} /></button>
 								<button class="tp-ic" aria-label={m.time_summary()} onclick={openTimeSummary}>Σ</button>
 							</div>
@@ -5045,6 +5064,18 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			<div class="fin-celebration-amount">{money(financeCelebration, currency())}</div>
 			<button class="fin-btn" onclick={() => (financeCelebration = null)}>{m.dialog_continue()}</button>
 		</div>
+	{/if}
+
+	{#if routineOpen && snapshot}
+		<RoutineSheet
+			routine={snapshot.routine}
+			categories={timeCategories}
+			windowStart={timeWindow.startHour}
+			windowEnd={timeWindow.endHour}
+			firstDay={firstDayOfWeek(snapshot)}
+			onsave={saveRoutine}
+			onclose={() => (routineOpen = false)}
+		/>
 	{/if}
 
 	{#if timeCalendarOpen}

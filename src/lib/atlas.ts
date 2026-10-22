@@ -170,6 +170,64 @@ export interface TimeBlock {
 	actualMinutes: number | null;
 	status: 'planned' | 'completed' | 'cancelled';
 	reminder?: string;
+	/** Bloco gerado pela rotina; edição vale só para esta data. */
+	routineId?: string;
+	/** Revisão da rotina que gerou o bloco (para rematerializar após mudanças). */
+	routineRevision?: string;
+}
+
+/** Bloco da rotina semanal (sem data: vale para todo `weekday`). */
+export interface RoutineBlock {
+	id: string;
+	title: string;
+	categoryId: string;
+	/** 0 = domingo … 6 = sábado (`Date.getDay`). */
+	weekday: number;
+	/** Minutos desde 00:00, múltiplo de 30. */
+	startMinutes: number;
+	/** Múltiplo de 30; `startMinutes + durationMinutes <= 1440`. */
+	durationMinutes: number;
+}
+
+export interface RoutineState {
+	/** Muda a cada edição da rotina; blocos gerados guardam a revisão. */
+	revision: string;
+	blocks: RoutineBlock[];
+}
+
+/** Semanas de blocos concretos criadas à frente pela rotina. */
+export const ROUTINE_HORIZON_WEEKS = 8;
+
+export function normalizeRoutine(value: unknown): RoutineState {
+	const source = (value ?? {}) as { revision?: unknown; blocks?: unknown };
+	const raw = Array.isArray(source.blocks) ? source.blocks : [];
+	const blocks: RoutineBlock[] = [];
+	for (const item of raw) {
+		const block = item as Partial<RoutineBlock> | null;
+		if (!block || typeof block.id !== 'string' || !block.id) continue;
+		if (typeof block.categoryId !== 'string' || !block.categoryId) continue;
+		const weekday = Number(block.weekday);
+		const start = Number(block.startMinutes);
+		const duration = Number(block.durationMinutes);
+		if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) continue;
+		if (!Number.isFinite(start) || start < 0) continue;
+		if (!Number.isFinite(duration) || duration < 30) continue;
+		const startMinutes = Math.round(start / 30) * 30;
+		const durationMinutes = Math.max(30, Math.round(duration / 30) * 30);
+		if (startMinutes > 23 * 60 || startMinutes + durationMinutes > 24 * 60) continue;
+		blocks.push({
+			id: block.id,
+			title: typeof block.title === 'string' ? block.title : '',
+			categoryId: block.categoryId,
+			weekday,
+			startMinutes,
+			durationMinutes
+		});
+	}
+	return {
+		revision: typeof source.revision === 'string' ? source.revision : '',
+		blocks
+	};
 }
 
 export interface LifeForceState {
@@ -207,6 +265,8 @@ export interface AtlasSnapshot {
 	trackers: Tracker[];
 	trackerEntries: TrackerEntry[];
 	timeBlocks: TimeBlock[];
+	/** Rotina semanal que materializa blocos futuros. */
+	routine: RoutineState;
 	lifeForce: LifeForceState;
 	experience: ExperienceState;
 	finance: FinanceState;
@@ -269,6 +329,7 @@ export function createEmptySnapshot(): AtlasSnapshot {
 		trackers: [],
 		trackerEntries: [],
 		timeBlocks: [],
+		routine: { revision: '', blocks: [] },
 		experience: { totalXp: 0 },
 		lifeForce: {
 			value: 50,
