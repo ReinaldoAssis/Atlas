@@ -3,7 +3,35 @@
 Decisões e plano da primeira distribuição do Atlas no Android. Vale para a
 série **0.4.x**; o PC (macOS/Windows) continua **100% grátis**.
 
-> Estado: decisões fechadas em 21/10/2026. Fatias marcadas ✅ já entregues.
+> Estado: decisões fechadas em 21/10/2026; código entregue no PR #46. Fatias
+> marcadas ✅ já entregues.
+
+## Estado em 22/10/2026
+
+**Código** — PR [#46](https://github.com/ReinaldoAssis/Atlas/pull/46), 9 commits,
+CI principal 4/4 verde (frontend ubuntu/windows, rust, instalador Windows).
+O workflow `Android` (`workflow_dispatch`) valida o build assinado no CI.
+
+**Verificado localmente (Mac)**
+
+| Item | Resultado |
+|---|---|
+| `npm run check` | 0 erros / 0 warnings |
+| `npm test` | 264 testes |
+| `npm run build` | ok |
+| `npm run csp:check` | 23/23 (inclui boot em `en`) |
+| `cargo test` | 50 testes |
+| APK debug aarch64 | `com.reinaldoassis.atlas.debug`, versionCode 400, minSdk 29, target 36, `MulticastLockPlugin` e permissão `BILLING` presentes |
+| AAB release | gerado e assinado com keystore descartável (valida o signing config do Gradle) |
+
+**Não verificado** — nada disto tem device/Play por trás ainda: boot e sync no
+aparelho, limites do free na prática, compra/restore no sandbox, upload real no
+track `internal` (sem secrets configurados).
+
+**Ambiente local usado** (reproduzir em outra máquina): JDK 17
+(`brew install openjdk@17`), `cmdline-tools` em `~/Library/Android/sdk`,
+NDK `27.0.12077973`, targets Rust `aarch64-linux-android`,
+`armv7-linux-androideabi`, `x86_64-linux-android`.
 
 ## Decisões travadas
 
@@ -19,11 +47,11 @@ série **0.4.x**; o PC (macOS/Windows) continua **100% grátis**.
 | Billing | `tauri-plugin-iap` (Play Billing 9, MIT), Android agora e iOS depois |
 | Produtos | mensal **R$ 12,50**, anual **R$ 97**, trial **7 dias** |
 | Entitlement | cache local no SQLite + reconsulta à Play em launch/resume + **grace de 7 dias offline**; checagem em Rust |
-| Gating | feature de build `mobile`; limite compilado fora no PC e verificado no Rust |
+| Gating | limites compilados só para mobile (`cfg(android/ios)`); PC sem gating; backstop em Rust no `db_batch` |
 | Sync | entra na beta; descoberta via `mdns-sd` + `MulticastLock` (plugin Kotlin) |
 | Lembretes | paridade com iOS (`POST_NOTIFICATIONS`, alarme exato no Android 12+) |
 | Idiomas | pt-BR (base) + en; seletor Sistema / Português / English; fallback **en** fora de pt/en |
-| Política | `atlas.reinaldoassis.com` (site do produto, feito depois desta série) |
+| Política | `atlas.reinaldoassis.com/privacy` — texto pronto em `docs/PRIVACY.md`; publicação no site pendente |
 | Assets da ficha | depois do código e do billing |
 
 ## Free vs Pro (mobile)
@@ -72,12 +100,40 @@ categoria custom) para valer também no PC.
 
 ## Checklist manual (fora do código)
 
-- [ ] Recrutar 12+ testers com conta Google para o closed test.
-- [ ] Criar os produtos de assinatura na Play Console (mensal e anual, trial 7d).
-- [ ] Gerar o keystore de upload e registrar no Play App Signing.
-- [ ] Conta de serviço da Play Developer API + secret no GitHub.
-- [ ] Ficha da loja, formulário de segurança de dados, classificação etária.
-- [ ] Publicar política de privacidade antes de submeter o primeiro AAB.
+Ordem prática; detalhes em `docs/PLAY-STORE.md` e `docs/RELEASES.md`.
+
+**1. Conta e canais**
+- [ ] Conta pessoal no Play Console (US$ 25) e app `com.reinaldoassis.atlas`.
+- [ ] Track `internal` liberado.
+- [ ] Recrutar **12+ testers** com conta Google e abrir o **closed test**
+      (14 dias corridos com todos opt-in; internal não conta).
+
+**2. Assinatura e automação**
+- [ ] Gerar a upload key (`keytool -genkeypair …`) e guardar `.jks` + senhas.
+- [ ] Ligar **Play App Signing** no Console.
+- [ ] Cadastrar os secrets: `ANDROID_KEYSTORE_BASE64`,
+      `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
+- [ ] Conta de serviço da Play Developer API → `PLAY_SERVICE_ACCOUNT_JSON`.
+- [ ] Rodar o workflow `Android` com os secrets e conferir o AAB no track
+      `internal` (build local já validado).
+
+**3. Produtos**
+- [ ] `atlas_pro_monthly` — R$ 12,50/mês, trial 7 dias.
+- [ ] `atlas_pro_annual` — R$ 97/ano, trial 7 dias.
+- [ ] License testers + testar compra, acknowledge, restore e cancelamento.
+
+**4. Device**
+- [ ] Instalar o APK debug e testar boot, i18n (troca pt/en), limites do free
+      e o paywall.
+- [ ] Parear Android ↔ desktop e Android ↔ Android na mesma rede (sync).
+- [ ] Conferir lembretes locais e o pedido de `POST_NOTIFICATIONS`.
+
+**5. Loja**
+- [ ] Publicar a política em `https://atlas.reinaldoassis.com/privacy`
+      (texto em `docs/PRIVACY.md`).
+- [ ] Ficha pt-BR/en (`docs/STORE-LISTING.md`), segurança de dados,
+      classificação etária e declaração de anúncios.
+- [ ] Produzir assets: ícone 512, feature graphic 1024×500, screenshots.
 
 ## Riscos
 
