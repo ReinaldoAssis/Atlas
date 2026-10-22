@@ -474,6 +474,7 @@
 	"notes_error_attachments_browser": "Anexos indisponíveis no navegador.",
 	"dash_balance": "Saldo · {period}",
 	"dash_day_goal": "Meta do dia",
+	"dash_open_habits": "Abrir hábitos",
 	"dash_expenses": "Gastos · {period}",
 	"dash_habits": "Hábitos · {period}",
 	"dash_invoke": "Invocar",

@@ -474,6 +474,7 @@
 	"notes_error_attachments_browser": "Attachments unavailable in the browser.",
 	"dash_balance": "Balance · {period}",
 	"dash_day_goal": "Day goal",
+	"dash_open_habits": "Open habits",
 	"dash_expenses": "Spending · {period}",
 	"dash_habits": "Habits · {period}",
 	"dash_invoke": "Summon",
