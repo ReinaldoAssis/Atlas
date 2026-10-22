@@ -43,11 +43,20 @@ jobs:
       # quebra ao tentar instalar o pacote `tools` com o cmdline-tools novo.
       - name: Android SDK + NDK
         run: |
-          sdkmanager --version
-          yes | sdkmanager --licenses > /dev/null
-          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973"
-          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
-          echo "NDK_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          sdkmgr="$(command -v sdkmanager || true)"
+          if [ -z "$sdkmgr" ]; then
+            sdkmgr="$(find "$ANDROID_HOME/cmdline-tools" /usr/local/lib/android/sdk/cmdline-tools -name sdkmanager -type f 2>/dev/null | head -n 1)"
+          fi
+          if [ -z "$sdkmgr" ]; then
+            echo "sdkmanager não encontrado no runner" >&2
+            exit 1
+          fi
+          echo "sdkmanager: $sdkmgr"
+          yes | "$sdkmgr" --licenses > /dev/null
+          "$sdkmgr" --install "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
