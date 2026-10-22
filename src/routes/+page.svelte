@@ -643,7 +643,6 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const onVisibility = () => {
 			if (document.visibilityState !== 'visible' || !snapshot) return;
 			void syncIOSReminders(snapshot);
-			if (modal === 'settings' && testModeActive) void refreshNotificationDiagnostics();
 		};
 		document.addEventListener('visibilitychange', onVisibility);
 		window.addEventListener('keydown', onKeydown);
@@ -3658,7 +3657,6 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 
 	function openSettings() {
 		modal = 'settings';
-		if (testModeActive) void refreshNotificationDiagnostics();
 	}
 
 	async function updatePreferences(patch: Partial<AppPreferences>) {
@@ -4032,13 +4030,13 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		try {
 			const plugin = await import('@tauri-apps/plugin-notification');
 			const permission = await plugin.isPermissionGranted();
-			const pending = isIOSApp() ? await plugin.pending() : [];
-			const delivered = isIOSApp() ? (await plugin.active()).length : 0;
+			// `pending()`/`active()` do plugin iOS fazem force-unwrap do mapa interno
+			// de notificações; depois de um relaunch o mapa nasce vazio e o app
+			// crasha. Para o diagnóstico, a fila planejada pelo JS já basta.
 			notificationDiag = {
 				permission,
-				// No desktop os lembretes são checados pelo app aberto (não há fila nativa).
-				scheduled: isIOSApp() ? pending.length : planned.length,
-				delivered,
+				scheduled: planned.length,
+				delivered: 0,
 				next: nextReminder,
 				error: null,
 				checkedAt
@@ -4354,22 +4352,18 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 								<div class="dash-life-row"><strong>{lifeForcePercent}%</strong><span>{lifeForceLabel}</span></div>
 								<div class="dash-bar"><i style={`width:${lifeForcePercent}%`}></i></div>
 							</article>
-							<div class="dash-card dash-cat" aria-hidden="true">
-								<svg class="dash-cat-svg" viewBox="0 0 120 100"><path class="bd" d="M16 42L20 6L54 26Z" /><path class="bd" d="M104 42L100 6L66 26Z" /><ellipse class="bd" cx="60" cy="60" rx="48" ry="38" /><path class="cl" d="M31 58q10 8 20 0M69 58q10 8 20 0" /><path d="M55 69h10l-5 6z" fill="#f1a5c5" /><path d="M60 75q-6 7-12 2M60 75q6 7 12 2" fill="none" stroke="#8d968a" stroke-width="2" stroke-linecap="round" /><text class="z" x="100" y="22">z</text></svg>
-								<b>{m.dash_invoke()}</b><small>{m.dash_soon()}</small>
-							</div>
-							<button type="button" class="dash-card dash-goal" aria-label={m.dash_set_day_goal()} onclick={openDayGoal}>
+							<button type="button" class="dash-card dash-goal" aria-label={m.dash_open_habits()} onclick={() => goTab('habits')}>
 								<div class="dash-ring"><svg width="96" height="96" viewBox="0 0 96 96" aria-hidden="true"><circle cx="48" cy="48" r="39" fill="none" stroke="var(--panel-2)" stroke-width="10" /><circle cx="48" cy="48" r="39" fill="none" stroke="var(--lime)" stroke-width="10" stroke-linecap="round" stroke-dasharray="245" stroke-dashoffset={245 * (1 - dashGoalPercent)} /></svg><div class="dash-ring-center">{Math.min(prototypeTodayDone, prototypeTodayGoal)}/{prototypeTodayGoal}</div></div>
 								<small>{m.dash_day_goal()}</small>
 							</button>
-							<article class="dash-card dash-w2">
+							<button type="button" class="dash-card dash-w2 dash-link" aria-label={m.settings_module_finance()} onclick={() => goTab('finance')}>
 								<h3>{m.dash_balance({ period: dashPeriodLabel })}</h3>
 								<div class="dash-big">{money(dashBalance, currency())}</div>
 								<div class="dash-line">
 									<svg viewBox="0 0 300 90" aria-hidden="true"><defs><linearGradient id="dashGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--lime)" stop-opacity=".3" /><stop offset="1" stop-color="var(--lime)" stop-opacity="0" /></linearGradient></defs><path d={dashSpark.area} fill="url(#dashGrad)" /><path class="dr" d={dashSpark.line} /></svg>
 									<i class="pt" style={`left:${dashSpark.left}%;top:${dashSpark.top}%`}></i>
 								</div>
-							</article>
+							</button>
 							<article class="dash-card dash-w2">
 								<h3>{m.dash_time({ period: dashPeriodLabel })}</h3>
 								{#if dashTime.empty}

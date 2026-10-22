@@ -388,7 +388,7 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 	.workspace { padding: 27px 18px 90px; }
 	.dash-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 	.dash-w4 { grid-column: span 2; }
-	.dash-cat, .dash-goal { grid-column: span 2; }
+	.dash-goal { grid-column: span 2; }
 	.dash-donut-wrap { flex-direction: column; align-items: center; }
 	.dash-donut-wrap .dash-legend { align-self: stretch; }
 	.dash-life-row strong { font-size: 38px; }
@@ -445,14 +445,8 @@ h1 { margin-bottom: 8px; color: #e9ece5; font: 600 clamp(28px, 3vw, 39px)/1.14 M
 .dash-life-row span { color: var(--muted); font-size: 13px; }
 .dash-bar { height: 9px; overflow: hidden; margin-top: 12px; border-radius: 6px; background: var(--panel-2); }
 .dash-bar i { display: block; height: 100%; border-radius: 6px; background: var(--lime); transition: width .7s cubic-bezier(.2,.9,.2,1), background .6s; }
-.dash-cat { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 150px; border: 1px solid var(--lime); background: color-mix(in srgb, var(--lime) 14%, var(--panel)); text-align: center; }
-.dash-cat b { color: var(--lime); font-size: 15px; }
-.dash-cat small { color: var(--muted); font-size: 11px; }
-.dash-cat-svg { width: 100%; max-width: 120px; }
-.dash-cat-svg .bd { fill: #2c312c; }
-.dash-cat-svg .cl { fill: none; stroke: var(--lime); stroke-width: 3.4; stroke-linecap: round; }
-.dash-cat-svg .z { fill: var(--lime); font-weight: 800; font-size: 13px; animation: dash-zz 2.4s ease-in-out infinite; }
-@keyframes dash-zz { 0% { opacity: 0; transform: translate(0, 6px); } 50% { opacity: 1; } 100% { opacity: 0; transform: translate(6px, -10px); } }
+.dash-link { display: block; width: 100%; border: 0; color: inherit; text-align: left; cursor: pointer; }
+.dash-link:active { transform: scale(.99); }
 .dash-goal { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 150px; width: 100%; border: 0; color: inherit; text-align: center; cursor: pointer; }
 .dash-ring { position: relative; width: 96px; height: 96px; }
 .dash-ring svg { transform: rotate(-90deg); }

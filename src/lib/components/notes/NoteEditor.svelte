@@ -113,9 +113,11 @@
 
 	/** Blocos oferecidos pelo `/tempo` (próximos da data da nota). */
 	const slashOptions = $derived.by(() => {
-		const blocks = [...timeBlocks]
-			.filter((block) => block.status !== 'cancelled')
-			.sort((a, b) => a.startAt.localeCompare(b.startAt));
+		const blocks = mergeAdjacentBlocks(
+			[...timeBlocks]
+				.filter((block) => block.status !== 'cancelled')
+				.sort((a, b) => a.startAt.localeCompare(b.startAt))
+		);
 		const noteDay = note.updatedAt.slice(0, 10);
 		const upcoming = blocks.filter((block) => block.startAt.slice(0, 10) >= noteDay);
 		return (upcoming.length ? upcoming : blocks).slice(0, 5);
