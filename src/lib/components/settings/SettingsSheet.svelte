@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { Bell, CalendarDays, CircleDollarSign, FlaskConical, Keyboard, Languages, Sparkles, Volume2, Vibrate, ArrowDownRight, ArrowUpRight, Flame, RefreshCw, Wifi, Link2, Smartphone, Timer } from '@lucide/svelte';
-	import type { AtlasSnapshot, FirstDayOfWeek } from '#lib/atlas';
+	import { Bell, CalendarDays, Cat, CircleDollarSign, FlaskConical, Keyboard, Languages, Sparkles, Volume2, Vibrate, ArrowDownRight, ArrowUpRight, Flame, RefreshCw, Wifi, Link2, Smartphone, Timer } from '@lucide/svelte';
+	import type { AtlasSnapshot, FirstDayOfWeek, MascotChoice } from '#lib/atlas';
 	import type { LocaleChoice } from '#lib/i18n/locale';
 	import { m } from '#lib/paraglide/messages.js';
 	import { intlLocale } from '#lib/i18n/intl';
@@ -30,6 +30,7 @@
 		onpreference,
 		oncurrency,
 		onfirstday,
+		onmascot,
 		ontestmode,
 		onpause,
 		onexport,
@@ -65,6 +66,7 @@
 		) => void;
 		oncurrency: (value: string) => Promise<boolean>;
 		onfirstday: (value: FirstDayOfWeek) => void;
+		onmascot?: (value: MascotChoice) => void;
 		ontestmode: (enabled: boolean) => void;
 		onpause: () => void;
 		onexport: () => void;
@@ -98,6 +100,9 @@
 		if (!value) return 'nenhuma';
 		return new Date(value).toLocaleString(intlLocale());
 	}
+
+	/** Mascote só troca no Atlas Pro (no desktop o plano já é Pro). */
+	const mascotLocked = $derived(gated && !pro);
 
 	/** Paleta de categorias do guia (`docs/DESIGN.md` §2). */
 	async function handleCurrency(event: Event) {
@@ -260,6 +265,25 @@
 						]}
 						value={snapshot.preferences.firstDayOfWeek}
 						onchange={(value) => onfirstday(value === 'sun' ? 'sun' : 'mon')}
+					/>
+				</div>
+				<div class="row">
+					<span class="lead"><Cat size={17} /></span>
+					<span class="text">
+						<strong>{m.settings_mascot_title()}</strong>
+						<small>{mascotLocked ? m.settings_mascot_pro() : m.settings_mascot_hint()}</small>
+					</span>
+					<Segmented
+						label={m.settings_mascot_title()}
+						options={[
+							{ value: 'atlas', label: m.settings_mascot_atlas() },
+							{ value: 'cat', label: m.settings_mascot_cat() },
+							{ value: 'ghost', label: m.settings_mascot_ghost() }
+						]}
+						value={snapshot.preferences.mascot}
+						locked={mascotLocked}
+						onlocked={() => onopenpaywall?.()}
+						onchange={(value) => onmascot?.(value === 'cat' || value === 'ghost' ? value : 'atlas')}
 					/>
 				</div>
 			</div>
@@ -631,5 +655,8 @@
 		font-size: 11px;
 		text-align: center;
 		letter-spacing: 0.02em;
+	}
+	.row :global(.segmented) {
+		flex: none;
 	}
 </style>

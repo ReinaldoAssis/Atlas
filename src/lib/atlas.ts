@@ -29,6 +29,40 @@ export const TIME_SLOT_START_HOUR = 7;
 export const TIME_SLOT_COUNT = 32;
 export const TIME_SLOT_MINUTES = 30;
 
+/** Janela padrão do planejador: 07:00–22:00 (inclusiva nas duas pontas). */
+export const TIME_WINDOW_DEFAULT_START_HOUR = 7;
+export const TIME_WINDOW_DEFAULT_END_HOUR = 22;
+/** Mínimo de horas visíveis para a grade continuar útil. */
+export const TIME_WINDOW_MIN_HOURS = 4;
+
+export interface TimeWindow {
+	startHour: number;
+	endHour: number;
+}
+
+/** Normaliza a janela de horas: inteiros 0–23, mínimo de `TIME_WINDOW_MIN_HOURS`. */
+export function normalizeTimeWindow(start: unknown, end: unknown): TimeWindow {
+	const hour = (value: unknown, fallback: number) => {
+		const number = Number(value);
+		if (!Number.isFinite(number)) return fallback;
+		return Math.min(23, Math.max(0, Math.round(number)));
+	};
+	const startHour = Math.min(
+		23 - (TIME_WINDOW_MIN_HOURS - 1),
+		hour(start, TIME_WINDOW_DEFAULT_START_HOUR)
+	);
+	let endHour = hour(end, TIME_WINDOW_DEFAULT_END_HOUR);
+	if (endHour < startHour + TIME_WINDOW_MIN_HOURS - 1) endHour = startHour + TIME_WINDOW_MIN_HOURS - 1;
+	return { startHour, endHour };
+}
+
+/** Mascote do Atlas. `atlas` é o padrão; os outros exigem Atlas Pro no mobile. */
+export type MascotChoice = 'atlas' | 'cat' | 'ghost';
+
+export function normalizeMascot(value: unknown): MascotChoice {
+	return value === 'cat' || value === 'ghost' ? value : 'atlas';
+}
+
 export interface Transaction {
 	id: string;
 	type: TransactionType;
@@ -158,6 +192,11 @@ export interface AppPreferences {
 	backupEncryption: 'ask' | 'encrypted' | 'plain';
 	/** Primeiro dia da semana dos ciclos (hábito semanal, trackers, calendário). */
 	firstDayOfWeek: FirstDayOfWeek;
+	/** Mascote escolhido (só Atlas Pro troca no mobile). */
+	mascot: MascotChoice;
+	/** Janela de horas visível no módulo Tempo (inclusiva nas duas pontas). */
+	timeWindowStartHour: number;
+	timeWindowEndHour: number;
 }
 
 export interface AtlasSnapshot {
@@ -249,7 +288,10 @@ export function createEmptySnapshot(): AtlasSnapshot {
 			typingSoundEnabled: true,
 			hapticsEnabled: true,
 			backupEncryption: 'ask',
-			firstDayOfWeek: 'mon'
+			firstDayOfWeek: 'mon',
+			mascot: 'atlas',
+			timeWindowStartHour: TIME_WINDOW_DEFAULT_START_HOUR,
+			timeWindowEndHour: TIME_WINDOW_DEFAULT_END_HOUR
 		},
 		graph: createGraph()
 	};

@@ -42,4 +42,18 @@ describe('Segmented', () => {
 
 		expect(onchange).not.toHaveBeenCalled();
 	});
+
+	it('bloqueado avisa em vez de trocar a opção', async () => {
+		const onchange = vi.fn();
+		const onlocked = vi.fn();
+		render(Segmented, {
+			props: { label: 'Módulo', options: OPTIONS, value: 'finance', onchange, locked: true, onlocked }
+		});
+
+		await fireEvent.click(screen.getByRole('radio', { name: 'Tempo' }));
+
+		expect(onchange).not.toHaveBeenCalled();
+		expect(onlocked).toHaveBeenCalledWith('time');
+		expect(screen.getByRole('radio', { name: 'Finanças' }).getAttribute('aria-checked')).toBe('true');
+	});
 });

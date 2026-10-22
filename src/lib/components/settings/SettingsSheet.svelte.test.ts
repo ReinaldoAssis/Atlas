@@ -200,4 +200,26 @@ describe('SettingsSheet', () => {
 		await fireEvent.click(screen.getByRole('button', { name: 'Verificar' }));
 		expect(props.oncheckupdates).toHaveBeenCalledTimes(1);
 	});
+
+	it('troca o mascote quando não está bloqueado', async () => {
+		const onmascot = vi.fn();
+		setup({ onmascot });
+
+		expect(screen.getByRole('radiogroup', { name: 'Mascote' })).toBeTruthy();
+		await fireEvent.click(screen.getByRole('radio', { name: 'Gato' }));
+
+		expect(onmascot).toHaveBeenCalledWith('cat');
+	});
+
+	it('mascote bloqueado no free abre o paywall em vez de trocar', async () => {
+		const onmascot = vi.fn();
+		const onopenpaywall = vi.fn();
+		setup({ gated: true, pro: false, onmascot, onopenpaywall });
+
+		expect(screen.getByText('Trocar exige Atlas Pro')).toBeTruthy();
+		await fireEvent.click(screen.getByRole('radio', { name: 'Ghost' }));
+
+		expect(onmascot).not.toHaveBeenCalled();
+		expect(onopenpaywall).toHaveBeenCalledTimes(1);
+	});
 });

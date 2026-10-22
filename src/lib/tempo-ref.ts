@@ -164,6 +164,42 @@ export function blocksForRef<T extends BlockLike>(ref: TempoRef, blocks: readonl
 	return blocks.filter((block) => refOverlapsBlock(ref, block));
 }
 
+export interface MergeableBlock extends BlockLike {
+	categoryId: string;
+	plannedMinutes?: number;
+}
+
+/**
+ * Junta blocos colados da mesma categoria: `13:00–13:30` + `13:30–14:00`
+ * viram `13:00–14:00`. Espera a lista ordenada por `startAt` e devolve
+ * cópias (não muta os blocos recebidos).
+ */
+export function mergeAdjacentBlocks<T extends MergeableBlock>(blocks: readonly T[]): T[] {
+	const merged: T[] = [];
+	for (const block of blocks) {
+		const previous = merged[merged.length - 1];
+		if (
+			previous &&
+			previous.categoryId === block.categoryId &&
+			previous.endAt.slice(0, 16) === block.startAt.slice(0, 16)
+		) {
+			const previousMinutes = previous.plannedMinutes;
+			const blockMinutes = block.plannedMinutes;
+			merged[merged.length - 1] = {
+				...previous,
+				endAt: block.endAt,
+				plannedMinutes:
+					previousMinutes === undefined && blockMinutes === undefined
+						? undefined
+						: (previousMinutes ?? 0) + (blockMinutes ?? 0)
+			} as T;
+			continue;
+		}
+		merged.push(block);
+	}
+	return merged;
+}
+
 export interface NoteLike {
 	id: string;
 	title: string;

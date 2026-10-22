@@ -9,8 +9,11 @@ import {
 	normalizeCategoryLimitMode,
 	normalizeDailyGoal,
 	normalizeFirstDayOfWeek,
+	normalizeMascot,
 	normalizeTargetDirection,
+	normalizeTimeWindow,
 	type AtlasSnapshot,
+	type AppPreferences,
 	type Category,
 	type ExperienceState,
 	type FinanceState,
@@ -416,6 +419,22 @@ function normalizeTracker(stored: Partial<Tracker>): Tracker {
 	} as Tracker;
 }
 
+/** Preferências novas caem nos defaults; campos de enum/janela são normalizados. */
+function normalizePreferences(
+	stored: Partial<AppPreferences> | undefined,
+	defaults: AppPreferences
+): AppPreferences {
+	const window = normalizeTimeWindow(stored?.timeWindowStartHour, stored?.timeWindowEndHour);
+	return {
+		...defaults,
+		...stored,
+		firstDayOfWeek: normalizeFirstDayOfWeek(stored?.firstDayOfWeek),
+		mascot: normalizeMascot(stored?.mascot),
+		timeWindowStartHour: window.startHour,
+		timeWindowEndHour: window.endHour
+	};
+}
+
 function readPreview(): AtlasSnapshot {
 	const key = previewKey(PREVIEW_KEY);
 	const raw = localStorage.getItem(key);
@@ -433,11 +452,7 @@ function readPreview(): AtlasSnapshot {
 			categories: (stored.categories ?? defaults.categories).map(normalizeCategory),
 			habits: (stored.habits ?? defaults.habits).map(normalizeHabit),
 			trackers: (stored.trackers ?? defaults.trackers).map(normalizeTracker),
-			preferences: {
-				...defaults.preferences,
-				...stored.preferences,
-				firstDayOfWeek: normalizeFirstDayOfWeek(stored.preferences?.firstDayOfWeek)
-			},
+			preferences: normalizePreferences(stored.preferences, defaults.preferences),
 			experience: { ...defaults.experience, ...stored.experience },
 			lifeForce: { ...defaults.lifeForce, ...stored.lifeForce },
 			finance: { ...defaults.finance, ...stored.finance },
@@ -564,11 +579,7 @@ export async function loadSnapshot(): Promise<AtlasSnapshot> {
 	const dailyGoal = normalizeDailyGoal(sharedMap.dailyGoal ?? settingsMap.dailyGoal ?? defaults.dailyGoal);
 	const totalXp = Object.values(knownCounters[XP_COUNTER_KEY] ?? {}).reduce((sum, value) => sum + value, 0);
 	const experience = { totalXp } as ExperienceState;
-	const preferences = {
-		...defaults.preferences,
-		...(settingsMap.preferences ?? {}),
-		firstDayOfWeek: normalizeFirstDayOfWeek(settingsMap.preferences?.firstDayOfWeek)
-	};
+	const preferences = normalizePreferences(settingsMap.preferences, defaults.preferences);
 	// Payload corrompido (v0.3.0 deslocava as colunas: o `payload` recebia o
 	// carimbo) vira linha descartada, nunca número/objeto sem `id` no snapshot —
 	// senão a gravação seguinte manda `undefined` e o `db_batch` recusa. A linha
@@ -822,7 +833,7 @@ function normalizeImportedSnapshot(snapshot: AtlasSnapshot): AtlasSnapshot {
 		...defaults,
 		...snapshot,
 		categories: categories.map(normalizeCategory),
-		preferences: { ...defaults.preferences, ...snapshot.preferences },
+		preferences: normalizePreferences(snapshot.preferences, defaults.preferences),
 		experience: { ...defaults.experience, ...snapshot.experience },
 		lifeForce: { ...defaults.lifeForce, ...snapshot.lifeForce },
 		finance: { ...defaults.finance, ...snapshot.finance },

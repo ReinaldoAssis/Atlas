@@ -185,8 +185,10 @@ Ações em módulos sensíveis (notas, finanças) aparecem **bloqueadas** ("A IA
 
 Selecionável nas configurações. Sempre dentro de um tile discreto "Invocar" e no drawer.
 
+- **Atlas (padrão):** ainda sem arte; por enquanto aparece só o nome "Atlas".
 - **Gato:** corpo grafite, olhos na cor de `--acc`. Estados: dormindo (respira, "z"), acordado (pisca, orelhas mexem), pensando (três pontos), feliz (olhos em arco). Os olhos seguem o ponteiro. Miado sintetizado ao invocar.
 - **Ghost:** casca angular grafite com pontas e olho em lime. **Estado normal: placas encaixadas** (esfera quase toda coberta, só frestas escuras e o olho). Animações: varredura (radar), vista explodida, flutuar, pensar, celebrar, dormir.
+- Trocar o mascote exige **Atlas Pro** no mobile; o padrão Atlas é livre. No desktop o plano é sempre Pro.
 - Reações ligadas a eventos: aplicar sugestão = feliz + confete; erro/espera = pensando.
 
 ---
