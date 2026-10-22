@@ -34,17 +34,20 @@ jobs:
           cache: npm
       - run: npm ci
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
+      # O runner do ubuntu já traz o SDK; `android-actions/setup-android`
+      # quebra ao tentar instalar o pacote `tools` com o cmdline-tools novo.
       - name: Android SDK + NDK
-        uses: android-actions/setup-android@v3
-      - run: |
+        run: |
+          sdkmanager --version
           yes | sdkmanager --licenses > /dev/null
           sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973"
-          echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          echo "NDK_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}/ndk/27.0.12077973" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
