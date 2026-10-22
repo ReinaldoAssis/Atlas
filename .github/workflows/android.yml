@@ -22,6 +22,9 @@ jobs:
   bundle:
     name: AAB assinado → Play (internal)
     runs-on: ubuntu-latest
+    env:
+      # `secrets` não pode ser usado em `if`; o env no job pode.
+      PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
     steps:
       - uses: actions/checkout@v7
 
@@ -90,7 +93,7 @@ jobs:
           echo "AAB: $aab ($(du -h "$aab" | cut -f1))"
 
       - name: Enviar para o track internal
-        if: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+        if: ${{ startsWith(github.ref, 'refs/tags/v') && env.PLAY_SERVICE_ACCOUNT_JSON != '' }}
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJson: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
