@@ -1,6 +1,6 @@
 name: app
 options:
-  bundleIdPrefix: com.randroi75.atlas
+  bundleIdPrefix: com.reinaldoassis.atlas
   deploymentTarget:
     iOS: 15.4
 fileGroups: [../../src]
@@ -11,7 +11,7 @@ settingGroups:
   app:
     base:
       PRODUCT_NAME: Atlas
-      PRODUCT_BUNDLE_IDENTIFIER: com.randroi75.atlas
+      PRODUCT_BUNDLE_IDENTIFIER: com.reinaldoassis.atlas
       DEVELOPMENT_TEAM: QNHMJF4W4N
 targetTemplates:
   app:

@@ -74,6 +74,35 @@ O comando roda `tauri ios build --no-sign --target aarch64`.
 - Se aparecer `cargo: command not found`, rode de um shell interativo: o script
   phase do Xcode herda o `PATH` do processo que lançou o `tauri`.
 
+## 2b. Rodar no iPhone pelo Xcode (build assinado)
+
+O id de **produção** é `com.reinaldoassis.atlas`. A conta pessoal do Xcode usa
+outro App ID (`com.randroi75.atlas`, team `QNHMJF4W4N`), então os comandos
+abaixo geram um override local (`src-tauri/tauri.ios.test.local.json`, fora do
+git) e o passam via `--config`; o Tauri sincroniza o `PRODUCT_BUNDLE_IDENTIFIER`
+do projeto Xcode sozinho.
+
+```bash
+npm run ios:dev      # padrão de teste: com.randroi75.atlas
+npm run ios:build
+npm run ios:id       # só grava/mostra o id de teste atual
+
+ATLAS_IOS_BUNDLE_ID=com.outro.atlas npm run ios:dev
+npm run ios:dev -- --open          # abre no Xcode
+```
+
+Antes do primeiro run: **Xcode → Settings → Accounts**, entre com o Apple ID da
+conta e confira o team em *Signing & Capabilities*. Sem conta configurada o
+`xcodebuild` falha com `No Accounts` / `No profiles` antes de compilar.
+
+`tauri ios dev` reescreve o id dentro de
+`src-tauri/gen/apple/app.xcodeproj/project.pbxproj` a cada run. Para voltar ao
+id de produção no working tree:
+
+```bash
+git checkout -- src-tauri/gen/apple/app.xcodeproj/project.pbxproj
+```
+
 ## 3. Instalar o Atlas pelo SideStore
 
 1. Mande o `Atlas.ipa` para o iPhone (AirDrop, Arquivos/iCloud, etc.).
@@ -82,7 +111,7 @@ O comando roda `tauri ios build --no-sign --target aarch64`.
 4. Confie no perfil do app em **Ajustes › Geral › VPN e Gerenciamento de
    Dispositivo**, se o iOS pedir.
 
-O app aparece como **Atlas** (`com.randroi75.atlas`).
+O app aparece como **Atlas** (`com.reinaldoassis.atlas`).
 
 ## 4. Primeira abertura
 
@@ -127,6 +156,7 @@ O app aparece como **Atlas** (`com.randroi75.atlas`).
 | Instalação falha sem mensagem | Confira LocalDevVPN ligada, Wi-Fi e espaço livre |
 | Build local falha com `clang_rt.ios not found` | `cargo clean` em `src-tauri` (target antigo guarda resource dir de outro Xcode) |
 | Build pede time de desenvolvimento | Use `npm run ipa` (`--no-sign`); confira `bundle.iOS.developmentTeam` no `tauri.conf.json` |
+| `No Accounts` / `No profiles for ...` | Xcode → Settings → Accounts: entre com o Apple ID da conta. Para dev assinado use `npm run ios:dev` (id de teste configurável). |
 | Sync não encontra o outro aparelho | Aceite **Rede Local**; confira se os dois estão na mesma Wi-Fi e use “Parear por endereço” como plano B |
 
 ## Checklist rápido no device
