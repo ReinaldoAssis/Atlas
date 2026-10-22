@@ -824,7 +824,14 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			snapshot = loaded;
 			ready = true;
 			wasPaused = isCurrentPause(loaded);
-			await saveSnapshot(loaded);
+			// Gravar no boot não é essencial: se o backstop do free ou o disco
+			// falharem, o app abre com o snapshot carregado em vez de travar na
+			// tela de erro. As gravações seguintes avisam o usuário.
+			try {
+				await saveSnapshot(loaded);
+			} catch (error) {
+				console.error('Falha ao salvar o snapshot inicial', error);
+			}
 			// As notas são necessárias no planejador (referências `tempo`).
 			notesState = await loadNotes();
 			await syncIOSReminders(loaded);

@@ -188,78 +188,119 @@ fn attachment_count(app: &AppHandle) -> u64 {
     .sum()
 }
 
-/// Chamado dentro da transação: rollback se o free passou de algum limite.
+/// Contagem atual das tabelas limitadas, tirada **antes** do lote.
+///
+/// Serve para grandfathering: quem já está acima do limite (dados antigos,
+/// sync de um Pro, modo de teste) continua editando; só **aumentar** além do
+/// limite é bloqueado.
 #[cfg(any(target_os = "android", target_os = "ios"))]
-pub async fn check_limits(
+#[derive(Debug, Clone, Copy)]
+pub struct LimitCounts {
+  notes: i64,
+  habits: i64,
+  trackers: i64,
+  finance_categories: i64,
+  time_categories: i64,
+  graph_nodes: i64,
+  attachments: u64,
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub async fn count_usage(
   app: &AppHandle,
   tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-) -> Result<(), String> {
-  let stored = read_stored(app);
-  if is_pro(&stored) {
-    return Ok(());
-  }
-  let limit = limits();
-
+) -> Result<LimitCounts, String> {
   let notes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL")
     .fetch_one(&mut **tx)
     .await
     .map_err(|error| error.to_string())?;
-  if notes > i64::from(limit.notes) {
-    return Err(format!("plan-limit:notes:{}", limit.notes));
-  }
-
   let habits: i64 = sqlx::query_scalar(
     "SELECT COUNT(*) FROM habits WHERE deleted_at IS NULL AND COALESCE(json_extract(payload, '$.active'), 1) = 1",
   )
   .fetch_one(&mut **tx)
   .await
   .map_err(|error| error.to_string())?;
-  if habits > i64::from(limit.habits) {
-    return Err(format!("plan-limit:habits:{}", limit.habits));
-  }
-
   let trackers: i64 = sqlx::query_scalar(
     "SELECT COUNT(*) FROM trackers WHERE deleted_at IS NULL AND COALESCE(json_extract(payload, '$.active'), 1) = 1",
   )
   .fetch_one(&mut **tx)
   .await
   .map_err(|error| error.to_string())?;
-  if trackers > i64::from(limit.trackers) {
-    return Err(format!("plan-limit:trackers:{}", limit.trackers));
-  }
-
-  let finance: i64 = sqlx::query_scalar::<_, i64>(
+  let finance_categories: i64 = sqlx::query_scalar::<_, i64>(
     "SELECT COUNT(*) FROM categories WHERE deleted_at IS NULL AND module = 'finance'",
   )
   .fetch_one(&mut **tx)
   .await
   .map_err(|error| error.to_string())?;
-  if finance > i64::from(limit.finance_categories) {
-    return Err(format!("plan-limit:finance_categories:{}", limit.finance_categories));
-  }
-
-  let time: i64 = sqlx::query_scalar::<_, i64>(
+  let time_categories: i64 = sqlx::query_scalar::<_, i64>(
     "SELECT COUNT(*) FROM categories WHERE deleted_at IS NULL AND module = 'time'",
   )
   .fetch_one(&mut **tx)
   .await
   .map_err(|error| error.to_string())?;
-  if time > i64::from(limit.time_categories) {
-    return Err(format!("plan-limit:time_categories:{}", limit.time_categories));
-  }
-
-  let nodes: i64 = sqlx::query_scalar(
+  let graph_nodes: i64 = sqlx::query_scalar(
     "SELECT COUNT(*) FROM graph_nodes WHERE deleted_at IS NULL AND COALESCE(json_extract(payload, '$.origin'), 0) = 0",
   )
   .fetch_one(&mut **tx)
   .await
   .map_err(|error| error.to_string())?;
-  if nodes > i64::from(limit.graph_nodes) {
+  Ok(LimitCounts {
+    notes,
+    habits,
+    trackers,
+    finance_categories,
+    time_categories,
+    graph_nodes,
+    attachments: attachment_count(app),
+  })
+}
+
+/// `true` quando o lote levou a contagem acima do limite E aumentou a contagem.
+#[cfg(any(test, target_os = "android", target_os = "ios"))]
+fn exceeds(after: i64, before: i64, limit: u32) -> bool {
+  after > i64::from(limit) && after > before
+}
+
+#[cfg(any(test, target_os = "android", target_os = "ios"))]
+fn exceeds_u64(after: u64, before: u64, limit: u32) -> bool {
+  after > u64::from(limit) && after > before
+}
+
+/// Chamado dentro da transação: rollback se o lote **aumentou** a contagem de
+/// algum item acima do limite free. Dados que já estavam acima do limite ficam
+/// (grandfathering) — senão um banco antigo ou vindo do Pro não abriria mais.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub async fn check_limits(
+  app: &AppHandle,
+  tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+  before: &LimitCounts,
+) -> Result<(), String> {
+  let stored = read_stored(app);
+  if is_pro(&stored) {
+    return Ok(());
+  }
+  let limit = limits();
+  let after = count_usage(app, tx).await?;
+
+  if exceeds(after.notes, before.notes, limit.notes) {
+    return Err(format!("plan-limit:notes:{}", limit.notes));
+  }
+  if exceeds(after.habits, before.habits, limit.habits) {
+    return Err(format!("plan-limit:habits:{}", limit.habits));
+  }
+  if exceeds(after.trackers, before.trackers, limit.trackers) {
+    return Err(format!("plan-limit:trackers:{}", limit.trackers));
+  }
+  if exceeds(after.finance_categories, before.finance_categories, limit.finance_categories) {
+    return Err(format!("plan-limit:finance_categories:{}", limit.finance_categories));
+  }
+  if exceeds(after.time_categories, before.time_categories, limit.time_categories) {
+    return Err(format!("plan-limit:time_categories:{}", limit.time_categories));
+  }
+  if exceeds(after.graph_nodes, before.graph_nodes, limit.graph_nodes) {
     return Err(format!("plan-limit:graph_nodes:{}", limit.graph_nodes));
   }
-
-  let attachments = attachment_count(app);
-  if attachments > u64::from(limit.attachments) {
+  if exceeds_u64(after.attachments, before.attachments, limit.attachments) {
     return Err(format!("plan-limit:attachments:{}", limit.attachments));
   }
 
@@ -286,6 +327,21 @@ mod tests {
   #[test]
   fn grace_window_is_one_week() {
     assert_eq!(GRACE_MS, 604_800_000);
+  }
+
+  #[test]
+  fn grandfathers_data_already_above_the_limit() {
+    // No limite: não bloqueia.
+    assert!(!exceeds(3, 3, 3));
+    // Já acima e editando (sem aumentar): não bloqueia.
+    assert!(!exceeds(5, 5, 3));
+    // Já acima e diminuindo: não bloqueia.
+    assert!(!exceeds(4, 5, 3));
+    // Abaixo e criando além do limite: bloqueia.
+    assert!(exceeds(4, 3, 3));
+    assert!(exceeds(6, 5, 5));
+    assert!(!exceeds_u64(5, 5, 5));
+    assert!(exceeds_u64(6, 5, 5));
   }
 
   /// O guard depende de `json_extract` (JSON1) no SQLite empacotado.

@@ -71,6 +71,17 @@ async fn db_batch(
     DbPool::Sqlite(pool) => pool,
   };
   let mut tx = pool.begin().await.map_err(|error| error.to_string())?;
+
+  // Freemium backstop: conta o estado **antes** do lote para permitir editar
+  // dados legados que já estão acima dos limites do free. O banco de teste
+  // fica fora do gating — o seed de exemplo passa dos limites de propósito.
+  #[cfg(any(target_os = "android", target_os = "ios"))]
+  let limit_before = if db.ends_with("atlas.test.db") {
+    None
+  } else {
+    Some(plan::count_usage(&app, &mut tx).await?)
+  };
+
   for statement in statements {
     let mut query = sqlx::query(&statement.sql);
     for param in &statement.params {
@@ -82,10 +93,12 @@ async fn db_batch(
       .map_err(|error| error.to_string())?;
   }
 
-  // Backstop do freemium: sem Pro, um lote que estoura qualquer limite
-  // inteiro é revertido (a UI já bloqueia antes, mas o IPC não é confiável).
+  // Backstop do freemium: sem Pro, um lote que leva a contagem acima de um
+  // limite é revertido. A UI já bloqueia antes, mas o IPC não é confiável.
   #[cfg(any(target_os = "android", target_os = "ios"))]
-  plan::check_limits(&app, &mut tx).await?;
+  if let Some(before) = limit_before {
+    plan::check_limits(&app, &mut tx, &before).await?;
+  }
 
   tx.commit().await.map_err(|error| error.to_string())?;
   Ok(())
