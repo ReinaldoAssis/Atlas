@@ -165,20 +165,20 @@ export function createGraph(): GraphState {
 /** Grafo de exemplo, espelhando o protótipo. */
 export function createGraphFromDemo(): GraphState {
 	const nodes: GraphNode[] = [
-		{ id: 'origem', name: 'Estado atual', horizon: 'today', domainId: 'car', x: 0, y: 0, origin: true },
-		{ id: 'demo-treino', name: 'Rotina de treino', horizon: 'quarter', domainId: 'saude', x: -170, y: -120 },
-		{ id: 'demo-reserva', name: 'Reserva de emergência', horizon: 'quarter', domainId: 'fin', x: 170, y: -110 },
-		{ id: 'demo-leitura', name: 'Hábito de leitura', horizon: 'quarter', domainId: 'car', x: -150, y: 130 },
-		{ id: 'demo-oportunidade', name: 'Nova oportunidade', horizon: 'year', domainId: 'car', x: 340, y: 70 },
-		{ id: 'demo-saude', name: 'Saúde estável', horizon: 'year', domainId: 'saude', x: -340, y: -30 }
+		{ id: 'origem', name: m.seed_origin(), horizon: 'today', domainId: 'car', x: 0, y: 0, origin: true },
+		{ id: 'demo-treino', name: m.demo_graph_training(), horizon: 'quarter', domainId: 'saude', x: -170, y: -120 },
+		{ id: 'demo-reserva', name: m.demo_graph_emergency(), horizon: 'quarter', domainId: 'fin', x: 170, y: -110 },
+		{ id: 'demo-leitura', name: m.demo_graph_reading(), horizon: 'quarter', domainId: 'car', x: -150, y: 130 },
+		{ id: 'demo-oportunidade', name: m.demo_graph_opportunity(), horizon: 'year', domainId: 'car', x: 340, y: 70 },
+		{ id: 'demo-saude', name: m.demo_graph_health(), horizon: 'year', domainId: 'saude', x: -340, y: -30 }
 	];
 	const edges: GraphEdge[] = [
-		makeEdge('origem', 'demo-treino', 'Treinar 12x no mês', 0),
-		makeEdge('origem', 'demo-reserva', 'Economizar R$ 2.000', 0),
-		makeEdge('origem', 'demo-leitura', 'Ler 30h no mês', 0),
-		makeEdge('demo-leitura', 'demo-oportunidade', 'Testar um projeto', 20),
-		makeEdge('demo-reserva', 'demo-oportunidade', 'Folga para arriscar', 0),
-		makeEdge('demo-treino', 'demo-saude', 'Sustentar por meses', 10)
+		makeEdge('origem', 'demo-treino', m.demo_edge_train(), 0),
+		makeEdge('origem', 'demo-reserva', m.demo_edge_save(), 0),
+		makeEdge('origem', 'demo-leitura', m.demo_edge_read(), 0),
+		makeEdge('demo-leitura', 'demo-oportunidade', m.demo_edge_test(), 20),
+		makeEdge('demo-reserva', 'demo-oportunidade', m.demo_edge_room(), 0),
+		makeEdge('demo-treino', 'demo-saude', m.demo_edge_sustain(), 10)
 	];
 	return { domains: defaultDomains(), nodes, edges };
 }

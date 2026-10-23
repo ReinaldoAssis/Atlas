@@ -302,12 +302,22 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const index = timeDayIndex(today);
 		return index >= 0 && index < timeRangeDays ? index : -1;
 	});
-	const weekdayLabels = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
-	let timeHeaderDays = $derived(Array.from({ length: timeRangeDays }, (_, index) => {
-		const date = addDays(timeRangeStart, index);
-		const weekday = (new Date(`${date}T12:00:00`).getDay() + 6) % 7;
-		return { label: weekdayLabels[weekday], dayNumber: Number(date.slice(8, 10)) };
-	}));
+	let timeHeaderDays = $derived.by(() => {
+		const labels = [
+			m.habit_weekday_mon(),
+			m.habit_weekday_tue(),
+			m.habit_weekday_wed(),
+			m.habit_weekday_thu(),
+			m.habit_weekday_fri(),
+			m.habit_weekday_sat(),
+			m.habit_weekday_sun()
+		];
+		return Array.from({ length: timeRangeDays }, (_, index) => {
+			const date = addDays(timeRangeStart, index);
+			const weekday = (new Date(`${date}T12:00:00`).getDay() + 6) % 7;
+			return { label: labels[weekday], dayNumber: Number(date.slice(8, 10)) };
+		});
+	});
 	let timeTotalsLabel = $derived.by(() => {
 		const total = timeGrid.reduce((sum, day) => sum + day.filter(Boolean).length, 0);
 		const free = Math.max(0, timeRangeDays * timeSlotCount - total);
@@ -331,15 +341,13 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 		const data = snapshot;
 		if (!data) return [];
 		const start = weekStart(habitSelectedDate);
-		const labels = firstDayOfWeek(data) === 'sun'
-			? ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb']
-			: ['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom'];
 		return Array.from({ length: 7 }, (_, index) => {
 			const date = dateOffset(start, index);
+			const label = new Date(`${date}T12:00:00`).toLocaleDateString(i18n.locale, { weekday: 'short' }).replace('.', '');
 			const paused = isPausedOn(date, data);
 			const planned = paused ? [] : habitsForDate(data, date);
 			const done = planned.filter((habit) => habitDoneOn(data, habit, date)).length;
-			return { date, label: labels[index], done, planned: planned.length, goal: paused ? 0 : Math.min(dailyGoalOf(data), planned.length), paused };
+			return { date, label, done, planned: planned.length, goal: paused ? 0 : Math.min(dailyGoalOf(data), planned.length), paused };
 		});
 	});
 	let prototypeTodayHabits = $derived.by(() => (snapshot ? habitsForDate(snapshot, today) : []));
@@ -479,7 +487,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 			const sum = keys.reduce((total, key) => total + (key === '__other' ? otherHours(day) : day.get(key) ?? 0), 0);
 			maxHours = Math.max(maxHours, sum);
 		}
-		const letters = ['S', 'T', 'Q', 'Q', 'S', 'S', 'D'];
+		const letters = [m.habit_weekday_mon(), m.habit_weekday_tue(), m.habit_weekday_wed(), m.habit_weekday_thu(), m.habit_weekday_fri(), m.habit_weekday_sat(), m.habit_weekday_sun()];
 		const days = dashDays.map((date) => {
 			const day = perDay.get(date) ?? new Map<string, number>();
 			const segments = keys.map((key) => {
@@ -5263,7 +5271,7 @@ import { collectAttachments, loadNotes, replaceNotesState, resetNotesCache, rest
 						<div class="sheet-days">
 							<span class="sheet-days-label">{m.habit_scheduled_days()}</span>
 							<div class="sheet-days-row">
-								{#each ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'] as day, index}
+								{#each [m.habit_weekday_sun(), m.habit_weekday_mon(), m.habit_weekday_tue(), m.habit_weekday_wed(), m.habit_weekday_thu(), m.habit_weekday_fri(), m.habit_weekday_sat()] as day, index}
 									<Chip
 										selected={habitForm.scheduledDays.includes(index)}
 										ariaLabel={m.habit_select_day({ day: index })}

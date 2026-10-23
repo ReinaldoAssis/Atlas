@@ -1,7 +1,8 @@
 # Atlas
 
-> **IMAGEM AQUI — logo do Atlas**  
-> Substituir por `docs/assets/logo.png` (quadrado, fundo transparente, ~512 px).
+<p align="center">
+  <img src="docs/assets/logo.png" width="96" alt="Atlas logo">
+</p>
 
 <p>
   <a href="https://github.com/ReinaldoAssis/Atlas/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ReinaldoAssis/Atlas/actions/workflows/ci.yml/badge.svg" /></a>
@@ -12,8 +13,7 @@
 
 **Atlas is a local-first personal space for finances, habits, time, notes, and the connections between them.** No account, no cloud, no subscription — your data stays on your device and can sync directly between paired devices on the same network.
 
-> **IMAGEM AQUI — banner do Atlas**  
-> Substituir por `docs/assets/banner.png` (1600×640, dashboard + iPhone).
+![Atlas banner](docs/assets/banner.png)
 
 <p align="center">
   <em>Português? Leia o <a href="README.pt-BR.md">README em pt-BR</a>.</em>
@@ -41,9 +41,23 @@
 
 ## Screenshots
 
-> **IMAGEM AQUI — screenshot 1** (`docs/assets/dashboard.png`) — dashboard on iPhone.  
-> **IMAGEM AQUI — screenshot 2** (`docs/assets/time.png`) — time planner and range calendar.  
-> **IMAGEM AQUI — screenshot 3** (`docs/assets/notes.png`) — note editor and preview.
+All images are generated from the production build in test mode:
+`npm run shots` (requires Google Chrome).
+
+<table>
+  <tr>
+    <td width="33%" align="center"><img src="docs/assets/time-desktop.png" width="100%" alt="Time planner on desktop"><br><sub>Time planner</sub></td>
+    <td width="33%" align="center"><img src="docs/assets/notes-desktop.png" width="100%" alt="Markdown editor and preview"><br><sub>Notes · editor and preview</sub></td>
+    <td width="33%" align="center"><img src="docs/assets/finance-desktop.png" width="100%" alt="Finances on desktop"><br><sub>Finances</sub></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="25%" align="center"><img src="docs/assets/dashboard-mobile.png" width="100%" alt="Dashboard on iPhone"><br><sub>Dashboard</sub></td>
+    <td width="25%" align="center"><img src="docs/assets/habits-mobile.png" width="100%" alt="Habits on iPhone"><br><sub>Habits</sub></td>
+  </tr>
+</table>
 
 ## Stack
 

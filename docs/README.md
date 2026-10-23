@@ -38,4 +38,4 @@
 
 - `AGENTS.md` na raiz — fluxo de branch/PR, commits, copy e gotchas do ambiente.
 - `README.md` (inglês) e `README.pt-BR.md` (português) — visão geral e quick start.
-- Diagramas e imagens futuras: `docs/assets/` (ainda não versionado).
+- Imagens do README: `docs/assets/` (versionado), geradas por `npm run shots` (`tools/shots.mjs`).

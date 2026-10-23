@@ -176,7 +176,7 @@
 	</div>
 
 	<div class="cal-week" aria-hidden="true">
-		{#each ['S', 'T', 'Q', 'Q', 'S', 'S', 'D'] as label, index (index)}<span>{label}</span>{/each}
+		{#each [m.habit_weekday_sun(), m.habit_weekday_mon(), m.habit_weekday_tue(), m.habit_weekday_wed(), m.habit_weekday_thu(), m.habit_weekday_fri(), m.habit_weekday_sat()] as label, index (index)}<span>{label}</span>{/each}
 	</div>
 
 	<div class="cal-grid" role="grid" aria-label={m.planner_range_pick()}>
