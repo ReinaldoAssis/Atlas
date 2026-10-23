@@ -30,7 +30,8 @@
 		"test": "vitest run",
 		"pretest": "svelte-kit sync && paraglide-js compile --project ./project.inlang",
 		"test:watch": "vitest",
-		"csp:check": "node tools/csp-check.mjs"
+		"csp:check": "node tools/csp-check.mjs",
+		"clean": "node tools/clean.mjs"
 	},
 	"devDependencies": {
 		"@inlang/paraglide-js": "^2.29.0",

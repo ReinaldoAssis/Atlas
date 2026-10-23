@@ -49,6 +49,10 @@ Regras e atalhos para quem (agente ou humano) mexe neste repositório.
   (foi a causa de um bug de FAB) — cuidado com overlays dentro do `#pg`.
 - `npm run csp:check` roda o app empacotado no Chromium (CSP + boot);
   `tools/probe.mjs` mede layout por CDP.
+- `npm run clean` (`tools/clean.mjs`) lista builds e caches de toolchain com
+  tamanho e abre uma TUI para marcar o que apagar; `--list`, `--dry-run`,
+  `--yes` e `--only=id,id` cobrem automação. Só apaga caminhos da lista fixa do
+  script, nunca dados do app ou a home.
 - **iOS assinado (Mac)**: `npm run ios:dev` / `ios:build` usam um id de teste
   configurável (`ATLAS_IOS_BUNDLE_ID`, padrão `com.randroi75.atlas`) e não
   alteram o id de produção do `tauri.conf.json`. Xcode precisa da conta em
