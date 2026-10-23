@@ -66,14 +66,18 @@ export function monthLabel(month: string): string {
 		.replace(/^./, (letter) => letter.toUpperCase());
 }
 
-const MONTHS_SHORT = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+function shortMonth(month: number): string {
+	return new Date(2026, month - 1, 1)
+		.toLocaleDateString(intlLocale(), { month: 'short' })
+		.replace(/\.$/, '');
+}
 
 /** Rótulo curto do range: `5–11 out`, `28 out–3 nov`, `28/12/2026–3/1/2027`. */
 export function rangeLabel(start: string, end: string): string {
 	const [year, month, day] = start.split('-');
 	const [endYear, endMonth, endDay] = end.split('-');
-	const startMonth = MONTHS_SHORT[Number(month) - 1] ?? '';
-	const endMonthName = MONTHS_SHORT[Number(endMonth) - 1] ?? '';
+	const startMonth = shortMonth(Number(month));
+	const endMonthName = shortMonth(Number(endMonth));
 	if (start === end) return `${Number(day)} ${startMonth}`;
 	if (year === endYear && month === endMonth) return `${Number(day)}–${Number(endDay)} ${startMonth}`;
 	if (year === endYear) return `${Number(day)} ${startMonth}–${Number(endDay)} ${endMonthName}`;
