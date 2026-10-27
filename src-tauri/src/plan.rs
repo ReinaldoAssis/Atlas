@@ -1,6 +1,6 @@
-//! Plano do mobile: free com limites, Pro sem limites.
+//! Plano do Android: free com limites, Pro sem limites.
 //!
-//! O PC é sempre Pro. No mobile o estado fica em `plan.json` no app data, com
+//! O PC e o iOS são sempre Pro. No Android o estado fica em `plan.json` no app data, com
 //! carimbo da última checagem: sem rede por mais de 7 dias o app volta a
 //! tratar o usuário como free até a Play responder de novo.
 //!
@@ -8,15 +8,15 @@
 //! (`check_limits`): a UI só antecipa o paywall para não deixar o usuário
 //! escrever e perder o trabalho no erro.
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(target_os = "android")]
 use serde::Deserialize;
 use serde::Serialize;
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(target_os = "android")]
 use std::path::PathBuf;
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(target_os = "android")]
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::AppHandle;
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(target_os = "android")]
 use tauri::Manager;
 
 /// Dias de histórico liberados no free.
@@ -58,7 +58,7 @@ pub struct PlanStatus {
   pub limits: Option<PlanLimits>,
 }
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(target_os = "android")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredPlan {
   pro: bool,
@@ -66,7 +66,7 @@ struct StoredPlan {
   checked_at: i64,
 }
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(target_os = "android")]
 fn now_ms() -> i64 {
   SystemTime::now()
     .duration_since(UNIX_EPOCH)
@@ -74,7 +74,7 @@ fn now_ms() -> i64 {
     .unwrap_or(0)
 }
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(target_os = "android")]
 fn plan_path(app: &AppHandle) -> Result<PathBuf, String> {
   let dir = app
     .path()
@@ -83,7 +83,7 @@ fn plan_path(app: &AppHandle) -> Result<PathBuf, String> {
   Ok(dir.join("plan.json"))
 }
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(target_os = "android")]
 fn read_stored(app: &AppHandle) -> StoredPlan {
   let Ok(path) = plan_path(app) else {
     return StoredPlan {
@@ -107,14 +107,14 @@ fn read_stored(app: &AppHandle) -> StoredPlan {
 }
 
 /// Pro só vale enquanto a última checagem estiver dentro da janela de graça.
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(target_os = "android")]
 fn is_pro(stored: &StoredPlan) -> bool {
   stored.pro && now_ms().saturating_sub(stored.checked_at) <= GRACE_MS
 }
 
 #[tauri::command]
 pub fn plan_status(app: AppHandle) -> Result<PlanStatus, String> {
-  #[cfg(any(target_os = "android", target_os = "ios"))]
+  #[cfg(target_os = "android")]
   {
     let stored = read_stored(&app);
     return Ok(PlanStatus {
@@ -129,7 +129,7 @@ pub fn plan_status(app: AppHandle) -> Result<PlanStatus, String> {
     });
   }
 
-  #[cfg(not(any(target_os = "android", target_os = "ios")))]
+  #[cfg(not(target_os = "android"))]
   {
     let _ = &app;
     Ok(PlanStatus {
@@ -144,7 +144,7 @@ pub fn plan_status(app: AppHandle) -> Result<PlanStatus, String> {
 /// Grava o resultado de uma compra/restauração vinda do billing.
 #[tauri::command]
 pub fn plan_set_pro(app: AppHandle, pro: bool, source: String) -> Result<PlanStatus, String> {
-  #[cfg(any(target_os = "android", target_os = "ios"))]
+  #[cfg(target_os = "android")]
   {
     let stored = StoredPlan {
       pro,
@@ -162,7 +162,7 @@ pub fn plan_set_pro(app: AppHandle, pro: bool, source: String) -> Result<PlanSta
     .map_err(|error| error.to_string())?;
   }
 
-  #[cfg(not(any(target_os = "android", target_os = "ios")))]
+  #[cfg(not(target_os = "android"))]
   {
     let _ = (&app, pro, source);
   }
@@ -171,7 +171,7 @@ pub fn plan_set_pro(app: AppHandle, pro: bool, source: String) -> Result<PlanSta
 }
 
 /// Quantos anexos existem no app data (`attachments/<note>/<file>`).
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(target_os = "android")]
 fn attachment_count(app: &AppHandle) -> u64 {
   let Ok(dir) = app.path().app_data_dir() else {
     return 0;
@@ -193,7 +193,7 @@ fn attachment_count(app: &AppHandle) -> u64 {
 /// Serve para grandfathering: quem já está acima do limite (dados antigos,
 /// sync de um Pro, modo de teste) continua editando; só **aumentar** além do
 /// limite é bloqueado.
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(target_os = "android")]
 #[derive(Debug, Clone, Copy)]
 pub struct LimitCounts {
   notes: i64,
@@ -205,7 +205,7 @@ pub struct LimitCounts {
   attachments: u64,
 }
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(target_os = "android")]
 pub async fn count_usage(
   app: &AppHandle,
   tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -256,12 +256,12 @@ pub async fn count_usage(
 }
 
 /// `true` quando o lote levou a contagem acima do limite E aumentou a contagem.
-#[cfg(any(test, target_os = "android", target_os = "ios"))]
+#[cfg(any(test, target_os = "android"))]
 fn exceeds(after: i64, before: i64, limit: u32) -> bool {
   after > i64::from(limit) && after > before
 }
 
-#[cfg(any(test, target_os = "android", target_os = "ios"))]
+#[cfg(any(test, target_os = "android"))]
 fn exceeds_u64(after: u64, before: u64, limit: u32) -> bool {
   after > u64::from(limit) && after > before
 }
@@ -269,7 +269,7 @@ fn exceeds_u64(after: u64, before: u64, limit: u32) -> bool {
 /// Chamado dentro da transação: rollback se o lote **aumentou** a contagem de
 /// algum item acima do limite free. Dados que já estavam acima do limite ficam
 /// (grandfathering) — senão um banco antigo ou vindo do Pro não abriria mais.
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(target_os = "android")]
 pub async fn check_limits(
   app: &AppHandle,
   tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,

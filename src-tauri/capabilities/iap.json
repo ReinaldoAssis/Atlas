@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/mobile-schema.json",
   "identifier": "iap",
-  "description": "Google Play Billing (Android) e StoreKit (iOS, futuro).",
-  "platforms": ["android", "iOS"],
+  "description": "Google Play Billing (Android). O iOS espera o StoreKit 2: sem o plugin, a capability não pode ser declarada para iOS.",
+  "platforms": ["android"],
   "windows": ["main"],
   "permissions": ["iap:default"]
 }
