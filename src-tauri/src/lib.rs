@@ -75,7 +75,7 @@ async fn db_batch(
   // Freemium backstop: conta o estado **antes** do lote para permitir editar
   // dados legados que já estão acima dos limites do free. O banco de teste
   // fica fora do gating — o seed de exemplo passa dos limites de propósito.
-  #[cfg(any(target_os = "android", target_os = "ios"))]
+  #[cfg(target_os = "android")]
   let limit_before = if db.ends_with("atlas.test.db") {
     None
   } else {
@@ -95,7 +95,7 @@ async fn db_batch(
 
   // Backstop do freemium: sem Pro, um lote que leva a contagem acima de um
   // limite é revertido. A UI já bloqueia antes, mas o IPC não é confiável.
-  #[cfg(any(target_os = "android", target_os = "ios"))]
+  #[cfg(target_os = "android")]
   if let Some(before) = limit_before {
     plan::check_limits(&app, &mut tx, &before).await?;
   }
@@ -143,8 +143,8 @@ pub fn run() {
   #[cfg(target_os = "android")]
   let builder = builder.plugin(multicast::init());
 
-  // Billing só existe no mobile; o PC não tem paywall.
-  #[cfg(any(target_os = "android", target_os = "ios"))]
+  // Billing atual só existe no Android; o PC e o iOS não têm paywall.
+  #[cfg(target_os = "android")]
   let builder = builder.plugin(tauri_plugin_iap::init());
 
   let builder = builder
